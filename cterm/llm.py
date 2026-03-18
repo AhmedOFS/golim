@@ -8,7 +8,7 @@ import asyncio
 import os
 import socket
 from pathlib import Path
-
+import re
 class FastMCPClient:
     """Real UDS client for FastMCP communication"""
     def __init__(self, socket_path):
@@ -321,14 +321,14 @@ class ToolAgent:
             })
        # print(f"ollama tools are {ollama_tools}")
         messages = [
-             {"role": "system", "content": "use the tools available to you to perform tasks asked of you. use the run shell tool to execute commands"},
+             {"role": "system", "content": "use the tools available to you to perform tasks asked of you. use the run shell tool to execute commands, and use snap for desktop app installations when possible"},
              {"role": "user", "content": user_message}
                 ]
         try:
             response = chat_with_model_api(self.model, messages, ollama_tools, self.binary)
-            
+            #print(json.dumps(response, indent=2)) 
             message = response.get("message", {})
-            print(messages)
+         
             # Check if model wants to call a tool
             if "tool_calls" in message and message["tool_calls"]:
                 tool_call = message["tool_calls"][0]
@@ -351,77 +351,81 @@ class ToolAgent:
                 
                 # Get final answer
                 final_response = chat_with_model_api(self.model, messages, ollama_tools, self.binary)
+              
                 return final_response.get("message", {}).get("content", "No response")
-            
+    
             # No tool call, return direct answer
+            print("no tool calls")
+            
             return message.get("content", "No response")
             
         except Exception as e:
             print(f"exception is {e}")
             return self._run_with_fallback(user_message)
-    
+        
+
     def _run_with_fallback(self, user_message: str) -> str:
-        """Fallback to manual XML tag method"""
-        tools_list = []
-        for t in self.tools:
-            tools_list.append(f"- {t.name}: {getattr(t, 'description', '')}")
-        tools_text = "\n".join(tools_list)
-        print("system running on fallback")
-        system_prompt = f"""You have access to these tools:
-{tools_text}
+            """Fallback to manual XML tag method"""
+            tools_list = []
+            for t in self.tools:
+                tools_list.append(f"- {t.name}: {getattr(t, 'description', '')}")
+            tools_text = "\n".join(tools_list)
+            print("system running on fallback")
+            system_prompt = f"""You have access to these tools:
+    {tools_text}
 
-User asks: {user_message}
+    User asks: {user_message}
 
-CRITICAL: If you need a tool, output ONLY:
-<tool_call>{{"tool":"tool_name","args":{{"param":"value"}}}}</tool_call>
+    CRITICAL: If you need a tool, output ONLY:
+    <tool_call>{{"tool":"tool_name","args":{{"param":"value"}}}}</tool_call>
 
-Example: <tool_call>{{"tool":"list_files","args":{{"path":"."}}}}</tool_call>
+    Example: <tool_call>{{"tool":"list_files","args":{{"path":"."}}}}</tool_call>
 
-Respond now:"""
+    Respond now:"""
 
-        response_text = chat_with_model(self.model, system_prompt, self.binary)
-        
-        # Parse and execute
-        if "<tool_call>" not in response_text:
-            return response_text
-        
-        try:
-            if "</tool_call>" in response_text:
-                tool_json = response_text.split('<tool_call>')[1].split('</tool_call>')[0].strip()
-            else:
-                tool_json = response_text.split('<tool_call>')[1].strip()
-                # Extract complete JSON
-                brace_count = 0
-                for i, char in enumerate(tool_json):
-                    if char == '{':
-                        brace_count += 1
-                    elif char == '}':
-                        brace_count -= 1
-                        if brace_count == 0:
-                            tool_json = tool_json[:i+1]
-                            break
+            response_text = chat_with_model(self.model, system_prompt, self.binary)
             
-            call = json.loads(tool_json)
-            tool_name = call.get("tool")
-            args = call.get("args", {})
+            # Parse and execute
+            if "<tool_call>" not in response_text:
+                return response_text
             
-            # Show tool usage
-            print(f"🔧 Using tool: {tool_name}", file=sys.stderr)
-            
-            tool_result = asyncio.run(self.mcp_client.call_tool(tool_name, args))
-            
-            # Get final answer
-            followup_prompt = f"""Tool result: {json.dumps(tool_result)}
+            try:
+                if "</tool_call>" in response_text:
+                    tool_json = response_text.split('<tool_call>')[1].split('</tool_call>')[0].strip()
+                else:
+                    tool_json = response_text.split('<tool_call>')[1].strip()
+                    # Extract complete JSON
+                    brace_count = 0
+                    for i, char in enumerate(tool_json):
+                        if char == '{':
+                            brace_count += 1
+                        elif char == '}':
+                            brace_count -= 1
+                            if brace_count == 0:
+                                tool_json = tool_json[:i+1]
+                                break
+                
+                call = json.loads(tool_json)
+                tool_name = call.get("tool")
+                args = call.get("args", {})
+                
+                # Show tool usage
+                print(f"🔧 Using tool: {tool_name}", file=sys.stderr)
+                
+                tool_result = asyncio.run(self.mcp_client.call_tool(tool_name, args))
+                
+                # Get final answer
+                followup_prompt = f"""Tool result: {json.dumps(tool_result)}
 
-Based on this, answer the user's question: {user_message}"""
-            
-            return chat_with_model(self.model, followup_prompt, self.binary)
-            
-        except Exception as e:
-            return f"Error: {e}\n\nRaw response: {response_text}"
+    Based on this, answer the user's question: {user_message}"""
+                
+                return chat_with_model(self.model, followup_prompt, self.binary)
+                
+            except Exception as e:
+                return f"Error: {e}\n\nRaw response: {response_text}"
 
 def chat_with_tools(model: str, message: str, binary: str = "ollama") -> str:
-    """Convenience function to chat with tool support"""
-    agent = ToolAgent(model, binary)
-    with agent:
-        return agent.run(message)
+        """Convenience function to chat with tool support"""
+        agent = ToolAgent(model, binary)
+        with agent:
+            return agent.run(message)
