@@ -5,7 +5,7 @@ import shutil
 import subprocess
 import shlex
 import requests
-
+import time
 # Simple wrapper class to hold tools (no FastMCP dependency needed for server)
 class MCPTools:
     """Container for MCP tool functions"""
@@ -70,75 +70,183 @@ def read_file(path: str) -> dict:
         return {"ok": False, "error": str(e)}
 
 @tool
-def run_shell(command: str) -> dict:
+def run_shell(command: str, stream: bool = False) -> dict:
     """
     Executes shell commands. Supports && chaining. Privileged commands
     (apt, apt-get, tee, snap) are routed through the cterm privileged
     wrapper and run as root without a password prompt. Everything else
     runs as the current user with no restrictions.
+
+    When stream=True, stdout/stderr lines are yielded incrementally as
+    {"type": "stream", "fd": "stdout"|"stderr", "line": "..."} dicts,
+    followed by a final {"type": "result", ...} summary dict.
+    When stream=False (default), behaviour is identical to before.
     """
     # Split on && and run each part in sequence
     parts = [c.strip() for c in command.split("&&")]
     results = []
 
-    for cmd_str in parts:
-        try:
-            tokens = shlex.split(cmd_str)
-        except ValueError as e:
-            return {"ok": False, "error": f"Command parse error: {e}", "results": results}
-
-        if not tokens:
-            continue
-
-        # Strip leading sudo if the LLM added it — we handle privilege ourselves
+    def _build_cmd(tokens):
+        """Resolve a token list to a final argv, or return an error dict."""
         if tokens[0] == "sudo":
             tokens = tokens[1:]
         if not tokens:
-            continue
+            return None, {"ok": False, "error": "Empty command after stripping sudo", "results": results}
 
         binary = tokens[0]
         args = tokens[1:]
 
         for arg in args:
             if not _is_safe_arg(arg):
-                return {"ok": False, "error": f"Forbidden character in argument: {arg!r}", "results": results}
+                return None, {"ok": False, "error": f"Forbidden character in argument: {arg!r}", "results": results}
 
         if binary in PRIVILEGED_WHITELIST:
             resolved = BINARY_PATHS.get(binary)
             if not resolved or not os.path.isfile(resolved):
-                return {"ok": False, "error": f"Binary not found: {binary}", "results": results}
+                return None, {"ok": False, "error": f"Binary not found: {binary}", "results": results}
             if not os.path.isfile(PRIVILEGED_WRAPPER):
-                return {"ok": False, "error": f"Privileged wrapper not found: {PRIVILEGED_WRAPPER}. Run dev_setup.sh install.", "results": results}
-            cmd = ["sudo", "--non-interactive", PRIVILEGED_WRAPPER, resolved] + args
+                return None, {"ok": False, "error": f"Privileged wrapper not found: {PRIVILEGED_WRAPPER}. Run dev_setup.sh install.", "results": results}
+            return ["sudo", "--non-interactive", PRIVILEGED_WRAPPER, resolved] + args, None
         else:
             resolved = shutil.which(binary)
             if not resolved:
-                return {"ok": False, "error": f"Command not found: {binary}", "results": results}
-            cmd = [resolved] + args
+                return None, {"ok": False, "error": f"Command not found: {binary}", "results": results}
+            return [resolved] + args, None
 
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=60,
-            )
-            results.append({
+    # ------------------------------------------------------------------ #
+    #  Non-streaming path (original behaviour)                            #
+    # ------------------------------------------------------------------ #
+    if not stream:
+        for cmd_str in parts:
+            try:
+                tokens = shlex.split(cmd_str)
+            except ValueError as e:
+                return {"ok": False, "error": f"Command parse error: {e}", "results": results}
+
+            if not tokens:
+                continue
+
+            cmd, err = _build_cmd(tokens)
+            if err:
+                return err
+
+            try:
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
+                results.append({
+                    "command": cmd_str,
+                    "stdout": result.stdout,
+                    "stderr": result.stderr,
+                    "returncode": result.returncode,
+                })
+                if result.returncode != 0 and not result.stdout.strip():
+                    return {"ok": False, "error": f"Command failed: {cmd_str}", "results": results}
+            except subprocess.TimeoutExpired:
+                return {"ok": False, "error": f"Command timed out: {cmd_str}", "results": results}
+            except Exception as e:
+                return {"ok": False, "error": str(e), "results": results}
+
+        return {"ok": True, "command": command, "results": results}
+
+    # ------------------------------------------------------------------ #
+    #  Streaming path                                                      #
+    #  Returns a generator; each yield is a dict to be serialised         #
+    #  by the caller. Protocol:                                            #
+    #    {"type": "stream", "fd": "stdout"|"stderr", "line": str}         #
+    #    {"type": "result", "ok": bool, ...}   ← final item               #
+    # ------------------------------------------------------------------ #
+    def _stream_generator():
+        import select
+        import threading
+
+        for cmd_str in parts:
+            try:
+                tokens = shlex.split(cmd_str)
+            except ValueError as e:
+                yield {"type": "result", "ok": False,
+                       "error": f"Command parse error: {e}", "results": results}
+                return
+
+            if not tokens:
+                continue
+
+            cmd, err = _build_cmd(tokens)
+            if err:
+                yield {"type": "result", **err}
+                return
+
+            stdout_lines = []
+            stderr_lines = []
+
+            try:
+                proc = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    bufsize=1,          # line-buffered
+                )
+            except Exception as e:
+                yield {"type": "result", "ok": False,
+                       "error": str(e), "results": results}
+                return
+
+            # Read stdout and stderr concurrently using select so neither
+            # pipe blocks the other.
+            fds = [proc.stdout, proc.stderr]
+            fd_names = {proc.stdout: "stdout", proc.stderr: "stderr"}
+            fd_buffers = {proc.stdout: stdout_lines, proc.stderr: stderr_lines}
+
+            deadline = time.time() + 60  # 60-second timeout
+
+            while fds:
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    proc.kill()
+                    yield {"type": "result", "ok": False,
+                           "error": f"Command timed out: {cmd_str}",
+                           "results": results}
+                    return
+
+                readable, _, _ = select.select(fds, [], fds, min(remaining, 1.0))
+
+                for fd in readable:
+                    line = fd.readline()
+                    if line:
+                        line_stripped = line.rstrip("\n")
+                        fd_buffers[fd].append(line_stripped)
+                        yield {
+                            "type": "stream",
+                            "fd": fd_names[fd],
+                            "line": line_stripped,
+                        }
+                    else:
+                        # EOF on this pipe
+                        fds.remove(fd)
+
+            proc.wait()
+
+            result_entry = {
                 "command": cmd_str,
-                "stdout": result.stdout,
-                "stderr": result.stderr,
-                "returncode": result.returncode,
-            })
-            # Stop the chain on failure, just like real &&
-            if result.returncode != 0 and not result.stdout.strip():
-                return {"ok": False, "error": f"Command failed: {cmd_str}", "results": results}
+                "stdout": "\n".join(stdout_lines),
+                "stderr": "\n".join(stderr_lines),
+                "returncode": proc.returncode,
+            }
+            results.append(result_entry)
 
-        except subprocess.TimeoutExpired:
-            return {"ok": False, "error": f"Command timed out: {cmd_str}", "results": results}
-        except Exception as e:
-            return {"ok": False, "error": str(e), "results": results}
+            if proc.returncode != 0 and not result_entry["stdout"].strip():
+                yield {"type": "result", "ok": False,
+                       "error": f"Command failed: {cmd_str}", "results": results}
+                return
 
-    return {"ok": True, "command": command, "results": results}
+        yield {"type": "result", "ok": True, "command": command, "results": results}
+
+    return _stream_generator()
+
 
 @tool
 def calculate(a: float, b: float, op: str) -> dict:

@@ -45,24 +45,35 @@ class MCPServer:
         """Update last activity timestamp"""
         self.last_activity = time.time()
     
-    async def handle_request(self, request_data):
-        """Handle an MCP request and return response"""
+    async def handle_request(self, request_data: str, writer: asyncio.StreamWriter):
+        """
+        Handle an MCP request and write response(s) to writer.
+
+        For streaming tool results the server sends multiple newline-delimited
+        JSON frames before the final result frame:
+          {"jsonrpc":"2.0","id":N,"stream":{"fd":"stdout"|"stderr","line":"..."}}
+          {"jsonrpc":"2.0","id":N,"result": <final result dict>}
+
+        Non-streaming tools send a single result frame as before.
+        """
         self.update_activity()
-        
+
+        def send(obj: dict):
+            """Serialise obj and write it as a newline-terminated frame."""
+            writer.write((json.dumps(obj) + "\n").encode("utf-8"))
+
         try:
             request = json.loads(request_data)
             method = request.get("method", "")
             params = request.get("params", {})
             request_id = request.get("id", 1)
-            
+
             if method == "tools/list":
-                # List available tools
                 tools = []
                 for tool_name in dir(self.mcp):
                     if not tool_name.startswith('_'):
                         tool_func = getattr(self.mcp, tool_name, None)
                         if callable(tool_func) and hasattr(tool_func, '__mcp_tool__'):
-                            # Get tool metadata
                             tools.append({
                                 "name": tool_name,
                                 "description": tool_func.__doc__ or f"Tool: {tool_name}",
@@ -72,69 +83,93 @@ class MCPServer:
                                     "required": []
                                 }
                             })
-                
-                response = {
+                send({
                     "jsonrpc": "2.0",
                     "id": request_id,
-                    "result": {"tools": tools}
-                }
-                
+                    "result": {"tools": tools},
+                })
+
             elif method == "tools/call":
-                # Call a specific tool
                 tool_name = params.get("name")
                 arguments = params.get("arguments", {})
-                
-                if hasattr(self.mcp, tool_name):
-                    tool_func = getattr(self.mcp, tool_name)
-                    try:
-                        result = tool_func(**arguments)
-                        response = {
-                            "jsonrpc": "2.0",
-                            "id": request_id,
-                            "result": result
-                        }
-                    except Exception as e:
-                        response = {
-                            "jsonrpc": "2.0",
-                            "id": request_id,
-                            "error": {
-                                "code": -32000,
-                                "message": f"Tool execution error: {str(e)}"
-                            }
-                        }
-                else:
-                    response = {
+
+                if not hasattr(self.mcp, tool_name):
+                    send({
                         "jsonrpc": "2.0",
                         "id": request_id,
-                        "error": {
-                            "code": -32601,
-                            "message": f"Tool not found: {tool_name}"
-                        }
-                    }
+                        "error": {"code": -32601, "message": f"Tool not found: {tool_name}"},
+                    })
+                    return
+
+                tool_func = getattr(self.mcp, tool_name)
+                try:
+                    result = tool_func(**arguments)
+                except Exception as e:
+                    send({
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "error": {"code": -32000, "message": f"Tool execution error: {str(e)}"},
+                    })
+                    return
+
+                # -------------------------------------------------------- #
+                #  Detect a streaming generator vs a plain dict result      #
+                # -------------------------------------------------------- #
+                import types
+                if isinstance(result, types.GeneratorType):
+                    # Drain the generator, forwarding stream frames live and
+                    # holding back the final "result" frame until the end so
+                    # we can wrap it in the jsonrpc envelope.
+                    final_result = None
+                    for chunk in result:
+                        if chunk.get("type") == "stream":
+                            # Live output line — send immediately so the
+                            # client can display it as it arrives.
+                            send({
+                                "jsonrpc": "2.0",
+                                "id": request_id,
+                                "stream": {
+                                    "fd":   chunk["fd"],
+                                    "line": chunk["line"],
+                                },
+                            })
+                            # Flush so bytes reach the client without waiting
+                            # for the write buffer to fill.
+                            await writer.drain()
+                        elif chunk.get("type") == "result":
+                            final_result = chunk
+                        # Unknown chunk types are silently ignored.
+
+                    # Send the final summary frame.
+                    if final_result is not None:
+                        payload = {k: v for k, v in final_result.items() if k != "type"}
+                        send({"jsonrpc": "2.0", "id": request_id, "result": payload})
+                    else:
+                        # Generator ended without a result frame — shouldn't
+                        # happen, but handle gracefully.
+                        send({
+                            "jsonrpc": "2.0",
+                            "id": request_id,
+                            "result": {"ok": True, "command": arguments.get("command", "")},
+                        })
+                else:
+                    # Plain dict — original single-frame behaviour.
+                    send({"jsonrpc": "2.0", "id": request_id, "result": result})
+
             else:
-                response = {
+                send({
                     "jsonrpc": "2.0",
                     "id": request_id,
-                    "error": {
-                        "code": -32601,
-                        "message": f"Method not found: {method}"
-                    }
-                }
-            
-            return json.dumps(response)
-            
+                    "error": {"code": -32601, "message": f"Method not found: {method}"},
+                })
+
         except json.JSONDecodeError:
-            return json.dumps({
-                "jsonrpc": "2.0",
-                "id": None,
-                "error": {"code": -32700, "message": "Parse error"}
-            })
+            send({"jsonrpc": "2.0", "id": None,
+                  "error": {"code": -32700, "message": "Parse error"}})
         except Exception as e:
-            return json.dumps({
-                "jsonrpc": "2.0",
-                "id": None,
-                "error": {"code": -32603, "message": f"Internal error: {str(e)}"}
-            })
+            send({"jsonrpc": "2.0", "id": None,
+                  "error": {"code": -32603, "message": f"Internal error: {str(e)}"}})
+
 
 def run_server():
     """Starts the MCP server on UDS with inactivity timeout."""
@@ -180,7 +215,7 @@ def run_server():
         os.chmod(socket_path, 0o666)
         
         print(f"DEBUG: Socket created at {socket_path}")
-        
+
         # Handle client connections
         async def handle_client(reader, writer):
             try:
@@ -193,15 +228,14 @@ def run_server():
                 
                 request_text = data.decode('utf-8').strip()
                 print(f"DEBUG: Received request: {request_text[:100]}...")
-                
-                # Process the request
-                response = await mcp_server.handle_request(request_text)
-                print(f"DEBUG: Sending response: {response[:100]}...")
-                
-                # Send response
-                writer.write((response + "\n").encode('utf-8'))
+
+                # Process the request, streaming frames directly to writer
+                await mcp_server.handle_request(request_text, writer)
+
+                # Final drain to flush any buffered bytes
                 await writer.drain()
-                
+                print("DEBUG: Response(s) sent.")
+
             except Exception as e:
                 print(f"ERROR handling client: {e}", file=sys.stderr)
                 import traceback
