@@ -6,6 +6,12 @@ import subprocess
 import shlex
 import requests
 import time
+
+
+try:
+    from utils import _build_pipe_procs, _run_pipeline, _split_pipes
+except ImportError:
+    from .utils import _build_pipe_procs, _run_pipeline, _split_pipes
 # Simple wrapper class to hold tools (no FastMCP dependency needed for server)
 class MCPTools:
     """Container for MCP tool functions"""
@@ -26,7 +32,6 @@ def tool(func):
 # This means the user still needs a password for sudo snap in their own terminal.
 PRIVILEGED_WRAPPER = "/usr/lib/cterm/cterm-privileged"
 
-# Binaries the wrapper is allowed to execute (must match the wrapper's ALLOWED list)
 PRIVILEGED_WHITELIST = {
     "apt", "apt-get", "tee", "snap",
 }
@@ -38,8 +43,9 @@ BINARY_PATHS = {
     "snap":    "/usr/bin/snap",
 }
 
-# Characters never allowed in any argument
-FORBIDDEN_CHARS = set('|><`$\\\'\"()')
+# Characters never allowed in any argument.
+# `|` is handled separately by pipeline parsing before argv validation.
+FORBIDDEN_CHARS = set('><`$\\\'\"()')
 
 def _is_safe_arg(arg: str) -> bool:
     """Reject arguments containing shell metacharacters."""
@@ -50,10 +56,12 @@ def _is_safe_arg(arg: str) -> bool:
 @tool
 def list_files(path: str) -> dict:
     """Lists files in a directory"""
-    if not os.path.isdir(path):
+    # FIX: Expand ~ to the user's home directory
+    expanded_path = os.path.expanduser(path)
+    if not os.path.isdir(expanded_path):
         return {"ok": False, "error": f"Not a directory: {path}"}
     try:
-        return {"ok": True, "path": path, "contents": os.listdir(path)}
+        return {"ok": True, "path": path, "contents": os.listdir(expanded_path)}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -72,7 +80,8 @@ def read_file(path: str) -> dict:
 @tool
 def run_shell(command: str, stream: bool = False) -> dict:
     """
-    Executes shell commands. Supports && chaining. Privileged commands
+    Executes shell commands. Supports `&&` chaining and `|` pipelines.
+    Privileged commands
     (apt, apt-get, tee, snap) are routed through the cterm privileged
     wrapper and run as root without a password prompt. Everything else
     runs as the current user with no restrictions.
@@ -113,37 +122,57 @@ def run_shell(command: str, stream: bool = False) -> dict:
                 return None, {"ok": False, "error": f"Command not found: {binary}", "results": results}
             return [resolved] + args, None
 
+    def _parse_pipeline(cmd_str):
+        """Resolve a single && segment into one argv or a full pipeline."""
+        pipe_segments = _split_pipes(cmd_str)
+        if len(pipe_segments) > 1:
+            return _build_pipe_procs(pipe_segments, results)
+
+        try:
+            tokens = shlex.split(cmd_str)
+        except ValueError as e:
+            return [], {"ok": False, "error": f"Command parse error: {e}", "results": results}
+
+        if not tokens:
+            return [], None
+
+        cmd, err = _build_cmd(tokens)
+        if err:
+            return [], err
+        return [cmd], None
+
     # ------------------------------------------------------------------ #
     #  Non-streaming path (original behaviour)                            #
     # ------------------------------------------------------------------ #
     if not stream:
         for cmd_str in parts:
-            try:
-                tokens = shlex.split(cmd_str)
-            except ValueError as e:
-                return {"ok": False, "error": f"Command parse error: {e}", "results": results}
-
-            if not tokens:
-                continue
-
-            cmd, err = _build_cmd(tokens)
+            argv_list, err = _parse_pipeline(cmd_str)
             if err:
                 return err
+            if not argv_list:
+                continue
 
             try:
-                result = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=60,
-                )
-                results.append({
-                    "command": cmd_str,
-                    "stdout": result.stdout,
-                    "stderr": result.stderr,
-                    "returncode": result.returncode,
-                })
-                if result.returncode != 0 and not result.stdout.strip():
+                if len(argv_list) > 1:
+                    result_entry = _run_pipeline(argv_list, cmd_str, timeout=60)
+                else:
+                    result = subprocess.run(
+                        argv_list[0],
+                        capture_output=True,
+                        text=True,
+                        timeout=60,
+                    )
+                    result_entry = {
+                        "command": cmd_str,
+                        "stdout": result.stdout,
+                        "stderr": result.stderr,
+                        "returncode": result.returncode,
+                    }
+
+                results.append(result_entry)
+                if result_entry.get("ok") is False:
+                    return {"ok": False, "error": result_entry["error"], "results": results}
+                if result_entry["returncode"] != 0 and not result_entry["stdout"].strip():
                     return {"ok": False, "error": f"Command failed: {cmd_str}", "results": results}
             except subprocess.TimeoutExpired:
                 return {"ok": False, "error": f"Command timed out: {cmd_str}", "results": results}
@@ -161,30 +190,40 @@ def run_shell(command: str, stream: bool = False) -> dict:
     # ------------------------------------------------------------------ #
     def _stream_generator():
         import select
-        import threading
 
         for cmd_str in parts:
-            try:
-                tokens = shlex.split(cmd_str)
-            except ValueError as e:
-                yield {"type": "result", "ok": False,
-                       "error": f"Command parse error: {e}", "results": results}
-                return
-
-            if not tokens:
-                continue
-
-            cmd, err = _build_cmd(tokens)
+            argv_list, err = _parse_pipeline(cmd_str)
             if err:
                 yield {"type": "result", **err}
                 return
+            if not argv_list:
+                continue
+
+            if len(argv_list) > 1:
+                result_entry = _run_pipeline(argv_list, cmd_str, timeout=60)
+                if result_entry.get("stdout"):
+                    for line in result_entry["stdout"].splitlines():
+                        yield {"type": "stream", "fd": "stdout", "line": line}
+                if result_entry.get("stderr"):
+                    for line in result_entry["stderr"].splitlines():
+                        yield {"type": "stream", "fd": "stderr", "line": line}
+                results.append(result_entry)
+                if result_entry.get("ok") is False:
+                    yield {"type": "result", "ok": False,
+                           "error": result_entry["error"], "results": results}
+                    return
+                if result_entry["returncode"] != 0 and not result_entry["stdout"].strip():
+                    yield {"type": "result", "ok": False,
+                           "error": f"Command failed: {cmd_str}", "results": results}
+                    return
+                continue
 
             stdout_lines = []
             stderr_lines = []
 
             try:
                 proc = subprocess.Popen(
-                    cmd,
+                    argv_list[0],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
