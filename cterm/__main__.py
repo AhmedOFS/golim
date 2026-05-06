@@ -11,7 +11,7 @@ from pathlib import Path
 # --- ASSUMED IMPORTS ---
 from . import __version__
 from .config import Config
-from .llm import chat_with_model, chat_with_tools 
+from .llm import  chat_with_tools 
 
 # We must import get_socket_path from the server module to know where to check
 # NOTE: The actual location must be correct for your project structure (e.g., .cterm_server)
@@ -169,6 +169,42 @@ def select_model(models: list[str], saved: str | None) -> str | None:
     return matches[0] if matches else None
 
 
+def select_optional_model(models: list[str], saved: str | None, label: str) -> str | None:
+    """Select an optional model, keeping or clearing an existing value."""
+    if not models:
+        print("No models detected")
+        return None
+
+    if saved and saved in models:
+        print(f"Current saved {label}: {saved}")
+        prompt = f"Select {label} by number or name [Enter to keep, 'none' to clear]: "
+    else:
+        prompt = f"Select optional {label} by number or name [Enter to skip]: "
+
+    try:
+        choice = input(prompt).strip()
+    except (KeyboardInterrupt, EOFError):
+        print()
+        return saved
+
+    if not choice:
+        return saved if saved and saved in models else None
+
+    if choice.lower() in {"none", "clear", "skip"}:
+        return None
+
+    if choice.isdigit():
+        idx = int(choice) - 1
+        return models[idx] if 0 <= idx < len(models) else None
+
+    exact = [m for m in models if m == choice]
+    if exact:
+        return exact[0]
+
+    matches = [m for m in models if choice in m]
+    return matches[0] if matches else None
+
+
 ## Main Commands
 
 def init_command(binary: str = "ollama") -> int:
@@ -198,10 +234,17 @@ def init_command(binary: str = "ollama") -> int:
         return 1
     
     print()
-    selected = select_model(models, config.get("selected_model"))
+    selected = select_model(models, config.selected_model)
     if selected:
-        config.set("selected_model", selected)
+        config.set(Config.SELECTED_MODEL, selected)
         print(f"\n✓ Selected model: {selected}")
+        small_model = select_optional_model(models, config.small_model, "small model")
+        if small_model:
+            config.set(Config.SMALL_MODEL, small_model)
+            print(f"✓ Selected small model: {small_model}")
+        else:
+            config.unset(Config.SMALL_MODEL)
+            print("✓ No small model configured")
         print("\nYou can now use cterm:")
         print('  cterm "Hello, how are you?"')
         return 0
@@ -213,7 +256,8 @@ def init_command(binary: str = "ollama") -> int:
 def chat_command(message: str, binary: str = "ollama") -> int:
     """Send a message to the configured model."""
     config = Config()
-    model = config.get("selected_model")
+    model = config.selected_model
+    small_model = config.small_model
     
     if not model:
         print("Error: No model configured")
@@ -234,7 +278,7 @@ def chat_command(message: str, binary: str = "ollama") -> int:
 
     try:
         # Assuming chat_with_tools connects to the UDS defined by get_socket_path()
-        response = chat_with_tools(model, message, binary)
+        response = chat_with_tools(model, message, binary, small_model=small_model)
         print(response)
         return 0
     except KeyboardInterrupt:
