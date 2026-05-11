@@ -1,4 +1,5 @@
 
+import asyncio
 import os
 from pathlib import Path
 import sys
@@ -34,7 +35,12 @@ class Spinner:
         if self.thread:
             self.thread.join(timeout=0.5)
 
+import concurrent.futures
 
+def _run_async(coro):
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(asyncio.run, coro)
+        return future.result()
 
 
 def _indent(text, prefix="      "):

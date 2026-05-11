@@ -12,7 +12,7 @@ from pathlib import Path
 
 from cterm.llm_utils.chat_api import chat_with_model_api
 from cterm.llm_utils.mcp_client import FastMCPClient
-from cterm.llm_utils.utils import Spinner, _indent, get_socket_path
+from cterm.llm_utils.utils import Spinner, _indent, _run_async, get_socket_path
 
 
 
@@ -188,7 +188,7 @@ class ToolAgent:
                 "role": "system",
                 "content": (
                     "You are a strict task completion verifier.\n\n"
-                    "Determine whether the original task has been fully completed.\n\n"
+                    "Determine whether the original task has been fully completed. Be Smart about understanding user intent\n\n"
                     "Respond ONLY with valid JSON:\n"
                     '{ "complete": true|false, "summary": "..." }'
                 ),
@@ -214,7 +214,7 @@ class ToolAgent:
 
 
         response = chat_with_model_api(
-            self.model,
+            self.small_model,
             verification_messages,
             tools=None,
             binary=self.binary,
@@ -241,7 +241,7 @@ class ToolAgent:
                 "Failed to parse verifier response.\n\n"
                 f"Raw response:\n{content}"
             )
-
+            print("failure to parse")
         return complete, summary, tool_history, execution_summary
     
 
@@ -252,39 +252,26 @@ class ToolAgent:
         attempt = 0
         while True:
             is_shell = tool_name == "run_shell"
-            print(f"\n[{attempt + 1}] {tool_name}({json.dumps(args)})", file=sys.stderr)
-            if is_shell:
-                print("─" * 60, file=sys.stderr)
 
-            tool_result = asyncio.run(self.mcp_client.call_tool(tool_name, args, stream_output=is_shell))
 
-            if is_shell:
-                exit_codes = [r.get("returncode") for r in tool_result.get("results", [])]
-                print("─" * 60, file=sys.stderr)
-                print(f"  ↳ ok={tool_result.get('ok', True)}  returncodes={exit_codes}", file=sys.stderr)
-            else:
-                print(f"  ↳ result: {tool_result}", file=sys.stderr)
+            label = args.get("command", tool_name) if tool_name == "run_shell" else tool_name
 
+            spinner = Spinner(label)
+            spinner.start()
+            tool_result = _run_async(self.mcp_client.call_tool(tool_name, args, stream_output=False))
+            spinner.stop()
+            print(label)
             if not is_shell or tool_result.get("ok", True):
                 return tool_result, messages
 
             attempt += 1
+            if attempt >= self.MAX_SHELL_RETRIES:
+                return tool_result, messages
+
             failed_cmd = args.get("command", "<unknown>")
             error_msg  = tool_result.get("error", "")
-            stdout_out = "".join(r.get("stdout","") + "\n" for r in tool_result.get("results",[]))
-            stderr_out = "".join(r.get("stderr","") + "\n" for r in tool_result.get("results",[]))
-
-            print(f"\n❌ Attempt {attempt}/{self.MAX_SHELL_RETRIES} failed", file=sys.stderr)
-            print(f"   command : {failed_cmd}", file=sys.stderr)
-            print(f"   error   : {error_msg or '(none)'}", file=sys.stderr)
-            if stdout_out.strip():
-                print(f"   stdout  :\n{_indent(stdout_out.strip())}", file=sys.stderr)
-            if stderr_out.strip():
-                print(f"   stderr  :\n{_indent(stderr_out.strip())}", file=sys.stderr)
-
-            if attempt >= self.MAX_SHELL_RETRIES:
-                print(f"\n⛔ Giving up after {attempt} attempt(s).", file=sys.stderr)
-                return tool_result, messages
+            stdout_out = "".join(r.get("stdout", "") + "\n" for r in tool_result.get("results", []))
+            stderr_out = "".join(r.get("stderr", "") + "\n" for r in tool_result.get("results", []))
 
             failure_summary = (
                 f"The command `{failed_cmd}` failed.\nError: {error_msg}\n"
@@ -293,24 +280,21 @@ class ToolAgent:
                 + "Please analyse the error and call run_shell again with a corrected command that addresses the problem."
             )
             messages = list(messages)
-            messages += [{"role":"tool","content":json.dumps(tool_result)},
-                         {"role":"user","content":failure_summary}]
+            messages += [{"role": "tool", "content": json.dumps(tool_result)},
+                        {"role": "user",  "content": failure_summary}]
 
-            print(f"\n↩️  Asking model to retry (attempt {attempt + 1} of {self.MAX_SHELL_RETRIES})…", file=sys.stderr)
-            spinner = Spinner(f"Retry {attempt + 1}/{self.MAX_SHELL_RETRIES}")
+            spinner = Spinner("Retrying")
             spinner.start()
             retry_response = chat_with_model_api(self.model, messages, ollama_tools, self.binary)
             spinner.stop()
 
             retry_message = retry_response.get("message", {})
             if not retry_message.get("tool_calls"):
-                print(f"\n🤖 Model declined to retry:\n{_indent(retry_message.get('content','(no reply)'))}", file=sys.stderr)
                 return tool_result, messages
 
             retry_call = retry_message["tool_calls"][0]
             tool_name  = retry_call["function"]["name"]
             args       = retry_call["function"].get("arguments", {})
-            print(f"   model chose: {tool_name}({json.dumps(args)})", file=sys.stderr)
             messages.append(retry_message)
 
     def _run_with_native_tools(self, user_message):
@@ -419,7 +403,7 @@ class ToolAgent:
 
                     if complete:
                         print(
-                            f"\nTask complete (iteration {iteration})",
+                            f"\nTask complete",
                             file=sys.stderr
                         )
                         return summary
