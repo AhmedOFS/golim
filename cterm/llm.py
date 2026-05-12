@@ -188,7 +188,7 @@ class ToolAgent:
                 "role": "system",
                 "content": (
                     "You are a strict task completion verifier.\n\n"
-                    "Determine whether the original task has been fully completed. Be Smart about understanding user intent\n\n"
+                    "Determine whether the original task has been fully completed.\n\n"
                     "Respond ONLY with valid JSON:\n"
                     '{ "complete": true|false, "summary": "..." }'
                 ),
@@ -256,11 +256,25 @@ class ToolAgent:
 
             label = args.get("command", tool_name) if tool_name == "run_shell" else tool_name
 
-            spinner = Spinner(label)
+            spinner = Spinner(label, reserve_above=is_shell)
             spinner.start()
-            tool_result = _run_async(self.mcp_client.call_tool(tool_name, args, stream_output=False))
+
+            def _on_shell_stream(fd, line, end="\n"):
+                output = f"\033[33m{line}\033[0m" if fd == "stderr" else line
+                spinner.write_above(output, end=end)
+
+            if is_shell:
+                spinner.write_above(f"$ {label}")
+
+            tool_result = _run_async(
+                self.mcp_client.call_tool(
+                    tool_name,
+                    args,
+                    stream_output=is_shell,
+                    on_stream=_on_shell_stream if is_shell else None,
+                )
+            )
             spinner.stop()
-            print(label)
             if not is_shell or tool_result.get("ok", True):
                 return tool_result, messages
 

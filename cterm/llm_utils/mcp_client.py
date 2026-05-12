@@ -3,6 +3,7 @@
 import json
 from pathlib import Path
 import socket
+import sys
 
 import select as _select
 
@@ -62,14 +63,16 @@ class FastMCPClient:
                     frame = json.loads(line.decode())
                     if "stream" in frame:
                         if on_stream:
-                            on_stream(frame["stream"]["fd"], frame["stream"]["line"])
+                            stream = frame["stream"]
+                            on_stream(stream["fd"], stream["line"], stream.get("end", "\n"))
                     else:
                         final_frame = frame
             if buf.strip():
                 frame = json.loads(buf.decode().strip())
                 if "stream" in frame:
                     if on_stream:
-                        on_stream(frame["stream"]["fd"], frame["stream"]["line"])
+                        stream = frame["stream"]
+                        on_stream(stream["fd"], stream["line"], stream.get("end", "\n"))
                 else:
                     final_frame = frame
             if final_frame is None:
@@ -103,15 +106,20 @@ class FastMCPClient:
             return [self._make_tool(name, f'Tool: {name}', params)
                     for name, params in self._PARAMS_MAP.items()]
 
-    async def call_tool(self, tool_name, args, stream_output=False):
+    async def call_tool(self, tool_name, args, stream_output=False, on_stream=None):
         try:
             if not Path(self.socket_path).exists():
                 raise ConnectionRefusedError(f"UDS socket not found at {self.socket_path}")
             call_args = dict(args)
             if stream_output and tool_name == "run_shell":
                 call_args["stream"] = True
-                def _on_stream(fd, line):
-                    print(f"\033[33m{line}\033[0m" if fd == "stderr" else line, flush=True)
+                def _on_stream(fd, line, end="\n"):
+                    if on_stream:
+                        on_stream(fd, line, end)
+                        return
+                    output = f"\033[33m{line}\033[0m" if fd == "stderr" else line
+                    sys.stdout.write(output + end)
+                    sys.stdout.flush()
                 response = self._stream_request("tools/call", {"name": tool_name, "arguments": call_args}, on_stream=_on_stream)
             else:
                 response = self._send_request("tools/call", {"name": tool_name, "arguments": call_args})
@@ -125,4 +133,3 @@ class FastMCPClient:
 
     def close(self):
         pass
-

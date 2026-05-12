@@ -10,22 +10,37 @@ import time
 class Spinner:
     FRAMES = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"]
 
-    def __init__(self, message="Thinking"):
+    def __init__(self, message="Thinking", reserve_above=False):
         self.message = message
+        self.reserve_above = reserve_above
         self.running = False
         self.thread = None
         self._idx = 0
+        self._lock = threading.Lock()
+        self._is_tty = sys.stderr.isatty()
+
+    def _clear_line(self):
+        sys.stderr.write("\r\033[K" if self._is_tty else "\r")
+
+    def _draw_locked(self):
+        self._clear_line()
+        sys.stderr.write(f"{self.FRAMES[self._idx % len(self.FRAMES)]} {self.message}...")
+        sys.stderr.flush()
 
     def _spin(self):
         while self.running:
-            sys.stderr.write(f"\r{self.FRAMES[self._idx % len(self.FRAMES)]} {self.message}...")
-            sys.stderr.flush()
+            with self._lock:
+                self._draw_locked()
             self._idx += 1
             time.sleep(0.1)
-        sys.stderr.write("\r" + " " * (len(self.message) + 10) + "\r")
-        sys.stderr.flush()
+        with self._lock:
+            self._clear_line()
+            sys.stderr.flush()
 
     def start(self):
+        if self.reserve_above and self._is_tty:
+            sys.stderr.write("\n")
+            sys.stderr.flush()
         self.running = True
         self.thread = threading.Thread(target=self._spin, daemon=True)
         self.thread.start()
@@ -34,6 +49,23 @@ class Spinner:
         self.running = False
         if self.thread:
             self.thread.join(timeout=0.5)
+
+    def write_above(self, text, end="\n"):
+        if not self.reserve_above or not self._is_tty:
+            sys.stderr.write(text + end)
+            sys.stderr.flush()
+            return
+
+        with self._lock:
+            self._clear_line()
+            sys.stderr.write("\033[1A\r\033[K")
+            if end == "\r":
+                sys.stderr.write(text)
+                sys.stderr.write("\033[1B\r")
+            else:
+                sys.stderr.write(text + "\n")
+            self._draw_locked()
+            sys.stderr.flush()
 
 import concurrent.futures
 
@@ -49,4 +81,3 @@ def _indent(text, prefix="      "):
 
 def get_socket_path() -> Path:
     return Path(f"/tmp/cterm_mcp_{os.getlogin()}.sock")
-

@@ -131,6 +131,7 @@ class MCPServer:
                                 "stream": {
                                     "fd":   chunk["fd"],
                                     "line": chunk["line"],
+                                    "end":  chunk.get("end", "\n"),
                                 },
                             })
                             # Flush so bytes reach the client without waiting

@@ -6,6 +6,8 @@ import subprocess
 import shlex
 import requests
 import time
+import errno
+import pty
 
 
 try:
@@ -191,6 +193,34 @@ def run_shell(command: str, stream: bool = False) -> dict:
     def _stream_generator():
         import select
 
+        def emit_completed_chunks(fd, text, pending, output_chunks):
+            pending += text
+            while True:
+                newline_pos = pending.find("\n")
+                carriage_pos = pending.find("\r")
+                positions = [pos for pos in (newline_pos, carriage_pos) if pos != -1]
+                if not positions:
+                    break
+
+                split_at = min(positions)
+                end = pending[split_at]
+                chunk = pending[:split_at]
+                if end == "\r" and pending[split_at + 1:split_at + 2] == "\n":
+                    end = "\n"
+                    pending = pending[split_at + 2:]
+                else:
+                    pending = pending[split_at + 1:]
+                if chunk:
+                    output_chunks.append(chunk)
+                    yield {
+                        "type": "stream",
+                        "fd": fd,
+                        "line": chunk,
+                        "end": end,
+                    }
+
+            return pending
+
         for cmd_str in parts:
             argv_list, err = _parse_pipeline(cmd_str)
             if err:
@@ -220,53 +250,81 @@ def run_shell(command: str, stream: bool = False) -> dict:
 
             stdout_lines = []
             stderr_lines = []
+            master_fd = None
+            slave_fd = None
 
             try:
+                master_fd, slave_fd = pty.openpty()
                 proc = subprocess.Popen(
                     argv_list[0],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    bufsize=1,          # line-buffered
+                    stdin=slave_fd,
+                    stdout=slave_fd,
+                    stderr=slave_fd,
+                    bufsize=0,
+                    close_fds=True,
                 )
+                os.close(slave_fd)
+                slave_fd = None
             except Exception as e:
+                if master_fd is not None:
+                    os.close(master_fd)
+                if slave_fd is not None:
+                    os.close(slave_fd)
                 yield {"type": "result", "ok": False,
                        "error": str(e), "results": results}
                 return
 
-            # Read stdout and stderr concurrently using select so neither
-            # pipe blocks the other.
-            fds = [proc.stdout, proc.stderr]
-            fd_names = {proc.stdout: "stdout", proc.stderr: "stderr"}
-            fd_buffers = {proc.stdout: stdout_lines, proc.stderr: stderr_lines}
-
+            pending = ""
             deadline = time.time() + 60  # 60-second timeout
 
-            while fds:
+            while True:
                 remaining = deadline - time.time()
                 if remaining <= 0:
                     proc.kill()
+                    os.close(master_fd)
                     yield {"type": "result", "ok": False,
                            "error": f"Command timed out: {cmd_str}",
                            "results": results}
                     return
 
-                readable, _, _ = select.select(fds, [], fds, min(remaining, 1.0))
+                readable, _, _ = select.select([master_fd], [], [master_fd], min(remaining, 1.0))
+                if not readable:
+                    if proc.poll() is not None:
+                        break
+                    continue
 
-                for fd in readable:
-                    line = fd.readline()
-                    if line:
-                        line_stripped = line.rstrip("\n")
-                        fd_buffers[fd].append(line_stripped)
-                        yield {
-                            "type": "stream",
-                            "fd": fd_names[fd],
-                            "line": line_stripped,
-                        }
-                    else:
-                        # EOF on this pipe
-                        fds.remove(fd)
+                try:
+                    data = os.read(master_fd, 4096)
+                except OSError as e:
+                    if e.errno == errno.EIO:
+                        break
+                    os.close(master_fd)
+                    yield {"type": "result", "ok": False,
+                           "error": str(e), "results": results}
+                    return
 
+                if not data:
+                    break
+
+                text = data.decode(errors="replace")
+                chunks = emit_completed_chunks(
+                    "stdout",
+                    text,
+                    pending,
+                    stdout_lines,
+                )
+                pending = yield from chunks
+
+            if pending:
+                stdout_lines.append(pending)
+                yield {
+                    "type": "stream",
+                    "fd": "stdout",
+                    "line": pending,
+                    "end": "\n",
+                }
+
+            os.close(master_fd)
             proc.wait()
 
             result_entry = {
