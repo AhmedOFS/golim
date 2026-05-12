@@ -289,6 +289,12 @@ class ToolAgent:
             file=sys.stderr,
         )
 
+    def _debug_agent_response(self, content):
+        if not self.debug:
+            return
+
+        print(f"\n[debug] agent_response={content!r}", file=sys.stderr)
+
     def _execute_tool_with_retry(self, tool_name, args, messages, ollama_tools):
         attempt = 0
         while True:
@@ -448,11 +454,13 @@ class ToolAgent:
                 # NO TOOL CALLS
                 # ----------------------------------------------------------
                 messages.append(message)
+                content = message.get("content", "No response")
+                self._debug_agent_response(content)
                 print(
                     f"\nTask complete (iteration {iteration})",
                     file=sys.stderr
                 )
-                return message.get("content", "No response")
+                return content
 
             # --------------------------------------------------------------
             # MAX ITERATIONS REACHED
