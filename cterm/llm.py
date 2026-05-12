@@ -20,10 +20,11 @@ class ToolAgent:
     MAX_SHELL_RETRIES = 3
     MAX_TOOL_ITERATIONS = 10
 
-    def __init__(self, model, binary="ollama", small_model=None):
+    def __init__(self, model, binary="ollama", small_model=None, debug=False):
         self.model = model
         self.small_model = small_model
         self.binary = binary
+        self.debug = debug
         self.mcp_client = None
         self.tools = []
         self.use_native_tools = self._check_native_tool_support()
@@ -179,6 +180,11 @@ class ToolAgent:
                         )
 
         execution_summary = "\n".join(tool_summary_lines)
+        final_answer = ""
+        for msg in reversed(messages):
+            if msg.get("role") == "assistant" and not msg.get("tool_calls"):
+                final_answer = msg.get("content", "")
+                break
 
         # ------------------------------------------------------------------
         # Verification context
@@ -199,7 +205,9 @@ class ToolAgent:
                     f"Original user request:\n\n"
                     f"{user_message}\n\n"
                     f"Tool execution history:\n\n"
-                    f"{execution_summary}"
+                    f"{execution_summary}\n\n"
+                    f"Assistant final answer:\n\n"
+                    f"{final_answer or '<none>'}"
                 ),
             },
         ]
@@ -218,6 +226,7 @@ class ToolAgent:
             verification_messages,
             tools=None,
             binary=self.binary,
+            response_format="json",
         )
         spinner.stop()
         content = (
@@ -230,7 +239,7 @@ class ToolAgent:
         # Parse verifier response
         # ------------------------------------------------------------------
         try:
-            verification = json.loads(content)
+            verification = self._parse_json_object(content)
 
             complete = bool(verification.get("complete"))
             summary = verification.get("summary", "")
@@ -241,12 +250,44 @@ class ToolAgent:
                 "Failed to parse verifier response.\n\n"
                 f"Raw response:\n{content}"
             )
-            print("failure to parse")
+            if self.debug:
+                print(f"\n[debug] verifier_parse_failed raw={content!r}", file=sys.stderr)
         return complete, summary, tool_history, execution_summary
     
 
     def run(self, user_message):
         return self._run_with_native_tools(user_message) if self.use_native_tools else print("tools aren't supported by ")
+
+    def _parse_json_object(self, content):
+        decoder = json.JSONDecoder()
+        content = content.strip()
+        for idx, char in enumerate(content):
+            if char != "{":
+                continue
+            try:
+                parsed, _ = decoder.raw_decode(content[idx:])
+                if isinstance(parsed, dict):
+                    return parsed
+            except json.JSONDecodeError:
+                continue
+        raise ValueError(f"No JSON object found in response: {content!r}")
+
+    def _debug_tool_result(self, tool_name, args, result):
+        if not self.debug:
+            return
+
+        ok = result.get("ok") if isinstance(result, dict) else None
+        if ok is True:
+            state = "success"
+        elif ok is False:
+            state = "failed"
+        else:
+            state = "unknown"
+
+        print(
+            f"\n[debug] tool={tool_name} state={state} args={json.dumps(args)}",
+            file=sys.stderr,
+        )
 
     def _execute_tool_with_retry(self, tool_name, args, messages, ollama_tools):
         attempt = 0
@@ -275,6 +316,7 @@ class ToolAgent:
                 )
             )
             spinner.stop()
+            self._debug_tool_result(tool_name, args, tool_result)
             if not is_shell or tool_result.get("ok", True):
                 return tool_result, messages
 
@@ -330,11 +372,26 @@ class ToolAgent:
             "Use the tools available to you to perform the tasks "
             "or answer the questions asked of you on the user's system. "
             "Use the run_shell tool to execute commands, and use snap "
-            "or apt for app installations when relevant."
+            "or apt for app installations when relevant. "
+            "When the user asks about a specific file, inspect that file "
+            "and answer from it; do not inspect unrelated files unless the "
+            "specific file cannot be located or imports are required to "
+            "answer the question. Use exact file paths from tool results; "
+            "do not invent or rename paths in the final answer."
         )
 
         tool_history = []
         execution_summary = "No tools have been used yet."
+        messages = [
+            {
+                "role": "system",
+                "content": system_prompt
+            },
+            {
+                "role": "user",
+                "content": user_message
+            }
+        ]
 
         try:
 
@@ -344,24 +401,6 @@ class ToolAgent:
                 #     f"\nIteration {iteration}/{self.MAX_TOOL_ITERATIONS}",
                 #     file=sys.stderr
                 # )
-
-                # ----------------------------------------------------------
-                # RESET CONTEXT EVERY ITERATION
-                # ----------------------------------------------------------
-                messages = [
-                    {
-                        "role": "system",
-                        "content": system_prompt
-                    },
-                    {
-                        "role": "user",
-                        "content": (
-                            f"Original task:\n{user_message}\n\n"
-                            f"Execution history:\n{execution_summary}\n\n"
-                            "Continue the task using tools if required."
-                        )
-                    }
-                ]
 
                 spinner = Spinner("Thinking")
                 spinner.start()
@@ -403,53 +442,17 @@ class ToolAgent:
                             "content": json.dumps(tool_result)
                         })
 
-                    # ------------------------------------------------------
-                    # VERIFY TASK + UPDATE EXECUTION HISTORY
-                    # ------------------------------------------------------
-                    complete, summary, tool_history, execution_summary = (
-                        self.verify_task_completion(
-                            user_message,
-                            messages,
-                            tool_history
-                        )
-                    )
-
-
-                    if complete:
-                        print(
-                            f"\nTask complete",
-                            file=sys.stderr
-                        )
-                        return summary
-
                     continue
 
                 # ----------------------------------------------------------
                 # NO TOOL CALLS
                 # ----------------------------------------------------------
-                complete, summary, tool_history, execution_summary = (
-                    self.verify_task_completion(
-                        user_message,
-                        messages,
-                        tool_history
-                    )
-                )
-
-                if complete:
-                    print(
-                        f"\nTask complete (iteration {iteration})",
-                        file=sys.stderr
-                    )
-                    return summary
-
-                # ----------------------------------------------------------
-                # MODEL FAILED TO CONTINUE
-                # ----------------------------------------------------------
+                messages.append(message)
                 print(
-                    "\nModel returned no tool call and task "
-                    "is not complete.",
+                    f"\nTask complete (iteration {iteration})",
                     file=sys.stderr
                 )
+                return message.get("content", "No response")
 
             # --------------------------------------------------------------
             # MAX ITERATIONS REACHED
@@ -504,8 +507,8 @@ class ToolAgent:
 
             traceback.print_exc(file=sys.stderr)
 
-            return self._run_with_fallback(user_message)
+            return f"Error: {e}"
 
-def chat_with_tools(model, message, binary="ollama", small_model=None):
-    with ToolAgent(model, binary, small_model) as agent:
+def chat_with_tools(model, message, binary="ollama", small_model=None, debug=False):
+    with ToolAgent(model, binary, small_model, debug=debug) as agent:
         return agent.run(message)

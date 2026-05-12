@@ -253,7 +253,7 @@ def init_command(binary: str = "ollama") -> int:
         return 1
 
 
-def chat_command(message: str, binary: str = "ollama") -> int:
+def chat_command(message: str, binary: str = "ollama", debug: bool = False) -> int:
     """Send a message to the configured model."""
     config = Config()
     model = config.selected_model
@@ -278,7 +278,7 @@ def chat_command(message: str, binary: str = "ollama") -> int:
 
     try:
         # Assuming chat_with_tools connects to the UDS defined by get_socket_path()
-        response = chat_with_tools(model, message, binary, small_model=small_model)
+        response = chat_with_tools(model, message, binary, small_model=small_model, debug=debug)
         print(response)
         return 0
     except KeyboardInterrupt:
@@ -311,6 +311,11 @@ def main(argv: list[str] | None = None) -> int:
         help="ollama binary name or path (default: ollama)"
     )
     parser.add_argument(
+        "-d", "--debug",
+        action="store_true",
+        help="print each tool call and whether it succeeded"
+    )
+    parser.add_argument(
         "message",
         nargs="*",
         help="message to send to the LLM"
@@ -331,7 +336,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     
     message = " ".join(args.message)
-    return chat_command(message, args.binary)
+    return chat_command(message, args.binary, debug=args.debug)
 
 
 if __name__ == "__main__":
