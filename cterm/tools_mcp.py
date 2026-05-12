@@ -392,7 +392,41 @@ def system_info() -> dict:
         }
     except Exception as e:
         return {"ok": False, "error": str(e)}
+@tool
+def write_file(path: str, content: str, mode: str = "overwrite") -> dict:
+    """
+    Writes content to a new or existing file.
 
+    Args:
+        path:    Destination file path. Parent directories are created
+                 automatically if they do not exist.
+        content: Text to write.
+        mode:    "overwrite" (default) — replace the file entirely.
+                 "append"    — add content to the end of an existing file
+                               (or create it if absent).
+    """
+    expanded_path = os.path.expanduser(path)
+
+    if mode not in ("overwrite", "append"):
+        return {"ok": False, "error": f"Invalid mode: {mode!r}. Use 'overwrite' or 'append'."}
+
+    try:
+        parent = os.path.dirname(expanded_path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+
+        open_mode = "w" if mode == "overwrite" else "a"
+        with open(expanded_path, open_mode, encoding="utf-8") as f:
+            f.write(content)
+
+        return {
+            "ok": True,
+            "path": path,
+            "mode": mode,
+            "bytes_written": len(content.encode("utf-8")),
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 # Attach tools to mcp object
 mcp.list_files = list_files
 mcp.read_file = read_file
@@ -400,3 +434,4 @@ mcp.run_shell = run_shell
 mcp.calculate = calculate
 mcp.fetch_json = fetch_json
 mcp.system_info = system_info
+mcp.write_file = write_file
