@@ -6,6 +6,7 @@ from __future__ import annotations
 import subprocess
 import sys
 import time
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -13,6 +14,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 RESULTS_PATH = ROOT / "test_results.txt"
 TIMEOUT_SECONDS = 600
+ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+SPINNER_PREFIXES = ("⠋ ", "⠙ ", "⠹ ", "⠸ ", "⠼ ", "⠴ ", "⠦ ", "⠧ ", "⠇ ", "⠏ ")
 
 PROMPTS = [
     "install spotify",
@@ -30,6 +33,30 @@ def write_section(handle, title: str) -> None:
     handle.write(title + "\n")
     handle.write("=" * 80 + "\n")
     handle.flush()
+
+
+def normalize_output(raw: str) -> str:
+    text = ANSI_RE.sub("", raw)
+    lines: list[str] = []
+    current: list[str] = []
+
+    for char in text:
+        if char == "\r":
+            current = []
+        elif char == "\n":
+            line = "".join(current)
+            if line:
+                lines.append(line)
+            current = []
+        else:
+            current.append(char)
+
+    tail = "".join(current)
+    if tail:
+        lines.append(tail)
+
+    filtered = [line for line in lines if not line.startswith(SPINNER_PREFIXES)]
+    return "\n".join(filtered).strip()
 
 
 def run_prompt(prompt: str) -> tuple[int, float, str]:
@@ -69,11 +96,12 @@ def main() -> int:
             returncode, duration, output = run_prompt(prompt)
             handle.write(f"Return code: {returncode}\n")
             handle.write(f"Duration: {duration:.2f}s\n")
-            handle.write("--- output ---\n")
+            handle.write("--- normalized output ---\n")
+            output = normalize_output(output)
             handle.write(output)
             if output and not output.endswith("\n"):
                 handle.write("\n")
-            handle.write("--- end output ---\n")
+            handle.write("--- end normalized output ---\n")
             handle.flush()
 
             if returncode != 0:
