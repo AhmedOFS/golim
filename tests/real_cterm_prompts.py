@@ -23,8 +23,17 @@ PROMPTS = [
     "create folder sallyy",
     "delete folder sallyy",
     "create new hello world.py that prints hello world",
-    "commit changes with message hello",
-    "reverse last commit",
+    "commit hello_world.py with message hello",
+    "undo last commit",
+    "CPU count",
+    "restart plex",
+    "VRAM usage",
+    "nividia driver",
+    "desktop env",
+    "display server",
+    "what's in my recycle bin",
+    "what VPNs available"
+
 ]
 
 

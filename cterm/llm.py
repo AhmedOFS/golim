@@ -1,3 +1,4 @@
+
 """LLM interaction module for cterm using Ollama's native tool calling"""
 import subprocess
 import sys
@@ -17,7 +18,6 @@ from cterm.llm_utils.utils import Spinner, _indent, _run_async, get_socket_path
 
 
 class ToolAgent:
-    MAX_SHELL_RETRIES = 3
     MAX_TOOL_ITERATIONS = 10
 
     def __init__(self, model, binary="ollama", small_model=None, debug=False):
@@ -64,131 +64,32 @@ class ToolAgent:
     def __exit__(self, *_):
         if self.mcp_client:
             self.mcp_client.close()
-    def verify_task_completion(self, user_message, messages, tool_history=None):
-        """
-        Analyse previous tool calls and update execution history,
-        then ask the verifier LLM whether the task is complete.
 
-        Returns:
-            complete (bool)
-            summary (str)
-            tool_history (list)
-            execution_summary (str)
-        """
+    def _compact_json(self, value):
+        try:
+            return json.dumps(value, ensure_ascii=False)
+        except TypeError:
+            return json.dumps(str(value), ensure_ascii=False)
 
-        import json
-
-        # ------------------------------------------------------------------
-        # Persistent execution history
-        # ------------------------------------------------------------------
-        if tool_history is None:
-            tool_history = []
-
-        current_tool = None
-
-        # ------------------------------------------------------------------
-        # Extract NEW tool calls + outcomes from current messages
-        # ------------------------------------------------------------------
-        for msg in messages:
-            role = msg.get("role")
-
-            # --------------------------------------------------------------
-            # Assistant tool call
-            # --------------------------------------------------------------
-            if role == "assistant" and msg.get("tool_calls"):
-                for tc in msg["tool_calls"]:
-                    function = tc.get("function", {})
-
-                    current_tool = {
-                        "tool": function.get("name"),
-                        "arguments": function.get("arguments", {}),
-                        "status": "unknown",
-                        "result": None,
-                    }
-
-            # --------------------------------------------------------------
-            # Tool result
-            # --------------------------------------------------------------
-            elif role == "tool" and current_tool:
-                try:
-                    result = json.loads(msg.get("content", "{}"))
-                except Exception:
-                    result = {"raw": msg.get("content")}
-
-                current_tool["result"] = result
-
-                # ----------------------------------------------------------
-                # Determine success/failure
-                # ----------------------------------------------------------
-                if isinstance(result, dict):
-                    ok = result.get("ok")
-
-                    if ok is True:
-                        current_tool["status"] = "success"
-                    elif ok is False:
-                        current_tool["status"] = "failed"
-                    else:
-                        if result.get("error"):
-                            current_tool["status"] = "failed"
-                        else:
-                            current_tool["status"] = "success"
-                else:
-                    current_tool["status"] = "success"
-
-                tool_history.append(current_tool)
-                current_tool = None
-
-        # ------------------------------------------------------------------
-        # Build readable execution summary
-        # ------------------------------------------------------------------
-        tool_summary_lines = []
-
+    def _build_execution_summary(self, tool_history):
         if not tool_history:
-            tool_summary_lines.append("No tools were used.")
-        else:
-            for idx, tool in enumerate(tool_history, start=1):
+            return "No tools have been used yet."
 
-                line = f"{idx}. {tool['tool']} -> {tool['status']}"
-                tool_summary_lines.append(line)
+        lines = []
+        for idx, item in enumerate(tool_history, start=1):
+            status = item.get("status", "unknown")
+            lines.append(f"{idx}. {item.get('tool')} -> {status}")
+            args = item.get("arguments")
+            if args:
+                lines.append(f"   arguments: {self._compact_json(args)}")
+            result = item.get("result")
+            if isinstance(result, dict):
+                if result.get("error"):
+                    lines.append(f"   error: {result.get('error')}")
+        return "\n".join(lines)
 
-                args = tool.get("arguments")
-                if args:
-                    tool_summary_lines.append(
-                        f"   arguments: {json.dumps(args)}"
-                    )
-
-                result = tool.get("result")
-
-                if isinstance(result, dict):
-
-                    error = result.get("error")
-                    if error:
-                        tool_summary_lines.append(
-                            f"   error: {error}"
-                        )
-
-                    # Optional compact result preview
-                    preview = {
-                        k: v
-                        for k, v in result.items()
-                        if k not in ["stdout", "stderr"]
-                    }
-
-                    if preview:
-                        tool_summary_lines.append(
-                            f"   result: {json.dumps(preview)[:300]}"
-                        )
-
-        execution_summary = "\n".join(tool_summary_lines)
-        final_answer = ""
-        for msg in reversed(messages):
-            if msg.get("role") == "assistant" and not msg.get("tool_calls"):
-                final_answer = msg.get("content", "")
-                break
-
-        # ------------------------------------------------------------------
-        # Verification context
-        # ------------------------------------------------------------------
+    def _verify_history(self, user_message, tool_history, final_answer=""):
+        execution_summary = self._build_execution_summary(tool_history)
         verification_messages = [
             {
                 "role": "system",
@@ -212,48 +113,25 @@ class ToolAgent:
             },
         ]
 
-        # ------------------------------------------------------------------
-        # Ask verifier model
-        # ------------------------------------------------------------------
-
         spinner = Spinner("Evaluating Completion")
         spinner.start()
-
-
-
-        response = chat_with_model_api(
-            self.small_model,
-            verification_messages,
-            tools=None,
-            binary=self.binary,
-            response_format="json",
-        )
-        spinner.stop()
-        content = (
-            response.get("message", {})
-            .get("content", "")
-            .strip()
-        )
-
-        # ------------------------------------------------------------------
-        # Parse verifier response
-        # ------------------------------------------------------------------
         try:
-            verification = self._parse_json_object(content)
-
-            complete = bool(verification.get("complete"))
-            summary = verification.get("summary", "")
-
-        except Exception:
-            complete = False
-            summary = (
-                "Failed to parse verifier response.\n\n"
-                f"Raw response:\n{content}"
+            response = chat_with_model_api(
+                self.small_model or self.model,
+                verification_messages,
+                tools=None,
+                binary=self.binary,
+                response_format="json",
             )
+            content = response.get("message", {}).get("content", "").strip()
+            verification = self._parse_json_object(content)
+            return bool(verification.get("complete")), verification.get("summary", "")
+        except Exception as e:
             if self.debug:
-                print(f"\n[debug] verifier_parse_failed raw={content!r}", file=sys.stderr)
-        return complete, summary, tool_history, execution_summary
-    
+                print(f"\n[debug] verifier_failed error={e}", file=sys.stderr)
+            return False, "Verifier could not determine completion."
+        finally:
+            spinner.stop()
 
     def run(self, user_message):
         return self._run_with_native_tools(user_message) if self.use_native_tools else print("tools aren't supported by ")
@@ -295,24 +173,21 @@ class ToolAgent:
 
         print(f"\n[debug] agent_response={content!r}", file=sys.stderr)
 
-    def _execute_tool_with_retry(self, tool_name, args, messages, ollama_tools):
-        attempt = 0
-        while True:
-            is_shell = tool_name == "run_shell"
+    def _execute_tool(self, tool_name, args):
+        is_shell = tool_name == "run_shell"
+        label = args.get("command", tool_name) if tool_name == "run_shell" else tool_name
 
+        spinner = Spinner(label, reserve_above=is_shell)
+        spinner.start()
 
-            label = args.get("command", tool_name) if tool_name == "run_shell" else tool_name
+        def _on_shell_stream(fd, line, end="\n"):
+            output = f"\033[33m{line}\033[0m" if fd == "stderr" else line
+            spinner.write_above(output, end=end)
 
-            spinner = Spinner(label, reserve_above=is_shell)
-            spinner.start()
+        if is_shell:
+            spinner.write_above(f"$ {label}")
 
-            def _on_shell_stream(fd, line, end="\n"):
-                output = f"\033[33m{line}\033[0m" if fd == "stderr" else line
-                spinner.write_above(output, end=end)
-
-            if is_shell:
-                spinner.write_above(f"$ {label}")
-
+        try:
             tool_result = _run_async(
                 self.mcp_client.call_tool(
                     tool_name,
@@ -321,47 +196,13 @@ class ToolAgent:
                     on_stream=_on_shell_stream if is_shell else None,
                 )
             )
-            spinner.stop()
-            self._debug_tool_result(tool_name, args, tool_result)
-            if not is_shell or tool_result.get("ok", True):
-                return tool_result, messages
-
-            attempt += 1
-            if attempt >= self.MAX_SHELL_RETRIES:
-                return tool_result, messages
-
-            failed_cmd = args.get("command", "<unknown>")
-            error_msg  = tool_result.get("error", "")
-            stdout_out = "".join(r.get("stdout", "") + "\n" for r in tool_result.get("results", []))
-            stderr_out = "".join(r.get("stderr", "") + "\n" for r in tool_result.get("results", []))
-
-            failure_summary = (
-                f"The command `{failed_cmd}` failed.\nError: {error_msg}\n"
-                + (f"Stdout output:\n{stdout_out.strip()}\n" if stdout_out.strip() else "")
-                + (f"Stderr output:\n{stderr_out.strip()}\n" if stderr_out.strip() else "")
-                + "Please analyse the error and call run_shell again with a corrected command that addresses the problem."
-            )
-            messages = list(messages)
-            messages += [{"role": "tool", "content": json.dumps(tool_result)},
-                        {"role": "user",  "content": failure_summary}]
-
-            spinner = Spinner("Retrying")
-            spinner.start()
-            retry_response = chat_with_model_api(self.model, messages, ollama_tools, self.binary)
+        finally:
             spinner.stop()
 
-            retry_message = retry_response.get("message", {})
-            if not retry_message.get("tool_calls"):
-                return tool_result, messages
-
-            retry_call = retry_message["tool_calls"][0]
-            tool_name  = retry_call["function"]["name"]
-            args       = retry_call["function"].get("arguments", {})
-            messages.append(retry_message)
+        self._debug_tool_result(tool_name, args, tool_result)
+        return tool_result
 
     def _run_with_native_tools(self, user_message):
-
-
         ollama_tools = [
             {
                 "type": "function",
@@ -383,42 +224,33 @@ class ToolAgent:
             "and answer from it; do not inspect unrelated files unless the "
             "specific file cannot be located or imports are required to "
             "answer the question. Use exact file paths from tool results; "
-            "do not invent or rename paths in the final answer."
+            "do not invent or rename paths in the final answer. "
+            "When you have fully completed the task, respond with a plain text "
+            "summary of what was done — do not make any further tool calls."
         )
 
-        tool_history = []
-        execution_summary = "No tools have been used yet."
+        # Built once, appended to in-place
         messages = [
-            {
-                "role": "system",
-                "content": system_prompt
-            },
-            {
-                "role": "user",
-                "content": user_message
-            }
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_message},
         ]
 
+        tool_history = []
+
         try:
-
             for iteration in range(1, self.MAX_TOOL_ITERATIONS + 1):
-
-                # print(
-                #     f"\nIteration {iteration}/{self.MAX_TOOL_ITERATIONS}",
-                #     file=sys.stderr
-                # )
 
                 spinner = Spinner("Thinking")
                 spinner.start()
-
-                response = chat_with_model_api(
-                    self.model,
-                    messages,
-                    ollama_tools,
-                    self.binary
-                )
-
-                spinner.stop()
+                try:
+                    response = chat_with_model_api(
+                        self.model,
+                        messages,
+                        ollama_tools,
+                        self.binary
+                    )
+                finally:
+                    spinner.stop()
 
                 message = response.get("message", {})
 
@@ -426,97 +258,105 @@ class ToolAgent:
                 # TOOL CALL
                 # ----------------------------------------------------------
                 if message.get("tool_calls"):
-
                     function = message["tool_calls"][0].get("function", {})
-
                     tool_name = function.get("name")
                     args = function.get("arguments", {})
 
-                    messages.append(message)
+                    tool_result = self._execute_tool(tool_name, args)
 
-                    tool_result, messages = self._execute_tool_with_retry(
-                        tool_name,
-                        args,
-                        messages,
-                        ollama_tools
-                    )
+                    compact_result = tool_result
 
-                    # Ensure tool message exists
-                    if messages[-1].get("role") != "tool":
-                        messages.append({
-                            "role": "tool",
-                            "content": json.dumps(tool_result)
-                        })
+                    status = "failed" if (
+                        isinstance(tool_result, dict) and
+                        (tool_result.get("ok") is False or tool_result.get("error"))
+                    ) else "success"
+
+                    tool_history.append({
+                        "tool": tool_name,
+                        "arguments": args,
+                        "result": compact_result,
+                        "status": status,
+                    })
+
+                    # Append tool exchange to running message list
+                    messages.append({
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [{
+                            "function": {
+                                "name": tool_name,
+                                "arguments": args,
+                            }
+                        }],
+                    })
+                    messages.append({
+                        "role": "tool",
+                        "content": self._compact_json(compact_result),
+                    })
 
                     continue
 
                 # ----------------------------------------------------------
-                # NO TOOL CALLS
+                # NO TOOL CALLS — agent thinks it's done, run verifier
                 # ----------------------------------------------------------
-                messages.append(message)
                 content = message.get("content", "No response")
-                self._debug_agent_response(content)
-                print(
-                    f"\nTask complete (iteration {iteration})",
-                    file=sys.stderr
+
+                complete, verifier_summary = self._verify_history(
+                    user_message, tool_history, final_answer=content
                 )
+
+                if not complete:
+                    if self.debug:
+                        print(f"\n[debug] verifier=incomplete summary={verifier_summary!r}", file=sys.stderr)
+                    messages.append({
+                        "role": "user",
+                        "content": f"Verifier says task is incomplete:\n{verifier_summary}\nPlease continue.",
+                    })
+                    continue
+
+                self._debug_agent_response(content)
+                print(f"\nTask complete (iteration {iteration})", file=sys.stderr)
                 return content
 
-            # --------------------------------------------------------------
+            # ------------------------------------------------------------------
             # MAX ITERATIONS REACHED
-            # --------------------------------------------------------------
+            # ------------------------------------------------------------------
             print(
-                f"\nReached maximum iterations "
-                f"({self.MAX_TOOL_ITERATIONS})",
+                f"\nReached maximum iterations ({self.MAX_TOOL_ITERATIONS})",
                 file=sys.stderr
             )
 
             final_messages = [
-                {
-                    "role": "system",
-                    "content": system_prompt
-                },
+                {"role": "system", "content": system_prompt},
                 {
                     "role": "user",
                     "content": (
                         f"Original task:\n{user_message}\n\n"
-                        f"Execution history:\n{execution_summary}\n\n"
-                        "Summarise what was accomplished and "
-                        "what still needs to be done."
+                        f"Execution history:\n{self._build_execution_summary(tool_history)}\n\n"
+                        "Summarise what was accomplished and what still needs to be done."
                     )
                 }
             ]
 
             spinner = Spinner("Summarising")
             spinner.start()
+            try:
+                final = chat_with_model_api(
+                    self.model, final_messages, ollama_tools, self.binary
+                )
+            finally:
+                spinner.stop()
 
-            final = chat_with_model_api(
-                self.model,
-                final_messages,
-                ollama_tools,
-                self.binary
-            )
-
-            spinner.stop()
-
-            return final.get("message", {}).get(
-                "content",
-                "No response"
-            )
+            return final.get("message", {}).get("content", "No response")
 
         except Exception as e:
-
             import traceback
-
-            print(
-                f"\n💥 Exception in _run_with_native_tools: {e}",
-                file=sys.stderr
-            )
-
+            print(f"\n💥 Exception in _run_with_native_tools: {e}", file=sys.stderr)
             traceback.print_exc(file=sys.stderr)
-
             return f"Error: {e}"
+
 
 def chat_with_tools(model, message, binary="ollama", small_model=None, debug=False):
     with ToolAgent(model, binary, small_model, debug=debug) as agent:
         return agent.run(message)
+
