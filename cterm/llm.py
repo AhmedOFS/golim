@@ -14,6 +14,7 @@ from pathlib import Path
 from cterm.llm_utils.chat_api import chat_with_model_api
 from cterm.llm_utils.mcp_client import FastMCPClient
 from cterm.llm_utils.utils import Spinner, _indent, _run_async, get_socket_path
+from cterm.skills_loader import SkillsLoader
 
 
 
@@ -75,6 +76,14 @@ class ToolAgent:
         if not tool_history:
             return "No tools have been used yet."
 
+        def _clip(text, limit=1200):
+            if not text:
+                return ""
+            text = str(text)
+            if len(text) <= limit:
+                return text
+            return text[:limit] + "\n...<truncated>..."
+
         lines = []
         for idx, item in enumerate(tool_history, start=1):
             status = item.get("status", "unknown")
@@ -86,6 +95,17 @@ class ToolAgent:
             if isinstance(result, dict):
                 if result.get("error"):
                     lines.append(f"   error: {result.get('error')}")
+                for result_idx, entry in enumerate(result.get("results", [])[:3], start=1):
+                    if not isinstance(entry, dict):
+                        continue
+                    if "returncode" in entry:
+                        lines.append(f"   result {result_idx} returncode: {entry.get('returncode')}")
+                    stdout = _clip(entry.get("stdout", ""))
+                    if stdout:
+                        lines.append(f"   result {result_idx} stdout:\n{_indent(stdout, '      ')}")
+                    stderr = _clip(entry.get("stderr", ""), limit=500)
+                    if stderr:
+                        lines.append(f"   result {result_idx} stderr:\n{_indent(stderr, '      ')}")
         return "\n".join(lines)
 
     def _verify_history(self, user_message, tool_history, final_answer=""):
@@ -202,6 +222,30 @@ class ToolAgent:
         self._debug_tool_result(tool_name, args, tool_result)
         return tool_result
 
+    def _select_skills_prompt(self, user_message):
+        loader = SkillsLoader(debug=self.debug)
+        spinner = Spinner("Selecting Skills")
+        spinner.start()
+        try:
+            selected = loader.select(
+                user_message,
+                self.small_model or self.model,
+                chat_with_model_api,
+                binary=self.binary,
+            )
+        except Exception as e:
+            if self.debug:
+                print(f"\n[debug] skills_selection_failed error={e}", file=sys.stderr)
+            selected = []
+        finally:
+            spinner.stop()
+
+        if self.debug:
+            names = [skill.name for skill in selected]
+            print(f"\n[debug] selected_skills={json.dumps(names)}", file=sys.stderr)
+
+        return loader.render_for_system_prompt(selected)
+
     def _run_with_native_tools(self, user_message):
         ollama_tools = [
             {
@@ -228,6 +272,9 @@ class ToolAgent:
             "When you have fully completed the task, respond with a plain text "
             "summary of what was done — do not make any further tool calls."
         )
+        skills_prompt = self._select_skills_prompt(user_message)
+        if skills_prompt:
+            system_prompt = f"{system_prompt}\n\n{skills_prompt}"
 
         # Built once, appended to in-place
         messages = [
@@ -359,4 +406,3 @@ class ToolAgent:
 def chat_with_tools(model, message, binary="ollama", small_model=None, debug=False):
     with ToolAgent(model, binary, small_model, debug=debug) as agent:
         return agent.run(message)
-

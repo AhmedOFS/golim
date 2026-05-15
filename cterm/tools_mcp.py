@@ -1,17 +1,15 @@
 #!/usr/bin/env python3
 """MCP tools definitions for cterm"""
 import os
-import shutil
 import subprocess
-import shlex
 import requests
 import time
 
 
 try:
-    from utils import _build_pipe_procs, _run_pipeline, _split_pipes
+    from utils import _parse_command_part, _run_pipeline, _split_chained_commands
 except ImportError:
-    from .utils import _build_pipe_procs, _run_pipeline, _split_pipes
+    from .utils import _parse_command_part, _run_pipeline, _split_chained_commands
 # Simple wrapper class to hold tools (no FastMCP dependency needed for server)
 class MCPTools:
     """Container for MCP tool functions"""
@@ -24,32 +22,6 @@ def tool(func):
     """Decorator to mark a function as an MCP tool"""
     func.__mcp_tool__ = True
     return func
-
-# --- Security Config ---
-
-# The privileged wrapper installed by dev_setup.sh / the .deb package.
-# Sudoers grants NOPASSWD only for this wrapper, not for apt/snap directly.
-# This means the user still needs a password for sudo snap in their own terminal.
-PRIVILEGED_WRAPPER = "/usr/lib/cterm/cterm-privileged"
-
-PRIVILEGED_WHITELIST = {
-    "apt", "apt-get", "tee", "snap",
-}
-
-BINARY_PATHS = {
-    "apt":     "/usr/bin/apt",
-    "apt-get": "/usr/bin/apt-get",
-    "tee":     "/usr/bin/tee",
-    "snap":    "/usr/bin/snap",
-}
-
-# Characters never allowed in any argument.
-# `|` is handled separately by pipeline parsing before argv validation.
-FORBIDDEN_CHARS = set('><`$\\\'\"()')
-
-def _is_safe_arg(arg: str) -> bool:
-    """Reject arguments containing shell metacharacters."""
-    return not any(c in FORBIDDEN_CHARS for c in arg)
 
 # --- Tool Definitions ---
 
@@ -91,64 +63,18 @@ def run_shell(command: str, stream: bool = False) -> dict:
     followed by a final {"type": "result", ...} summary dict.
     When stream=False (default), behaviour is identical to before.
     """
-    # Split on && and run each part in sequence
-    parts = [c.strip() for c in command.split("&&")]
+    parts = _split_chained_commands(command)
     results = []
-
-    def _build_cmd(tokens):
-        """Resolve a token list to a final argv, or return an error dict."""
-        if tokens[0] == "sudo":
-            tokens = tokens[1:]
-        if not tokens:
-            return None, {"ok": False, "error": "Empty command after stripping sudo", "results": results}
-
-        binary = tokens[0]
-        args = tokens[1:]
-
-        for arg in args:
-            if not _is_safe_arg(arg):
-                return None, {"ok": False, "error": f"Forbidden character in argument: {arg!r}", "results": results}
-
-        if binary in PRIVILEGED_WHITELIST:
-            resolved = BINARY_PATHS.get(binary)
-            if not resolved or not os.path.isfile(resolved):
-                return None, {"ok": False, "error": f"Binary not found: {binary}", "results": results}
-            if not os.path.isfile(PRIVILEGED_WRAPPER):
-                return None, {"ok": False, "error": f"Privileged wrapper not found: {PRIVILEGED_WRAPPER}. Run dev_setup.sh install.", "results": results}
-            return ["sudo", "--non-interactive", PRIVILEGED_WRAPPER, resolved] + args, None
-        else:
-            resolved = shutil.which(binary)
-            if not resolved:
-                return None, {"ok": False, "error": f"Command not found: {binary}", "results": results}
-            return [resolved] + args, None
-
-    def _parse_pipeline(cmd_str):
-        """Resolve a single && segment into one argv or a full pipeline."""
-        pipe_segments = _split_pipes(cmd_str)
-        if len(pipe_segments) > 1:
-            return _build_pipe_procs(pipe_segments, results)
-
-        try:
-            tokens = shlex.split(cmd_str)
-        except ValueError as e:
-            return [], {"ok": False, "error": f"Command parse error: {e}", "results": results}
-
-        if not tokens:
-            return [], None
-
-        cmd, err = _build_cmd(tokens)
-        if err:
-            return [], err
-        return [cmd], None
 
     # ------------------------------------------------------------------ #
     #  Non-streaming path (original behaviour)                            #
     # ------------------------------------------------------------------ #
     if not stream:
         for cmd_str in parts:
-            argv_list, err = _parse_pipeline(cmd_str)
+            parsed, err = _parse_command_part(cmd_str, results)
             if err:
                 return err
+            argv_list = parsed.argv_list
             if not argv_list:
                 continue
 
@@ -157,15 +83,16 @@ def run_shell(command: str, stream: bool = False) -> dict:
                     result_entry = _run_pipeline(argv_list, cmd_str, timeout=60)
                 else:
                     result = subprocess.run(
-                        argv_list[0],
-                        capture_output=True,
+                        argv_list[0].argv,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.DEVNULL if parsed.suppress_stderr else subprocess.PIPE,
                         text=True,
                         timeout=60,
                     )
                     result_entry = {
                         "command": cmd_str,
                         "stdout": result.stdout,
-                        "stderr": result.stderr,
+                        "stderr": "" if parsed.suppress_stderr else result.stderr,
                         "returncode": result.returncode,
                     }
 
@@ -220,10 +147,11 @@ def run_shell(command: str, stream: bool = False) -> dict:
             return pending
 
         for cmd_str in parts:
-            argv_list, err = _parse_pipeline(cmd_str)
+            parsed, err = _parse_command_part(cmd_str, results)
             if err:
                 yield {"type": "result", **err}
                 return
+            argv_list = parsed.argv_list
             if not argv_list:
                 continue
 
@@ -257,10 +185,10 @@ def run_shell(command: str, stream: bool = False) -> dict:
 
             try:
                 proc = subprocess.Popen(
-                    argv_list[0],
+                    argv_list[0].argv,
                     stdin=subprocess.DEVNULL,
                     stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL if parsed.suppress_stderr else subprocess.PIPE,
                     bufsize=0,
                     close_fds=True,
                 )
@@ -272,8 +200,9 @@ def run_shell(command: str, stream: bool = False) -> dict:
             deadline = time.time() + 60  # 60-second timeout
             fd_to_stream = {
                 proc.stdout.fileno(): "stdout",
-                proc.stderr.fileno(): "stderr",
             }
+            if not parsed.suppress_stderr:
+                fd_to_stream[proc.stderr.fileno()] = "stderr"
 
             while fd_to_stream:
                 remaining = deadline - time.time()
@@ -281,7 +210,8 @@ def run_shell(command: str, stream: bool = False) -> dict:
                     proc.kill()
                     proc.wait()
                     proc.stdout.close()
-                    proc.stderr.close()
+                    if proc.stderr:
+                        proc.stderr.close()
                     yield {"type": "result", "ok": False,
                            "error": f"Command timed out: {cmd_str}",
                            "results": results}
@@ -336,11 +266,14 @@ def run_shell(command: str, stream: bool = False) -> dict:
                     }
 
             proc.wait()
+            proc.stdout.close()
+            if proc.stderr:
+                proc.stderr.close()
 
             result_entry = {
                 "command": cmd_str,
                 "stdout": "\n".join(output_lines["stdout"]),
-                "stderr": "\n".join(output_lines["stderr"]),
+                "stderr": "" if parsed.suppress_stderr else "\n".join(output_lines["stderr"]),
                 "returncode": proc.returncode,
             }
             results.append(result_entry)
