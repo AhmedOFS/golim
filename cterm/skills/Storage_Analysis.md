@@ -35,14 +35,19 @@ Prefer evidence-first investigation:
    - contains current directory
 
 3. Analyze top-level usage without crossing mounts:
-   ```bash
-   du -x -h -d 1 MOUNT 2>/dev/null
-   ```
+  Use only du -x -h -d 1 MOUNT 2>/dev/null on the chosen filesystem; do not use globbed scans like du -sh /* or du -sh /home/*.
 
-4. Drill into largest directories:
-   ```bash
+ 4. Drill into largest directories recursively (single-path exploration):
+
+   Run:
    du -x -h -d 1 PATH 2>/dev/null
-   ```
+   Recurse only into the single largest child directory from the output.
+   Repeat on that child only:
+   du -x -h -d 1 CHILD_PATH 2>/dev/null
+   Continue until:
+   no child is materially larger, or
+   the next level is below a useful size threshold.
+   Do not branch to sibling paths, use globs, or switch to find during the drill-down phase.
 
 5. If needed, find large files:
    ```bash
@@ -52,7 +57,7 @@ Prefer evidence-first investigation:
 6. If `df` usage is much larger than `du`, mention:
    - deleted-but-open files
    - permissions
-   - reserved blocks
+   - reserved block
    - mount behavior
 
    Suggested follow-up:
@@ -77,4 +82,3 @@ Return:
 - largest directories and sizes
 - largest files if checked
 - likely cleanup candidates
-- optional next cleanup commands for approval

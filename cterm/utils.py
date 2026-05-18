@@ -1,5 +1,6 @@
 """Utility helpers shared by cterm modules."""
 
+import glob
 import os
 import shlex
 import shutil
@@ -27,7 +28,9 @@ BINARY_PATHS = {
 # Note: `"` is excluded because shlex.split already handles quoting safely -
 # by the time we see individual tokens, quotes have been consumed/resolved.
 # `|` is excluded because we handle pipe segments ourselves via _split_pipes().
-FORBIDDEN_CHARS = set("><`$\\'()")
+# `$` is excluded because env-var tokens are expanded safely via
+# _expand_supported_vars / os.path.expandvars before the safety check.
+FORBIDDEN_CHARS = set("><`\\'()")
 
 
 @dataclass(frozen=True)
@@ -48,8 +51,16 @@ def _is_safe_arg(arg: str) -> bool:
 
 
 def _expand_supported_vars(token: str) -> str:
-    """Expand the narrow shell conveniences cterm intentionally supports."""
+    """Expand shell variables and the narrow conveniences cterm intentionally supports.
+
+    Processing order:
+    1. Expand ~ / $HOME / ${HOME} (as before, for clarity and cross-platform safety).
+    2. Expand any remaining $VAR / ${VAR} references via os.path.expandvars so that
+       legitimate environment variables (e.g. $XDG_CONFIG_HOME, $GOPATH) are resolved
+       before the argument reaches the safety checker.
+    """
     home = os.path.expanduser("~")
+    # Explicit ~ / $HOME shortcuts (kept from original for clarity)
     if token == "$HOME":
         return home
     if token.startswith("$HOME/"):
@@ -60,7 +71,27 @@ def _expand_supported_vars(token: str) -> str:
         return home + token[len("${HOME}"):]
     if token == "~" or token.startswith("~/"):
         return os.path.expanduser(token)
-    return token
+    # General environment-variable expansion for everything else
+    return os.path.expandvars(token)
+
+
+def _expand_globs(args: list[str]) -> list[str]:
+    """Expand glob patterns (*, ?, [...]) in argument tokens.
+
+    Each token is passed to glob.glob.  If the pattern produces matches the
+    token is replaced by the sorted match list (POSIX sh behaviour).  If
+    there are no matches the token is kept verbatim (also POSIX sh behaviour
+    for non-matching globs, i.e. no 'nullglob').
+    """
+    expanded: list[str] = []
+    for arg in args:
+        # Only bother calling glob when the token contains a wildcard.
+        if any(c in arg for c in ("*", "?", "[")):
+            matches = sorted(glob.glob(arg))
+            expanded.extend(matches if matches else [arg])
+        else:
+            expanded.append(arg)
+    return expanded
 
 
 def _strip_supported_redirection(tokens: list[str]) -> tuple[list[str], bool, dict | None]:
@@ -97,9 +128,11 @@ def _build_cmd(tokens: list[str], results_ref: list) -> tuple[list[str] | None, 
     if not tokens:
         return None, {"ok": False, "error": "Empty command after stripping sudo", "results": results_ref}
 
+    # Expand environment variables in every token first, then apply glob
+    # expansion to the arguments (not the binary name itself).
     tokens = [_expand_supported_vars(token) for token in tokens]
     binary = tokens[0]
-    args = tokens[1:]
+    args = _expand_globs(tokens[1:])
 
     for arg in args:
         if not _is_safe_arg(arg):

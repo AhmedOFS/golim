@@ -380,7 +380,7 @@ class ToolAgent:
                     "content": (
                         f"Original task:\n{user_message}\n\n"
                         f"Execution history:\n{self._build_execution_summary(tool_history)}\n\n"
-                        "Summarise what was accomplished and what still needs to be done."
+                        "Summarise the result and/or findings"
                     )
                 }
             ]

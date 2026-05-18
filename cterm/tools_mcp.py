@@ -53,10 +53,14 @@ def read_file(path: str) -> dict:
 def run_shell(command: str, stream: bool = False) -> dict:
     """
     Executes shell commands. Supports `&&` chaining and `|` pipelines.
-    Privileged commands
-    (apt, apt-get, tee, snap) are routed through the cterm privileged
-    wrapper and run as root without a password prompt. Everything else
-    runs as the current user with no restrictions.
+    Privileged commands (apt, apt-get, tee, snap) are routed through the
+    cterm privileged wrapper and run as root without a password prompt.
+    Everything else runs as the current user with no restrictions.
+
+    A command that exits non-zero but produced stdout is treated as a
+    partial success: ok=True, with the non-zero returncode and any stderr
+    preserved in the result entry so the caller can inspect them. A command
+    that exits non-zero and produced no stdout is a hard failure (ok=False).
 
     When stream=True, stdout/stderr lines are yielded incrementally as
     {"type": "stream", "fd": "stdout"|"stderr", "line": "..."} dicts,
@@ -67,7 +71,7 @@ def run_shell(command: str, stream: bool = False) -> dict:
     results = []
 
     # ------------------------------------------------------------------ #
-    #  Non-streaming path (original behaviour)                            #
+    #  Non-streaming path                                                  #
     # ------------------------------------------------------------------ #
     if not stream:
         for cmd_str in parts:
@@ -97,10 +101,16 @@ def run_shell(command: str, stream: bool = False) -> dict:
                     }
 
                 results.append(result_entry)
+
                 if result_entry.get("ok") is False:
                     return {"ok": False, "error": result_entry["error"], "results": results}
+
+                # Hard failure: non-zero exit with no output to show.
+                # Partial success: non-zero exit but stdout has content —
+                # keep going and let the caller inspect returncode/stderr.
                 if result_entry["returncode"] != 0 and not result_entry["stdout"].strip():
                     return {"ok": False, "error": f"Command failed: {cmd_str}", "results": results}
+
             except subprocess.TimeoutExpired:
                 return {"ok": False, "error": f"Command timed out: {cmd_str}", "results": results}
             except Exception as e:
