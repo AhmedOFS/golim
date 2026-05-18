@@ -61,10 +61,11 @@ class SkillsLoader:
                 "role": "system",
                 "content": (
                     "You select which skills are relevant to a user request.\n"
-                    "Only select a skill when its when-to-use guidance clearly matches.\n"
+                    "Only select a skill when its when-to-use guidance very strictly matches.\n"
                     "Respond ONLY with valid JSON in this exact shape:\n"
                     '{ "skills": ["skill-name"] }\n'
-                    "Use an empty list when no skills match."
+                    "Use an empty list when no skills match.\n"
+                    "Always prefer using a sigle skill"
                 ),
             },
             {
