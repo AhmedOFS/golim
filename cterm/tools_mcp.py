@@ -26,16 +26,85 @@ def tool(func):
 # --- Tool Definitions ---
 
 @tool
-def list_files(path: str) -> dict:
-    """Lists files in a directory"""
-    # FIX: Expand ~ to the user's home directory
-    expanded_path = os.path.expanduser(path)
-    if not os.path.isdir(expanded_path):
+def finder(
+    path: str,
+    pattern: str = "*",
+    include: list[str] | None = None,
+    exclude: list[str] | None = None,
+    max_depth: int | None = None,
+    type_filter: str | None = None,
+    max_results: int = 1000,
+) -> dict:
+    """
+    Recursively find files/dirs under path with glob filtering, depth control,
+    and type filtering. Returns relative paths from root.
+
+    Args:
+        path:        Root directory (~-expanded).
+        pattern:     Filename glob, e.g. "*.py". Default "*".
+        include:     Extra globs; entry matches if it fits pattern OR any of these.
+        exclude:     Path globs to skip. Layered on top of built-in defaults
+                     (.git, node_modules, __pycache__, .venv, dist, build, etc.).
+        max_depth:   Max recursion depth (1 = immediate children). None = unlimited.
+        type_filter: "file", "dir", or None for both.
+        max_results: Result cap (default 1000).
+
+    Returns:
+        {"ok": True, "path": str, "matches": [str, ...], "total": int, "truncated": bool}
+    """
+    import fnmatch
+
+    expanded_root = os.path.expanduser(path)
+    if not os.path.isdir(expanded_root):
         return {"ok": False, "error": f"Not a directory: {path}"}
-    try:
-        return {"ok": True, "path": path, "contents": os.listdir(expanded_path)}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+
+    DEFAULT_EXCLUDE = [
+        "**/.git/**", "**/node_modules/**", "**/__pycache__/**",
+        "**/.venv/**", "**/venv/**", "**/.mypy_cache/**", "**/.pytest_cache/**",
+        "**/*.pyc", "**/.DS_Store", "**/dist/**", "**/build/**",
+        "**/.next/**", "**/.nuxt/**", "**/.cache/**",
+    ]
+    effective_exclude = DEFAULT_EXCLUDE + (exclude or [])
+
+    def match_any(s, pats):
+        return any(fnmatch.fnmatch(s, p) or fnmatch.fnmatch(os.path.basename(s), p) for p in pats)
+
+    matches, truncated = [], False
+
+    for dirpath, dirnames, filenames in os.walk(expanded_root):
+        rel_dir = os.path.relpath(dirpath, expanded_root)
+        depth = 0 if rel_dir == "." else rel_dir.count(os.sep) + 1
+
+        if depth > 0 and match_any(rel_dir.replace(os.sep, "/"), effective_exclude):
+            dirnames.clear()
+            continue
+
+        if max_depth is not None and depth >= max_depth:
+            dirnames.clear()
+
+        dirnames[:] = [
+            d for d in dirnames
+            if not match_any(os.path.relpath(os.path.join(dirpath, d), expanded_root).replace(os.sep, "/"), effective_exclude)
+        ]
+
+        entries = ([(d, "dir") for d in dirnames] if type_filter != "file" else []) + \
+                  ([(f, "file") for f in filenames] if type_filter != "dir" else [])
+
+        for name, _ in sorted(entries):
+            rel = os.path.relpath(os.path.join(dirpath, name), expanded_root).replace(os.sep, "/")
+            if match_any(rel, effective_exclude):
+                continue
+            if not fnmatch.fnmatch(name, pattern) and not (include and match_any(name, include)):
+                continue
+            matches.append(rel)
+            if len(matches) >= max_results:
+                truncated = True
+                break
+
+        if truncated:
+            break
+
+    return {"ok": True, "path": path, "matches": matches, "total": len(matches), "truncated": truncated}
 
 @tool
 def read_file(path: str) -> dict:
@@ -381,7 +450,7 @@ def write_file(path: str, content: str, mode: str = "overwrite") -> dict:
     except Exception as e:
         return {"ok": False, "error": str(e)}
 # Attach tools to mcp object
-mcp.list_files = list_files
+mcp.finder = finder
 mcp.read_file = read_file
 mcp.run_shell = run_shell
 mcp.calculate = calculate
