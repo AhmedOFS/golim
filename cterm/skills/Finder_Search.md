@@ -21,7 +21,7 @@ Common starting paths:
 - User documents: `~/Documents`, `~/Downloads`, `~`
 - App configs: `~/.config`, `~/.local/share`, `/etc`
 - App data: `~/.local/share`, `/var/lib`, `/opt`
-- Installed commands: use `run_shell` with `command -v NAME` first
+- Installed commands: use `bash` with `command -v NAME` first
 
 Finder examples:
 - Reports:

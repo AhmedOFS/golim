@@ -123,22 +123,30 @@ def read_file(path: str) -> dict:
         return {"ok": False, "error": str(e)}
 
 @tool
-def run_shell(command: str, stream: bool = False) -> dict:
+def bash(command: str, stream: bool = False) -> dict:
     """
-    Executes shell commands. Supports `&&` chaining and `|` pipelines.
-    Privileged commands (apt, apt-get, tee, snap) are routed through the
-    cterm privileged wrapper and run as root without a password prompt.
-    Everything else runs as the current user with no restrictions.
+    Executes command lines using cterm's safe argv parser, not a shell.
 
-    A command that exits non-zero but produced stdout is treated as a
-    partial success: ok=True, with the non-zero returncode and any stderr
-    preserved in the result entry so the caller can inspect them. A command
-    that exits non-zero and produced no stdout is a hard failure (ok=False).
+    Supports unquoted `&&` command chaining, unquoted `|` pipelines, quoted
+    arguments, environment-variable and `~` expansion, glob expansion in
+    arguments, and stderr suppression only in the form `2>/dev/null` or
+    `2> /dev/null`. Other redirection and shell-only syntax are rejected by
+    the parser or by the argument safety checks.
 
-    When stream=True, stdout/stderr lines are yielded incrementally as
-    {"type": "stream", "fd": "stdout"|"stderr", "line": "..."} dicts,
-    followed by a final {"type": "result", ...} summary dict.
-    When stream=False (default), behaviour is identical to before.
+    Commands run as the current user. A leading `sudo` is stripped before
+    parsing; privileged commands in the whitelist (apt, apt-get, snap, tee)
+    are routed through cterm's privileged wrapper and run as root without an
+    interactive password prompt.
+
+    Results include stdout, stderr, and returncode for each chained command.
+    A non-zero command that produced stdout is treated as partial success
+    (ok=True) so the caller can inspect the output and returncode. A non-zero
+    command with no stdout is a hard failure (ok=False).
+
+    With stream=True, stdout/stderr chunks are yielded incrementally as
+    {"type": "stream", "fd": "stdout"|"stderr", "line": "...", "end": "..."}
+    dicts, followed by a final {"type": "result", ...} summary dict. With
+    stream=False, a single result dict is returned.
     """
     parts = _split_chained_commands(command)
     results = []
@@ -456,7 +464,7 @@ def write_file(path: str, content: str, mode: str = "overwrite") -> dict:
 # Attach tools to mcp object
 mcp.finder = finder
 mcp.read_file = read_file
-mcp.run_shell = run_shell
+mcp.bash = bash
 mcp.calculate = calculate
 mcp.fetch_json = fetch_json
 mcp.system_info = system_info

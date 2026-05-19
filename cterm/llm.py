@@ -194,8 +194,8 @@ class ToolAgent:
         print(f"\n[debug] agent_response={content!r}", file=sys.stderr)
 
     def _execute_tool(self, tool_name, args):
-        is_shell = tool_name == "run_shell"
-        label = args.get("command", tool_name) if tool_name == "run_shell" else tool_name
+        is_shell = tool_name == "bash"
+        label = args.get("command", tool_name) if tool_name == "bash" else tool_name
 
         spinner = Spinner(label, reserve_above=is_shell)
         spinner.start()
@@ -262,7 +262,7 @@ class ToolAgent:
         system_prompt = (
             "Use the tools available to you to perform the tasks "
             "or answer the questions asked of you on the user's system. "
-            "Use the run_shell tool to execute commands, and use snap "
+            "Use the bash tool to execute commands, and use snap "
             "or apt for app installations when relevant. "
             "When the user asks about a specific file, inspect that file "
             "and answer from it; do not inspect unrelated files unless the "

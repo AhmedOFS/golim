@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Smoke-test live MCP run_shell streaming with apt output."""
+"""Smoke-test live MCP bash streaming with apt output."""
 
 from __future__ import annotations
 
@@ -76,7 +76,7 @@ async def main() -> int:
     try:
         print(f"$ {COMMAND}", flush=True)
         result = await client.call_tool(
-            "run_shell",
+            "bash",
             {"command": COMMAND},
             stream_output=True,
         )

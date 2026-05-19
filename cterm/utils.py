@@ -98,7 +98,7 @@ def _strip_supported_redirection(tokens: list[str]) -> tuple[list[str], bool, di
     """
     Support only stderr suppression to /dev/null.
 
-    This keeps run_shell on shell=False while allowing common diagnostic
+    This keeps bash on shell=False while allowing common diagnostic
     commands such as `du / 2>/dev/null`.
     """
     cleaned = []
