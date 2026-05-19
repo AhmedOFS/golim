@@ -64,6 +64,10 @@ def finder(
         "**/*.pyc", "**/.DS_Store", "**/dist/**", "**/build/**",
         "**/.next/**", "**/.nuxt/**", "**/.cache/**",
     ]
+    if max_depth is not None:
+        max_depth = int(max_depth)
+    if max_results is not None:
+        max_results = int(max_results)
     effective_exclude = DEFAULT_EXCLUDE + (exclude or [])
 
     def match_any(s, pats):

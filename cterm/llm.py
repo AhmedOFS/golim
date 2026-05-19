@@ -356,6 +356,10 @@ class ToolAgent:
                     if self.debug:
                         print(f"\n[debug] verifier=incomplete summary={verifier_summary!r}", file=sys.stderr)
                     messages.append({
+                        "role": "assistant",
+                        "content": content,
+                    })
+                    messages.append({
                         "role": "user",
                         "content": f"Verifier says task is incomplete:\n{verifier_summary}\nPlease continue.",
                     })
