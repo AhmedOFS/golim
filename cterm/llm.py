@@ -19,7 +19,7 @@ from cterm.skills_loader import SkillsLoader
 
 
 class ToolAgent:
-    MAX_AGENT_ITERATIONS = 4
+    MAX_AGENT_ITERATIONS = 3
 
     def __init__(self, model, binary="ollama", small_model=None, debug=False):
         self.model = model
@@ -300,7 +300,7 @@ class ToolAgent:
                 "description": (
                     "Run one sequential worker agent on a concrete action. "
                     "The worker receives the previous worker's final output, "
-                    "has at most four iterations, and is verified before the "
+                    "has at most three iterations, and is verified before the "
                     "planner can continue."
                 ),
                 "parameters": {
@@ -598,31 +598,37 @@ class ToolAgent:
                             f"summary={result['verifier_summary']!r}",
                             file=sys.stderr,
                         )
-                    return (
-                        f"Stopped after action {step_index} because verification failed:\n"
-                        f"{result['verifier_summary'] or 'No verifier summary.'}\n\n"
-                        f"Last agent output:\n{result['output']}"
-                    )
-
-                planner_messages.append({
-                    "role": "assistant",
-                    "content": "",
-                    "tool_calls": [{
-                        "function": {
-                            "name": "new_agent",
-                            "arguments": {"action": action},
-                        }
-                    }],
-                })
-                planner_messages.append({
-                    "role": "tool",
-                    "content": self._compact_json({
-                        "action": result["action"],
-                        "output": result["output"],
-                        "complete": result["complete"],
-                        "verifier_summary": result["verifier_summary"],
-                    }),
-                })
+                    # Instead of returning, just record it and let the planner continue
+                    planner_messages.append({
+                        "role": "tool",
+                        "content": self._compact_json({
+                            "action": result["action"],
+                            "output": result["output"],
+                            "complete": result["complete"],
+                            "verifier_summary": result["verifier_summary"],
+                        }),
+                    })
+                    # planner sees complete=false and can dispatch a follow-up agent
+                else:
+                    planner_messages.append({
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [{
+                            "function": {
+                                "name": "new_agent",
+                                "arguments": {"action": action},
+                            }
+                        }],
+                    })
+                    planner_messages.append({
+                        "role": "tool",
+                        "content": self._compact_json({
+                            "action": result["action"],
+                            "output": result["output"],
+                            "complete": result["complete"],
+                            "verifier_summary": result["verifier_summary"],
+                        }),
+                    })
                 self._debug_orchestration(
                     "planner_handoff_recorded",
                     iteration=planner_iteration,

@@ -134,7 +134,7 @@ def bash(command: str, stream: bool = False) -> dict:
     the parser or by the argument safety checks.
 
     Commands run as the current user. A leading `sudo` is stripped before
-    parsing; privileged commands in the whitelist (apt, apt-get, snap, tee)
+    parsing; privileged commands in the whitelist (apt, apt-get, snap, tee, )
     are routed through cterm's privileged wrapper and run as root without an
     interactive password prompt.
 
@@ -190,7 +190,11 @@ def bash(command: str, stream: bool = False) -> dict:
                 # Partial success: non-zero exit but stdout has content —
                 # keep going and let the caller inspect returncode/stderr.
                 if result_entry["returncode"] != 0 and not result_entry["stdout"].strip():
-                    return {"ok": False, "error": f"Command failed: {cmd_str}", "results": results}
+                    stderr_detail = result_entry.get("stderr", "").strip()
+                    error_msg = f"Command failed: {cmd_str}"
+                    if stderr_detail:
+                        error_msg += f"\n{stderr_detail}"
+                    return {"ok": False, "error": error_msg, "results": results}
 
             except subprocess.TimeoutExpired:
                 return {"ok": False, "error": f"Command timed out: {cmd_str}", "results": results}
@@ -260,8 +264,12 @@ def bash(command: str, stream: bool = False) -> dict:
                            "error": result_entry["error"], "results": results}
                     return
                 if result_entry["returncode"] != 0 and not result_entry["stdout"].strip():
+                    stderr_detail = result_entry.get("stderr", "").strip()
+                    error_msg = f"Command failed: {cmd_str}"
+                    if stderr_detail:
+                        error_msg += f"\n{stderr_detail}"
                     yield {"type": "result", "ok": False,
-                           "error": f"Command failed: {cmd_str}", "results": results}
+                           "error": error_msg, "results": results}
                     return
                 continue
 
@@ -370,8 +378,12 @@ def bash(command: str, stream: bool = False) -> dict:
             results.append(result_entry)
 
             if proc.returncode != 0 and not result_entry["stdout"].strip():
+                stderr_detail = result_entry.get("stderr", "").strip()
+                error_msg = f"Command failed: {cmd_str}"
+                if stderr_detail:
+                    error_msg += f"\n{stderr_detail}"
                 yield {"type": "result", "ok": False,
-                       "error": f"Command failed: {cmd_str}", "results": results}
+                       "error": error_msg, "results": results}
                 return
 
         yield {"type": "result", "ok": True, "command": command, "results": results}
