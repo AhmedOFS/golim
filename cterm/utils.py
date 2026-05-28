@@ -7,22 +7,21 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 
+try:
+    from privilege import (
+        add_privileged_binary,
+        is_privileged_binary_allowed,
+    )
+except ImportError:
+    from .privilege import (
+        add_privileged_binary,
+        is_privileged_binary_allowed,
+    )
+
 # The privileged wrapper installed by dev_setup.sh / the .deb package.
 # Sudoers grants NOPASSWD only for this wrapper, not for apt/snap directly.
 # This means the user still needs a password for sudo snap in their own terminal.
 PRIVILEGED_WRAPPER = "/usr/lib/cterm/cterm-privileged"
-
-# Binaries the wrapper is allowed to execute (must match the wrapper's ALLOWED list)
-PRIVILEGED_WHITELIST = {
-    "apt", "apt-get", "tee", "snap",
-}
-
-BINARY_PATHS = {
-    "apt": "/usr/bin/apt",
-    "apt-get": "/usr/bin/apt-get",
-    "tee": "/usr/bin/tee",
-    "snap": "/usr/bin/snap",
-}
 
 # Characters never allowed in any argument.
 # Note: `"` is excluded because shlex.split already handles quoting safely -
@@ -121,9 +120,15 @@ def _strip_supported_redirection(tokens: list[str]) -> tuple[list[str], bool, di
     return cleaned, suppress_stderr, None
 
 
-def _build_cmd(tokens: list[str], results_ref: list) -> tuple[list[str] | None, dict | None]:
+def _build_cmd(
+    tokens: list[str],
+    results_ref: list,
+    allow_privileged: bool = False,
+) -> tuple[list[str] | None, dict | None]:
     """Resolve a token list to argv, including cterm's privileged routing."""
+    privileged = False
     if tokens[0] == "sudo":
+        privileged = True
         tokens = tokens[1:]
     if not tokens:
         return None, {"ok": False, "error": "Empty command after stripping sudo", "results": results_ref}
@@ -142,24 +147,33 @@ def _build_cmd(tokens: list[str], results_ref: list) -> tuple[list[str] | None, 
                 "results": results_ref,
             }
 
-    if binary in PRIVILEGED_WHITELIST:
-        resolved = BINARY_PATHS.get(binary)
-        if not resolved or not os.path.isfile(resolved):
-            return None, {"ok": False, "error": f"Binary not found: {binary}", "results": results_ref}
+    resolved = shutil.which(binary)
+    if not resolved:
+        return None, {"ok": False, "error": f"Command not found: {binary}", "results": results_ref}
+
+    if privileged:
         if not os.path.isfile(PRIVILEGED_WRAPPER):
             return None, {
                 "ok": False,
                 "error": (
                     f"Privileged wrapper not found: {PRIVILEGED_WRAPPER}. "
-                    "Run dev_setup.sh install."
+                    "Run sudocterm.sh install."
                 ),
                 "results": results_ref,
             }
+        if not is_privileged_binary_allowed(resolved):
+            if not allow_privileged:
+                return None, {
+                    "ok": False,
+                    "error": f"Privileged command requires approval: {resolved}",
+                    "approval_required": True,
+                    "approval_kind": "privileged_whitelist",
+                    "binary": resolved,
+                    "results": results_ref,
+                }
+            add_privileged_binary(resolved)
         return ["sudo", "--non-interactive", PRIVILEGED_WRAPPER, resolved] + args, None
 
-    resolved = shutil.which(binary)
-    if not resolved:
-        return None, {"ok": False, "error": f"Command not found: {binary}", "results": results_ref}
     return [resolved] + args, None
 
 
@@ -216,7 +230,11 @@ def _split_chained_commands(command: str) -> list[str]:
     return segments
 
 
-def _build_pipe_procs(pipe_segments: list[str], results_ref: list) -> tuple[list[ResolvedCommand], dict | None]:
+def _build_pipe_procs(
+    pipe_segments: list[str],
+    results_ref: list,
+    allow_privileged: bool = False,
+) -> tuple[list[ResolvedCommand], dict | None]:
     """
     Resolve a list of pipe-segment strings into a list of argv lists.
 
@@ -245,7 +263,7 @@ def _build_pipe_procs(pipe_segments: list[str], results_ref: list) -> tuple[list
             return [], {"ok": False, "error": "Empty pipe segment after parsing", "results": results_ref}
 
         tokens, suppress_stderr, _ = _strip_supported_redirection(tokens)
-        cmd, err = _build_cmd(tokens, results_ref)
+        cmd, err = _build_cmd(tokens, results_ref, allow_privileged=allow_privileged)
         if err:
             return [], err
         commands.append(ResolvedCommand(cmd, suppress_stderr=suppress_stderr))
@@ -253,11 +271,19 @@ def _build_pipe_procs(pipe_segments: list[str], results_ref: list) -> tuple[list
     return commands, None
 
 
-def _parse_command_part(cmd_str: str, results_ref: list) -> tuple[ParsedCommandPart | None, dict | None]:
+def _parse_command_part(
+    cmd_str: str,
+    results_ref: list,
+    allow_privileged: bool = False,
+) -> tuple[ParsedCommandPart | None, dict | None]:
     """Resolve one `&&` segment into argv and supported execution flags."""
     pipe_segments = _split_pipes(cmd_str)
     if len(pipe_segments) > 1:
-        commands, err = _build_pipe_procs(pipe_segments, results_ref)
+        commands, err = _build_pipe_procs(
+            pipe_segments,
+            results_ref,
+            allow_privileged=allow_privileged,
+        )
         if err:
             return None, err
         return ParsedCommandPart(argv_list=commands), None
@@ -274,7 +300,7 @@ def _parse_command_part(cmd_str: str, results_ref: list) -> tuple[ParsedCommandP
     if not tokens:
         return ParsedCommandPart(argv_list=[], suppress_stderr=suppress_stderr), None
 
-    cmd, err = _build_cmd(tokens, results_ref)
+    cmd, err = _build_cmd(tokens, results_ref, allow_privileged=allow_privileged)
     if err:
         return None, err
     return ParsedCommandPart(argv_list=[ResolvedCommand(cmd)], suppress_stderr=suppress_stderr), None

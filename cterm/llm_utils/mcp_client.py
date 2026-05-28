@@ -111,25 +111,31 @@ class FastMCPClient:
             if not Path(self.socket_path).exists():
                 raise ConnectionRefusedError(f"UDS socket not found at {self.socket_path}")
             call_args = dict(args)
-            if stream_output and tool_name == "bash":
-                call_args["stream"] = True
-                def _on_stream(fd, line, end="\n"):
-                    if on_stream:
-                        on_stream(fd, line, end)
-                        return
-                    output = f"\033[33m{line}\033[0m" if fd == "stderr" else line
-                    sys.stdout.write(output + end)
-                    sys.stdout.flush()
-                response = self._stream_request("tools/call", {"name": tool_name, "arguments": call_args}, on_stream=_on_stream)
-            else:
-                response = self._send_request("tools/call", {"name": tool_name, "arguments": call_args})
-            if "result" in response:
-                return response["result"]
-            if "error" in response:
-                return {"ok": False, "error": response["error"].get("message", "Unknown error")}
-            return {"ok": True, "result": response}
+            response = self._call_tool_once(tool_name, call_args, stream_output, on_stream)
+            return self._response_to_result(response)
         except Exception as e:
             return {"ok": False, "error": f"Tool execution error: {str(e)}"}
+
+    def _call_tool_once(self, tool_name, call_args, stream_output=False, on_stream=None):
+        if stream_output and tool_name == "bash":
+            call_args = dict(call_args)
+            call_args["stream"] = True
+            def _on_stream(fd, line, end="\n"):
+                if on_stream:
+                    on_stream(fd, line, end)
+                    return
+                output = f"\033[33m{line}\033[0m" if fd == "stderr" else line
+                sys.stdout.write(output + end)
+                sys.stdout.flush()
+            return self._stream_request("tools/call", {"name": tool_name, "arguments": call_args}, on_stream=_on_stream)
+        return self._send_request("tools/call", {"name": tool_name, "arguments": call_args})
+
+    def _response_to_result(self, response):
+        if "result" in response:
+            return response["result"]
+        if "error" in response:
+            return {"ok": False, "error": response["error"].get("message", "Unknown error")}
+        return {"ok": True, "result": response}
 
     def close(self):
         pass

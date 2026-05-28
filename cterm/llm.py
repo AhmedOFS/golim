@@ -14,6 +14,7 @@ from pathlib import Path
 from cterm.llm_utils.chat_api import chat_with_model_api
 from cterm.llm_utils.mcp_client import FastMCPClient
 from cterm.llm_utils.utils import Spinner, _indent, _run_async, get_socket_path
+from cterm.privilege import prompt_to_add_privileged_binary
 from cterm.skills_loader import SkillsLoader
 
 
@@ -214,27 +215,51 @@ class ToolAgent:
         is_shell = tool_name == "bash"
         label = args.get("command", tool_name) if tool_name == "bash" else tool_name
 
-        spinner = Spinner(label, reserve_above=is_shell)
-        spinner.start()
-
         def _on_shell_stream(fd, line, end="\n"):
             output = f"\033[33m{line}\033[0m" if fd == "stderr" else line
             spinner.write_above(output, end=end)
 
-        if is_shell:
-            spinner.write_above(f"$ {label}")
-
-        try:
-            tool_result = _run_async(
+        def _call_once(call_args):
+            return _run_async(
                 self.mcp_client.call_tool(
                     tool_name,
-                    args,
+                    call_args,
                     stream_output=is_shell,
                     on_stream=_on_shell_stream if is_shell else None,
                 )
             )
+
+        spinner = Spinner(label, reserve_above=is_shell)
+        spinner.start()
+        if is_shell:
+            spinner.write_above(f"$ {label}")
+
+        try:
+            tool_result = _call_once(args)
         finally:
             spinner.stop()
+
+        if (
+            is_shell
+            and isinstance(tool_result, dict)
+            and tool_result.get("approval_required")
+            and tool_result.get("approval_kind") == "privileged_whitelist"
+        ):
+            binary = tool_result.get("binary", "")
+            if not prompt_to_add_privileged_binary(binary):
+                tool_result = {
+                    "ok": False,
+                    "error": f"Privileged command not approved: {binary}",
+                }
+            else:
+                retry_args = dict(args)
+                retry_args["allow_privileged"] = True
+                spinner = Spinner(label, reserve_above=is_shell)
+                spinner.start()
+                try:
+                    tool_result = _call_once(retry_args)
+                finally:
+                    spinner.stop()
 
         self._debug_tool_result(tool_name, args, tool_result)
         return tool_result

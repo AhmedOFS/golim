@@ -3,6 +3,7 @@ set -e
 
 SUDOERS_FILE="/etc/sudoers.d/cterm"
 WRAPPER="/usr/lib/cterm/cterm-privileged"
+DEFAULT_ALLOWED=( /usr/bin/apt /usr/bin/apt-get /usr/bin/tee /usr/bin/snap )
 
 # ── Colours ──────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
@@ -16,6 +17,11 @@ die()  { echo -e "${RED}✗${NC} $*" >&2; exit 1; }
 # ── Who actually invoked sudo ─────────────────────────────────────────────────
 REAL_USER="${SUDO_USER:-$USER}"
 [ "$REAL_USER" = "root" ] && die "Could not determine the real user. Run via sudo, not as root directly."
+REAL_HOME="$(getent passwd "$REAL_USER" | cut -d: -f6)"
+[ -n "$REAL_HOME" ] || die "Could not determine home directory for $REAL_USER."
+REAL_CONFIG_HOME="${XDG_CONFIG_HOME:-$REAL_HOME/.config}"
+CONFIG_DIR="$REAL_CONFIG_HOME/cterm"
+WHITELIST="$CONFIG_DIR/privileged_whitelist"
 
 # ── Args ──────────────────────────────────────────────────────────────────────
 case "${1:-install}" in
@@ -23,27 +29,64 @@ case "${1:-install}" in
     echo "Setting up cterm dev environment for user: $REAL_USER"
     echo
 
-    # 1. Install the privileged wrapper script
+    # 1. Create the initial user-owned privileged command whitelist.
+    install -d -m 0755 -o "$REAL_USER" -g "$REAL_USER" "$CONFIG_DIR"
+    : > "$WHITELIST"
+    for binary in "${DEFAULT_ALLOWED[@]}"; do
+      if [ -x "$binary" ]; then
+        readlink -f "$binary" >> "$WHITELIST"
+      fi
+    done
+    sort -u -o "$WHITELIST" "$WHITELIST"
+    chown "$REAL_USER:$REAL_USER" "$WHITELIST"
+    chmod 0644 "$WHITELIST"
+    ok "Installed privileged whitelist at $WHITELIST."
+
+    # 2. Install the privileged wrapper script
     mkdir -p "$(dirname "$WRAPPER")"
     cat > "$WRAPPER" << 'EOF'
 #!/bin/bash
 # cterm privileged wrapper - called only by cterm_server
-# Whitelists which binaries can actually be executed
-ALLOWED=( /usr/bin/apt /usr/bin/apt-get /usr/bin/tee /usr/bin/snap )
+# Reads the invoking user's cterm whitelist before executing a binary.
+set -e
 
 if [ "$#" -lt 1 ]; then
   echo "Usage: cterm-privileged <binary> [args...]" >&2
   exit 1
 fi
 
-BINARY="$1"
+BINARY="$(readlink -f "$1")"
 shift
 
-for allowed in "${ALLOWED[@]}"; do
+REAL_USER="${SUDO_USER:-}"
+if [ -z "$REAL_USER" ] || [ "$REAL_USER" = "root" ]; then
+  echo "cterm-privileged: could not determine invoking user" >&2
+  exit 1
+fi
+
+REAL_HOME="$(getent passwd "$REAL_USER" | cut -d: -f6)"
+if [ -z "$REAL_HOME" ]; then
+  echo "cterm-privileged: could not determine home for $REAL_USER" >&2
+  exit 1
+fi
+
+CONFIG_HOME="${XDG_CONFIG_HOME:-$REAL_HOME/.config}"
+WHITELIST="${CTERM_PRIVILEGED_WHITELIST:-$CONFIG_HOME/cterm/privileged_whitelist}"
+
+if [ ! -r "$WHITELIST" ]; then
+  echo "cterm-privileged: whitelist not readable: $WHITELIST" >&2
+  exit 1
+fi
+
+while IFS= read -r allowed || [ -n "$allowed" ]; do
+  allowed="${allowed%%#*}"
+  allowed="$(echo "$allowed" | xargs)"
+  [ -n "$allowed" ] || continue
+  allowed="$(readlink -f "$allowed")"
   if [ "$BINARY" = "$allowed" ]; then
     exec "$BINARY" "$@"
   fi
-done
+done < "$WHITELIST"
 
 echo "cterm-privileged: binary not allowed: $BINARY" >&2
 exit 1
@@ -52,7 +95,7 @@ EOF
     chown root:root "$WRAPPER"
     ok "Installed wrapper at $WRAPPER."
 
-    # 2. Sudoers fragment — scoped to the wrapper only, not to snap/apt directly
+    # 3. Sudoers fragment — scoped to the wrapper only, not to snap/apt directly
     #    This means: sudo snap in a normal terminal still asks for a password
     cat > "$SUDOERS_FILE" << EOF
 # cterm MCP server - restricted privileged commands
@@ -92,6 +135,13 @@ EOF
       ok "Removed $WRAPPER."
     else
       warn "Wrapper not found, skipping."
+    fi
+
+    if [ -f "$WHITELIST" ]; then
+      rm -f "$WHITELIST"
+      ok "Removed $WHITELIST."
+    else
+      warn "Whitelist not found, skipping."
     fi
 
     ok "Cleanup complete."

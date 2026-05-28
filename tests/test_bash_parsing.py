@@ -1,6 +1,11 @@
 import unittest
+import os
+import tempfile
+from pathlib import Path
+from unittest.mock import patch
 
 from cterm.tools_mcp import bash
+from cterm import utils
 
 
 class BashParsingTests(unittest.TestCase):
@@ -41,10 +46,43 @@ class BashParsingTests(unittest.TestCase):
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["results"][0]["stdout"], "a|b")
 
-    def test_sudo_prefix_is_still_stripped_for_unprivileged_commands(self):
-        result = bash("sudo test -d /")
+    def test_sudo_returns_approval_required_when_binary_is_not_whitelisted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            wrapper = Path(tmp) / "cterm-privileged"
+            wrapper.write_text("#!/bin/sh\n", encoding="utf-8")
+            whitelist = Path(tmp) / "privileged_whitelist"
 
-        self.assertTrue(result["ok"], result)
+            with patch.dict(os.environ, {"CTERM_PRIVILEGED_WHITELIST": str(whitelist)}), \
+                 patch.object(utils, "PRIVILEGED_WRAPPER", str(wrapper)):
+                parsed, err = utils._parse_command_part("sudo test -d /", [])
+
+        self.assertIsNone(parsed)
+        self.assertFalse(err["ok"], err)
+        self.assertTrue(err["approval_required"], err)
+        self.assertEqual(err["approval_kind"], "privileged_whitelist")
+        self.assertIn("Privileged command requires approval", err["error"])
+
+    def test_sudo_allow_privileged_updates_whitelist_and_routes_to_wrapper(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            wrapper = Path(tmp) / "cterm-privileged"
+            wrapper.write_text("#!/bin/sh\n", encoding="utf-8")
+            whitelist = Path(tmp) / "privileged_whitelist"
+
+            with patch.dict(os.environ, {"CTERM_PRIVILEGED_WHITELIST": str(whitelist)}), \
+                 patch.object(utils, "PRIVILEGED_WRAPPER", str(wrapper)):
+                parsed, err = utils._parse_command_part(
+                    "sudo test -d /",
+                    [],
+                    allow_privileged=True,
+                )
+
+            self.assertIsNone(err)
+            resolved_test = utils.shutil.which("test")
+            self.assertEqual(
+                parsed.argv_list[0].argv,
+                ["sudo", "--non-interactive", str(wrapper), resolved_test, "-d", "/"],
+            )
+            self.assertIn(resolved_test, whitelist.read_text(encoding="utf-8").splitlines())
 
     def test_streaming_stdout_still_works(self):
         frames = list(bash("printf hello", stream=True))

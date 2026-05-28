@@ -123,7 +123,7 @@ def read_file(path: str) -> dict:
         return {"ok": False, "error": str(e)}
 
 @tool
-def bash(command: str, stream: bool = False) -> dict:
+def bash(command: str, stream: bool = False, allow_privileged: bool = False) -> dict:
     """
     Executes command lines using cterm's safe argv parser, not a shell.
 
@@ -133,10 +133,13 @@ def bash(command: str, stream: bool = False) -> dict:
     `2> /dev/null`. Other redirection and shell-only syntax are rejected by
     the parser or by the argument safety checks.
 
-    Commands run as the current user. A leading `sudo` is stripped before
-    parsing; privileged commands in the whitelist (apt, apt-get, snap, tee, )
-    are routed through cterm's privileged wrapper and run as root without an
-    interactive password prompt.
+    Commands run as the current user unless the command starts with `sudo`.
+    A sudo command is resolved to an absolute binary path and checked against
+    cterm's user config whitelist. If it is missing, the tool returns an
+    approval_required result. The client asks the user and retries with
+    allow_privileged=True; the MCP service then updates the whitelist and
+    routes the command through cterm's privileged wrapper. The wrapper checks
+    the same whitelist before running the binary as root.
 
     Results include stdout, stderr, and returncode for each chained command.
     A non-zero command that produced stdout is treated as partial success
@@ -156,7 +159,11 @@ def bash(command: str, stream: bool = False) -> dict:
     # ------------------------------------------------------------------ #
     if not stream:
         for cmd_str in parts:
-            parsed, err = _parse_command_part(cmd_str, results)
+            parsed, err = _parse_command_part(
+                cmd_str,
+                results,
+                allow_privileged=allow_privileged,
+            )
             if err:
                 return err
             argv_list = parsed.argv_list
@@ -242,7 +249,11 @@ def bash(command: str, stream: bool = False) -> dict:
             return pending
 
         for cmd_str in parts:
-            parsed, err = _parse_command_part(cmd_str, results)
+            parsed, err = _parse_command_part(
+                cmd_str,
+                results,
+                allow_privileged=allow_privileged,
+            )
             if err:
                 yield {"type": "result", **err}
                 return
