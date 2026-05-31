@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """MCP tools definitions for cterm"""
+import json
 import os
 import subprocess
 import requests
@@ -28,7 +29,7 @@ def tool(func):
 @tool
 def finder(
     path: str,
-    pattern: str = "*",
+    pattern: str | None = None,
     include: list[str] | None = None,
     exclude: list[str] | None = None,
     max_depth: int | None = None,
@@ -41,7 +42,7 @@ def finder(
 
     Args:
         path:        Root directory (~-expanded).
-        pattern:     Filename glob, e.g. "*.py". Default "*".
+        pattern:     Required filename glob, e.g. "*.py".
         include:     Extra globs; entry matches if it fits pattern OR any of these.
         exclude:     Path globs to skip. Layered on top of built-in defaults
                      (.git, node_modules, __pycache__, .venv, dist, build, etc.).
@@ -53,6 +54,36 @@ def finder(
         {"ok": True, "path": str, "matches": [str, ...], "total": int, "truncated": bool}
     """
     import fnmatch
+
+    def coerce_glob_list(value):
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return [str(item) for item in value if str(item)]
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return []
+            if text.startswith("["):
+                try:
+                    parsed = json.loads(text)
+                except json.JSONDecodeError:
+                    return None
+                if not isinstance(parsed, list):
+                    return None
+                return [str(item) for item in parsed if str(item)]
+            return [item.strip() for item in text.split(",") if item.strip()]
+        return None
+
+    if pattern is None or not str(pattern).strip():
+        return {"ok": False, "error": "finder requires an explicit pattern argument"}
+    pattern = str(pattern)
+    include = coerce_glob_list(include)
+    if include is None:
+        return {"ok": False, "error": "include must be a list or a JSON list string"}
+    exclude = coerce_glob_list(exclude)
+    if exclude is None:
+        return {"ok": False, "error": "exclude must be a list or a JSON list string"}
 
     expanded_root = os.path.expanduser(path)
     if not os.path.isdir(expanded_root):
@@ -68,7 +99,7 @@ def finder(
         max_depth = int(max_depth)
     if max_results is not None:
         max_results = int(max_results)
-    effective_exclude = DEFAULT_EXCLUDE + (exclude or [])
+    effective_exclude = DEFAULT_EXCLUDE + exclude
 
     def match_any(s, pats):
         return any(fnmatch.fnmatch(s, p) or fnmatch.fnmatch(os.path.basename(s), p) for p in pats)

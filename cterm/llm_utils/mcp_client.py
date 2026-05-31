@@ -85,6 +85,27 @@ class FastMCPClient:
         'list_files': {'type':'object','properties':{'path':{'type':'string','description':'Directory path to list'}},'required':['path']},
         'read_file':  {'type':'object','properties':{'path':{'type':'string','description':'File path to read'}},'required':['path']},
         'bash':  {'type':'object','properties':{'command':{'type':'string','description':'Shell command to execute'}},'required':['command']},
+        'finder': {
+            'type': 'object',
+            'properties': {
+                'path': {'type': 'string', 'description': 'Root directory to search'},
+                'pattern': {'type': 'string', 'description': 'Required filename glob, for example "*.pdf" or "*CV*"'},
+                'include': {
+                    'type': 'array',
+                    'items': {'type': 'string'},
+                    'description': 'Optional extra filename globs',
+                },
+                'exclude': {
+                    'type': 'array',
+                    'items': {'type': 'string'},
+                    'description': 'Optional path globs to skip',
+                },
+                'max_depth': {'type': 'integer', 'description': 'Maximum recursion depth'},
+                'type_filter': {'type': 'string', 'enum': ['file', 'dir']},
+                'max_results': {'type': 'integer', 'description': 'Maximum number of results'},
+            },
+            'required': ['path', 'pattern'],
+        },
         'calculate':  {'type':'object','properties':{'a':{'type':'number','description':'First number'},'b':{'type':'number','description':'Second number'},'op':{'type':'string','description':'Operation: add, sub, mul, div','enum':['add','sub','mul','div']}},'required':['a','b','op']},
         'fetch_json': {'type':'object','properties':{'url':{'type':'string','description':'URL to fetch JSON from'}},'required':['url']},
     }

@@ -74,13 +74,13 @@ class OrchestrationTests(unittest.TestCase):
         self.assertIn("Assigned action (2/?):\nCopy the matching files.", second_agent_messages[1]["content"])
         self.assertIn("Previous agent output:\nFound two CV files.", second_agent_messages[1]["content"])
 
-    def test_action_agent_is_limited_to_four_iterations_before_verification(self):
+    def test_action_agent_is_limited_to_three_iterations_before_verification(self):
         chat_calls = []
 
         def fake_chat(model, messages, tools=None, binary="ollama", response_format=None):
             chat_calls.append([message.copy() for message in messages])
             if tools is None:
-                return {"message": {"content": "Final answer after four tool iterations."}}
+                return {"message": {"content": "Final answer after three tool iterations."}}
             return {
                 "message": {
                     "tool_calls": [{
@@ -108,10 +108,10 @@ class OrchestrationTests(unittest.TestCase):
             )
 
         self.assertTrue(result["complete"])
-        self.assertEqual(result["output"], "Final answer after four tool iterations.")
-        self.assertEqual(execute_tool.call_count, 4)
+        self.assertEqual(result["output"], "Final answer after three tool iterations.")
+        self.assertEqual(execute_tool.call_count, 3)
         self.assertEqual(verify.call_count, 1)
-        self.assertEqual(len(chat_calls), 5)
+        self.assertEqual(len(chat_calls), 4)
 
     def test_verifier_is_scoped_to_assigned_action(self):
         agent = ToolAgent("main")
@@ -173,6 +173,118 @@ class OrchestrationTests(unittest.TestCase):
         self.assertNotIn("event=planner_iteration", debug_output)
         self.assertNotIn("event=agent_tool_call", debug_output)
         self.assertNotIn("event=agent_start", debug_output)
+
+    def test_completed_finder_matches_are_included_in_planner_handoff(self):
+        captured_messages = []
+        planner_calls = 0
+        worker_calls = 0
+
+        def fake_chat(model, messages, tools=None, binary="ollama", response_format=None):
+            nonlocal planner_calls, worker_calls
+            captured_messages.append([message.copy() for message in messages])
+            is_planner = tools and tools[0]["function"]["name"] == "new_agent"
+            if is_planner:
+                planner_calls += 1
+                if planner_calls == 1:
+                    return {
+                        "message": {
+                            "tool_calls": [{
+                                "function": {
+                                    "name": "new_agent",
+                                    "arguments": {"action": "Find CV files."},
+                                }
+                            }]
+                        }
+                    }
+                return {"message": {"content": "Done."}}
+
+            worker_calls += 1
+            if worker_calls == 1:
+                return {
+                    "message": {
+                        "tool_calls": [{
+                            "function": {
+                                "name": "finder",
+                                "arguments": {
+                                    "path": "~",
+                                    "pattern": "*CV*",
+                                    "type_filter": "file",
+                                },
+                            }
+                        }]
+                    }
+                }
+            return {"message": {"content": "Found CV files."}}
+
+        agent = ToolAgent("main")
+        agent.tools = []
+        finder_result = {
+            "ok": True,
+            "path": "~",
+            "matches": ["Documents/Ahmed_CV.pdf", "Desktop/Resume.docx"],
+            "total": 2,
+            "truncated": False,
+        }
+
+        with patch.object(agent, "_select_skills_prompt", return_value=""), \
+             patch.object(agent, "_execute_tool", return_value=finder_result), \
+             patch.object(agent, "_verify_history", return_value=(True, "")), \
+             patch("cterm.llm.chat_with_model_api", side_effect=fake_chat):
+            result = agent._run_with_native_tools("Find CVs.")
+
+        self.assertEqual(result, "Done.")
+        second_planner_messages = captured_messages[-1]
+        handoff = second_planner_messages[-1]["content"]
+        self.assertIn("Finder matches for planner and next agent", handoff)
+        self.assertIn("~/Documents/Ahmed_CV.pdf", handoff)
+        self.assertIn("~/Desktop/Resume.docx", handoff)
+        self.assertIn('"complete": true', handoff)
+
+    def test_incomplete_finder_matches_are_not_included_in_planner_handoff(self):
+        agent = ToolAgent("main")
+        handoff = agent._build_worker_handoff({
+            "output": "Search did not finish.",
+            "complete": False,
+            "tool_history": [{
+                "tool": "finder",
+                "arguments": {"path": "~", "pattern": "*CV*"},
+                "status": "success",
+                "result": {
+                    "ok": True,
+                    "path": "~",
+                    "matches": ["Documents/Ahmed_CV.pdf"],
+                    "total": 1,
+                    "truncated": False,
+                },
+            }],
+        })
+
+        self.assertEqual(handoff, "Search did not finish.")
+        self.assertNotIn("Ahmed_CV.pdf", handoff)
+
+    def test_non_finder_tool_results_are_not_included_in_planner_handoff(self):
+        agent = ToolAgent("main")
+        handoff = agent._build_worker_handoff({
+            "output": "Printed files.",
+            "complete": True,
+            "tool_history": [{
+                "tool": "bash",
+                "arguments": {"command": "printf secret"},
+                "status": "success",
+                "result": {
+                    "ok": True,
+                    "results": [{
+                        "command": "printf secret",
+                        "stdout": "secret\n",
+                        "stderr": "",
+                        "returncode": 0,
+                    }],
+                },
+            }],
+        })
+
+        self.assertEqual(handoff, "Printed files.")
+        self.assertNotIn("secret", handoff)
 
 
 if __name__ == "__main__":

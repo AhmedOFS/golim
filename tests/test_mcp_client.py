@@ -52,6 +52,13 @@ class MCPClientTests(unittest.TestCase):
             {"command": "sudo systemctl status", "allow_privileged": True},
         )
 
+    def test_finder_schema_requires_pattern(self):
+        client = FastMCPClient("/tmp")
+        tool = client._make_tool("finder", "Tool: finder", {})
+
+        self.assertEqual(tool.parameters["required"], ["path", "pattern"])
+        self.assertIn("pattern", tool.parameters["properties"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -106,6 +106,20 @@ class ToolAgent:
             if isinstance(result, dict):
                 if result.get("error"):
                     lines.append(f"   error: {result.get('error')}")
+                if "matches" in result:
+                    root = result.get("path", "")
+                    matches = result.get("matches") or []
+                    lines.append(f"   path: {root}")
+                    lines.append(f"   total matches: {result.get('total', len(matches))}")
+                    lines.append(f"   truncated: {bool(result.get('truncated'))}")
+                    for match in matches[:50]:
+                        if root:
+                            full_path = os.path.join(root, match)
+                        else:
+                            full_path = match
+                        lines.append(f"   match: {full_path}")
+                    if len(matches) > 50:
+                        lines.append(f"   ... {len(matches) - 50} more matches omitted ...")
                 for result_idx, entry in enumerate(result.get("results", [])[:3], start=1):
                     if not isinstance(entry, dict):
                         continue
@@ -119,14 +133,47 @@ class ToolAgent:
                         lines.append(f"   result {result_idx} stderr:\n{_indent(stderr, '      ')}")
         return "\n".join(lines)
 
-    def _verify_history(self, user_message, tool_history, final_answer=""):
+    def _build_worker_handoff(self, result):
+        output = result.get("output") or ""
+        if not result.get("complete"):
+            return output
+        finder_lines = self._build_finder_handoff_lines(result.get("tool_history", []))
+        if not finder_lines:
+            return output
+        return (
+            f"{output}\n\n"
+            f"Finder matches for planner and next agent:\n" +
+            "\n".join(finder_lines)
+        ).strip()
+
+    def _build_finder_handoff_lines(self, tool_history):
+        lines = []
+        for item in tool_history:
+            if item.get("tool") != "finder":
+                continue
+            result = item.get("result")
+            if not isinstance(result, dict) or "matches" not in result:
+                continue
+            root = result.get("path", "")
+            matches = result.get("matches") or []
+            lines.append(f"path: {root}")
+            lines.append(f"total matches: {result.get('total', len(matches))}")
+            lines.append(f"truncated: {bool(result.get('truncated'))}")
+            for match in matches[:50]:
+                lines.append(f"match: {os.path.join(root, match) if root else match}")
+            if len(matches) > 50:
+                lines.append(f"... {len(matches) - 50} more matches omitted ...")
+        return lines
+
+    def _verify_history(self, user_message, tool_history):
         execution_summary = self._build_execution_summary(tool_history)
         verification_messages = [
             {
                 "role": "system",
                 "content": (
                     "You are a strict task completion verifier.\n\n"
-                    "Determine whether the assigned task has been fully completed.\n\n"
+                    "Determine whether the assigned task has been fully completed "
+                    "based solely on the tool execution history.\n\n"
                     "Respond ONLY with valid JSON:\n"
                     '{ "complete": true|false, "summary": "..." }'
                 ),
@@ -137,9 +184,7 @@ class ToolAgent:
                     f"Assigned task:\n\n"
                     f"{user_message}\n\n"
                     f"Tool execution history:\n\n"
-                    f"{execution_summary}\n\n"
-                    f"Assistant final answer:\n\n"
-                    f"{final_answer or '<none>'}"
+                    f"{execution_summary}"
                 ),
             },
         ]
@@ -264,7 +309,7 @@ class ToolAgent:
         self._debug_tool_result(tool_name, args, tool_result)
         return tool_result
 
-    def _select_skills_prompt(self, user_message):
+    def _select_skills(self, user_message):
         loader = SkillsLoader(debug=self.debug)
         spinner = Spinner("Selecting Skills")
         spinner.start()
@@ -286,9 +331,17 @@ class ToolAgent:
             names = [skill.name for skill in selected]
             print(f"\n[debug] selected_skills={json.dumps(names)}", file=sys.stderr)
 
-        return loader.render_for_system_prompt(selected)
+        return selected, loader.render_for_system_prompt(selected)
 
-    def _ollama_tools(self):
+    def _select_skills_prompt(self, user_message):
+        _, prompt = self._select_skills(user_message)
+        return prompt
+
+    def _ollama_tools(self, skills_prompt=""):
+        allowed = None
+        if "## Finder_Search" in skills_prompt:
+            allowed = {"finder", "bash", "read_file", "write_file"}
+
         return [
             {
                 "type": "function",
@@ -299,6 +352,7 @@ class ToolAgent:
                 }
             }
             for t in self.tools
+            if allowed is None or t.name in allowed
         ]
 
     def _agent_system_prompt(self):
@@ -323,7 +377,7 @@ class ToolAgent:
             "function": {
                 "name": "new_agent",
                 "description": (
-                    "Run one sequential worker agent on a concrete action. "
+                    "Run one sequential worker agent on an atomic concrete action. "
                     "The worker receives the previous worker's final output, "
                     "has at most three iterations, and is verified before the "
                     "planner can continue."
@@ -342,15 +396,20 @@ class ToolAgent:
         }]
 
     def _run_action_agent(self, original_task, action, previous_output, step_index, total_steps):
-        ollama_tools = self._ollama_tools()
         system_prompt = self._agent_system_prompt()
         skills_prompt = self._select_skills_prompt(action)
+        ollama_tools = self._ollama_tools(skills_prompt)
         if skills_prompt:
             system_prompt = f"{system_prompt}\n\n{skills_prompt}"
         self._debug_orchestration(
             "agent_skills_ready",
             step=step_index,
             injected=bool(skills_prompt),
+        )
+        self._debug_orchestration(
+            "agent_tools_ready",
+            step=step_index,
+            tools=[tool["function"]["name"] for tool in ollama_tools],
         )
         no_tools_system_prompt = (
             f"{system_prompt} Do not call any tools in this final response; "
@@ -423,18 +482,14 @@ class ToolAgent:
                 )
 
                 messages.append({
-                    "role": "assistant",
-                    "content": "",
-                    "tool_calls": [{
-                        "function": {
-                            "name": tool_name,
-                            "arguments": args,
-                        }
-                    }],
-                })
-                messages.append({
-                    "role": "tool",
-                    "content": self._compact_json(compact_result),
+                    "role": "user",
+                    "content": (
+                        f"Tool execution result for `{tool_name}`:\n"
+                        f"Arguments:\n{self._compact_json(args)}\n\n"
+                        f"Result:\n{self._compact_json(compact_result)}\n\n"
+                        "Continue the assigned action. If it is complete, "
+                        "respond with the final concise summary."
+                    ),
                 })
 
                 continue
@@ -499,7 +554,7 @@ class ToolAgent:
             "later or broader user-request steps to be complete."
         )
         complete, verifier_summary = self._verify_history(
-            verification_task, tool_history, final_answer=final_answer
+            verification_task, tool_history
         )
         self._debug_orchestration(
             "agent_verified",
@@ -601,11 +656,20 @@ class ToolAgent:
                     action=action,
                     previous_output=previous_output or None,
                 )
-                result = self._run_action_agent(
-                    user_message, action, previous_output, step_index, "?"
-                )
+                try:
+                    result = self._run_action_agent(
+                        user_message, action, previous_output, step_index, "?"
+                    )
+                except Exception as exc:
+                    print(
+                        f"[debug] planner_agent_failed action={action!r} "
+                        f"step={step_index} previous_output_len={len(previous_output) if previous_output else 0} "
+                        f"error={exc}",
+                        file=sys.stderr,
+                    )
+                    raise
                 step_results.append(result)
-                previous_output = result["output"]
+                previous_output = self._build_worker_handoff(result)
                 self._debug_orchestration(
                     "planner_agent_result",
                     iteration=planner_iteration,
@@ -626,9 +690,10 @@ class ToolAgent:
                     # Instead of returning, just record it and let the planner continue
                     planner_messages.append({
                         "role": "tool",
+                        "tool_name": "new_agent",
                         "content": self._compact_json({
                             "action": result["action"],
-                            "output": result["output"],
+                            "output": previous_output,
                             "complete": result["complete"],
                             "verifier_summary": result["verifier_summary"],
                         }),
@@ -639,6 +704,7 @@ class ToolAgent:
                         "role": "assistant",
                         "content": "",
                         "tool_calls": [{
+                            "type": "function",
                             "function": {
                                 "name": "new_agent",
                                 "arguments": {"action": action},
@@ -647,9 +713,10 @@ class ToolAgent:
                     })
                     planner_messages.append({
                         "role": "tool",
+                        "tool_name": "new_agent",
                         "content": self._compact_json({
                             "action": result["action"],
-                            "output": result["output"],
+                            "output": previous_output,
                             "complete": result["complete"],
                             "verifier_summary": result["verifier_summary"],
                         }),
