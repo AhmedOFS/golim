@@ -207,70 +207,162 @@ def select_optional_model(models: list[str], saved: str | None, label: str) -> s
 
 ## Main Commands
 
-def init_command(binary: str = "ollama") -> int:
-    """Initialize cterm by detecting Ollama and selecting a model."""
-    # Check installation
+def choose_provider(config: Config) -> str:
+    """Let the user choose between Ollama and OpenRouter."""
+    current = config.api_provider
+    print("\nAPI Provider selection:")
+    print(f"  1. Ollama (local, default)")
+    print(f"  2. OpenRouter (cloud, requires API key)")
+    default = "1" if current == "ollama" else "2"
+    try:
+        choice = input(f"Select provider [1-2, default {default}]: ").strip() or default
+    except (KeyboardInterrupt, EOFError):
+        print()
+        return current
+    return "openrouter" if choice == "2" else "ollama"
+
+
+def init_openrouter(config: Config) -> int:
+    """Configure cterm to use OpenRouter."""
+    api_key = config.openrouter_api_key
+    if api_key:
+        masked = api_key[:8] + "..." if len(api_key) > 8 else "***"
+        print(f"✓ OpenRouter API key: {masked}")
+        try:
+            change = input("Change API key? [y/N]: ").strip().lower()
+        except (KeyboardInterrupt, EOFError):
+            change = ""
+        if change in ("y", "yes"):
+            api_key = None
+
+    if not api_key:
+        try:
+            api_key = input("Enter your OpenRouter API key: ").strip()
+        except (KeyboardInterrupt, EOFError):
+            print()
+            return 1
+        if not api_key:
+            print("Error: API key is required")
+            return 1
+        config.set(Config.OPENROUTER_API_KEY, api_key)
+        print("✓ API key saved")
+
+    saved_model = config.openrouter_model
+    print("\nOpenRouter model (e.g. anthropic/claude-3.5-sonnet,")
+    print("  openai/gpt-4o, google/gemini-2.0-flash-001)")
+    print("  See https://openrouter.ai/models for the full list.")
+    prompt = f"Enter model name [{saved_model or 'anthropic/claude-3.5-sonnet'}]: "
+    try:
+        model = input(prompt).strip()
+    except (KeyboardInterrupt, EOFError):
+        print()
+        return 1
+    if not model:
+        model = saved_model or "anthropic/claude-3.5-sonnet"
+    config.set(Config.OPENROUTER_MODEL, model)
+    config.set(Config.SELECTED_MODEL, model)
+    print(f"✓ Model: {model}")
+
+    small = config.openrouter_small_model
+    print(f"\nOptional small model for lightweight tasks (skills selection,")
+    print(f"  verification). Enter to skip or 'none' to clear.")
+    prompt = f"Small model [{small or 'none'}]: "
+    try:
+        small_choice = input(prompt).strip()
+    except (KeyboardInterrupt, EOFError):
+        print()
+        small_choice = ""
+    if small_choice and small_choice.lower() not in ("none", "clear", "skip"):
+        config.set(Config.OPENROUTER_SMALL_MODEL, small_choice)
+        config.set(Config.SMALL_MODEL, small_choice)
+        print(f"✓ Small model: {small_choice}")
+    elif small_choice and small_choice.lower() in ("none", "clear"):
+        config.unset(Config.OPENROUTER_SMALL_MODEL)
+        config.unset(Config.SMALL_MODEL)
+        print("✓ Small model cleared")
+    elif small:
+        print(f"✓ Small model: {small}")
+
+    config.set(Config.API_PROVIDER, "openrouter")
+    print(f"\n✓ OpenRouter configured with provider: openrouter")
+    return 0
+
+
+def init_ollama(config: Config, binary: str) -> int:
+    """Configure cterm to use Ollama (local)."""
     installed, version = detect_ollama(binary)
-    
     if not installed:
         print(f"Error: {binary} is not installed")
         print("Please install Ollama from https://ollama.ai")
         return 1
-    
+
     print(f"✓ {binary} is installed: {version or 'version unknown'}")
-    
-    # Load config
-    config = Config()
-    
-    # Update version if needed
     if version:
         config.set("ollama_version", version)
-    
-    # Model selection
+
     models = get_models(binary)
     if not models:
         print("\nNo models found. Please install a model first:")
         print(f"  {binary} pull llama2")
         return 1
-    
-    print()
+
     selected = select_model(models, config.selected_model)
-    if selected:
-        config.set(Config.SELECTED_MODEL, selected)
-        print(f"\n✓ Selected model: {selected}")
-        small_model = select_optional_model(models, config.small_model, "small model")
-        if small_model:
-            config.set(Config.SMALL_MODEL, small_model)
-            print(f"✓ Selected small model: {small_model}")
-        else:
-            config.unset(Config.SMALL_MODEL)
-            print("✓ No small model configured")
-
-        # Unrestricted bash
-        current_unrestricted = config.unrestricted_bash
-        prompt = (
-            f"Enable unrestricted bash mode? [y/N]"
-            f"{' (currently enabled)' if current_unrestricted else ''}: "
-        )
-        try:
-            choice = input(prompt).strip().lower()
-        except (KeyboardInterrupt, EOFError):
-            choice = ""
-        if choice in ("y", "yes"):
-            if not current_unrestricted:
-                config.set(Config.BASH_UNRESTRICTED, True)
-                print("✓ Unrestricted bash mode enabled")
-        else:
-            if current_unrestricted:
-                config.set(Config.BASH_UNRESTRICTED, False)
-                print("✓ Unrestricted bash mode disabled")
-
-        print("\nYou can now use cterm:")
-        print('  cterm "Hello, how are you?"')
-        return 0
-    else:
+    if not selected:
         print("\nNo model selected")
         return 1
+
+    config.set(Config.SELECTED_MODEL, selected)
+    print(f"✓ Selected model: {selected}")
+
+    small_model = select_optional_model(models, config.small_model, "small model")
+    if small_model:
+        config.set(Config.SMALL_MODEL, small_model)
+        print(f"✓ Selected small model: {small_model}")
+    else:
+        config.unset(Config.SMALL_MODEL)
+        print("✓ No small model configured")
+
+    return 0
+
+
+def init_command(binary: str = "ollama") -> int:
+    """Initialize cterm by detecting Ollama and selecting a model."""
+    config = Config()
+    config.set(Config.API_PROVIDER, "ollama")
+
+    provider = choose_provider(config)
+
+    if provider == "openrouter":
+        result = init_openrouter(config)
+        if result != 0:
+            return result
+    else:
+        result = init_ollama(config, binary)
+        if result != 0:
+            return result
+
+    # Unrestricted bash (common to both providers)
+    current_unrestricted = config.unrestricted_bash
+    prompt = (
+        f"Enable unrestricted bash mode? [y/N]"
+        f"{' (currently enabled)' if current_unrestricted else ''}: "
+    )
+    try:
+        choice = input(prompt).strip().lower()
+    except (KeyboardInterrupt, EOFError):
+        choice = ""
+    if choice in ("y", "yes"):
+        if not current_unrestricted:
+            config.set(Config.BASH_UNRESTRICTED, True)
+            print("✓ Unrestricted bash mode enabled")
+    else:
+        if current_unrestricted:
+            config.set(Config.BASH_UNRESTRICTED, False)
+            print("✓ Unrestricted bash mode disabled")
+
+    print("\nYou can now use cterm:")
+    print('  cterm "Hello, how are you?"')
+    return 0
 
 
 def chat_command(message: str, binary: str = "ollama", debug: bool = False) -> int:
@@ -278,26 +370,28 @@ def chat_command(message: str, binary: str = "ollama", debug: bool = False) -> i
     config = Config()
     model = config.selected_model
     small_model = config.small_model
-    
+    provider = config.api_provider
+
     if not model:
         print("Error: No model configured")
         print("Run 'cterm -i' to initialize")
         return 1
-    
-    # Check if ollama is still installed
-    if not shutil.which(binary):
-        print(f"Error: {binary} is not installed")
-        return 1
-    
-    # --- SERVER START/CHECK LOGIC ---
-    # Ensure the UDS server daemon is running before attempting a tool-enabled chat
+
+    if provider == "ollama":
+        if not shutil.which(binary):
+            print(f"Error: {binary} is not installed")
+            return 1
+    elif provider == "openrouter":
+        if not config.openrouter_api_key:
+            print("Error: OpenRouter API key not configured")
+            print("Run 'cterm -i' to set it up")
+            return 1
+
+    # Ensure the UDS server daemon is running for tool execution
     if not ensure_server_running():
-        # The helper function already printed an error message
         return 1
-    # ------------------------------
 
     try:
-        # Assuming chat_with_tools connects to the UDS defined by get_socket_path()
         response = chat_with_tools(model, message, binary, small_model=small_model, debug=debug)
         print(response)
         return 0
@@ -313,7 +407,7 @@ def main(argv: list[str] | None = None) -> int:
     """Main entry point for cterm CLI."""
     parser = argparse.ArgumentParser(
         prog="cterm",
-        description="Terminal interface for Ollama LLMs"
+        description="Terminal interface for LLMs (Ollama and OpenRouter)"
     )
     parser.add_argument(
         "--version",

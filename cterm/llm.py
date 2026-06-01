@@ -20,7 +20,7 @@ from cterm.skills_loader import SkillsLoader
 
 
 class ToolAgent:
-    MAX_AGENT_ITERATIONS = 3
+    MAX_AGENT_ITERATIONS = 10
 
     def __init__(self, model, binary="ollama", small_model=None, debug=False):
         self.model = model
@@ -231,7 +231,7 @@ class ToolAgent:
                 binary=self.binary,
                 response_format="json",
             )
-            content = response.get("message", {}).get("content", "").strip()
+            content = (response.get("message", {}).get("content") or "").strip()
             verification = self._parse_json_object(content)
             complete = bool(verification.get("complete"))
             summary = verification.get("summary", "")
@@ -565,7 +565,7 @@ class ToolAgent:
                     tools=None,
                     binary=self.binary,
                 )
-                final_answer = response.get("message", {}).get("content", "")
+                final_answer = response.get("message", {}).get("content") or ""
             finally:
                 spinner.stop()
             self._debug_orchestration(
@@ -616,28 +616,15 @@ class ToolAgent:
             step_results = []
 
             planner_system = (
-                        "You are a planner. First decompose the user's request "
-                        "into concrete sequential actions. You have exactly one "
-                        "tool: new_agent. Call new_agent once for each action, "
-                        "in order. Wait for each result before calling the next "
-                        "agent. Do not use task-specific skills yourself; skills "
-                        "are selected only inside worker agents. When all actions "
-                        "are complete, respond to the user with a concise final "
-                        "answer based on the worker outputs. Keep naturally atomic "
-                        "tasks together: for example, restarting a service is one "
-                        "action that includes stopping, starting, and checking status; "
-                        "installing an app is one action that includes checking, "
-                        "installing if needed, and verifying. Actions should not embed "
-                        "unsupported shell syntax such as cd, ||, ;, command substitution, "
-                        "or extra tool arguments; worker agents can use separate bash "
-                        "calls when needed."
-                    )
-            if skills_prompt:
-                planner_system += (
-                    "Task-specific skills have been selected for this request:\n\n"
-                    f"{skills_prompt}\n\n"
-                )
-         
+                "You are a planner. First decompose the user's request "
+                "into concrete sequential actions. Describe actions and tasks not commands"
+                "You have exactly one "
+                "tool: new_agent. Call new_agent once for each action, "
+                "in order. Wait for each result before calling the next "
+                "agent. "
+ 
+            )
+
             planner_messages = [
                 {"role": "system", "content": planner_system},
                 {"role": "user", "content": user_message},
@@ -658,7 +645,7 @@ class ToolAgent:
 
                 message = response.get("message", {})
                 if not message.get("tool_calls"):
-                    content = message.get("content", "")
+                    content = message.get("content") or ""
                     self._debug_orchestration(
                         "planner_final_answer",
                         iteration=planner_iteration,

@@ -1,8 +1,8 @@
-
 def chat_with_model_api(model, messages, tools=None, binary="ollama", response_format=None):
     import json
     import sys
     import requests
+    from cterm.config import Config
 
     def compact_messages_for_debug(items):
         compacted = []
@@ -17,39 +17,155 @@ def chat_with_model_api(model, messages, tools=None, binary="ollama", response_f
             compacted.append(copied)
         return compacted
 
+    config = Config()
+    provider = config.api_provider
+
+    if provider == "openrouter":
+        return _chat_openrouter(model, messages, tools, response_format, config)
+    return _chat_ollama(model, messages, tools, response_format)
+
+
+def _chat_ollama(model, messages, tools=None, response_format=None):
+    import json
+    import sys
+    import requests
+
     payload = {"model": model, "messages": messages, "stream": False}
     if tools:
         payload["tools"] = tools
     if response_format:
         payload["format"] = response_format
+
     n_msg = len(messages)
     n_tools = len(tools) if tools else 0
-    last_role = messages[-1]["role"] if messages else "none"
 
     try:
-        response = requests.post("http://localhost:11434/api/chat", json=payload, timeout=60)
+        response = requests.post(
+            "http://localhost:11434/api/chat", json=payload, timeout=60
+        )
         response.raise_for_status()
     except requests.exceptions.HTTPError as exc:
         body = response.text
-        tools_payload = (
-            json.dumps(tools, indent=2, sort_keys=True)
-            if tools
-            else "<none>"
-        )
-        messages_payload = json.dumps(
-            compact_messages_for_debug(messages),
-            indent=2,
-            sort_keys=True,
-        )
         print(
             f"[debug] chat_api HTTP {response.status_code} from Ollama:\n"
             f"  request: model={model!r} messages={n_msg} tools={n_tools}\n"
-            f"  response body: {body}\n"
-            f"  messages payload:\n{messages_payload}\n"
-            f"  tools payload:\n{tools_payload}",
+            f"  response body: {body}",
             file=sys.stderr,
         )
         raise RuntimeError(
             f"Ollama API error {response.status_code} for model {model!r}: {body}"
         ) from exc
     return response.json()
+
+
+_CHAT_COMPLETIONS_URL = "https://openrouter.ai/api/v1/chat/completions"
+_OPENROUTER_HEADERS = {
+    "Content-Type": "application/json",
+}
+
+
+def _chat_openrouter(model, messages, tools=None, response_format=None, config=None):
+    import json
+    import sys
+    import requests
+
+    api_key = config.openrouter_api_key if config else None
+    if not api_key:
+        raise RuntimeError(
+            "OpenRouter API key is not configured. Run 'cterm -i' to set it up."
+        )
+
+    headers = dict(_OPENROUTER_HEADERS)
+    headers["Authorization"] = f"Bearer {api_key}"
+
+    normalized_messages = _normalize_messages_for_openai(messages)
+
+    payload = {"model": model, "messages": normalized_messages, "stream": False}
+    if tools:
+        payload["tools"] = tools
+    if response_format:
+        payload["response_format"] = {"type": "json_object"}
+
+    n_msg = len(normalized_messages)
+    n_tools = len(tools) if tools else 0
+
+    try:
+        response = requests.post(
+            _CHAT_COMPLETIONS_URL, headers=headers, json=payload, timeout=120
+        )
+        response.raise_for_status()
+    except requests.exceptions.HTTPError as exc:
+        body = response.text
+        print(
+            f"[debug] chat_api HTTP {response.status_code} from OpenRouter:\n"
+            f"  request: model={model!r} messages={n_msg} tools={n_tools}\n"
+            f"  response body: {body}",
+            file=sys.stderr,
+        )
+        raise RuntimeError(
+            f"OpenRouter API error {response.status_code} for model {model!r}: {body}"
+        ) from exc
+
+    raw = response.json()
+    return _normalize_openai_response(raw)
+
+
+def _normalize_messages_for_openai(messages: list) -> list:
+    import json
+    import uuid
+
+    normalized = []
+    for msg in messages:
+        m = dict(msg)
+
+        if m.get("role") == "tool":
+            m["role"] = "user"
+            m.pop("tool_name", None)
+            if "content" in m:
+                m["content"] = f"[tool result]\n{m['content']}"
+
+        tool_calls = m.get("tool_calls")
+        if tool_calls:
+            for tc in tool_calls:
+                if "id" not in tc:
+                    tc["id"] = f"call_{uuid.uuid4().hex[:12]}"
+                func = tc.get("function", {})
+                if isinstance(func.get("arguments"), dict):
+                    func["arguments"] = json.dumps(func["arguments"], ensure_ascii=False)
+
+        normalized.append(m)
+    return normalized
+
+
+def _normalize_openai_response(raw: dict) -> dict:
+    openai_message = raw.get("choices", [{}])[0].get("message", {})
+    normalized = {
+        "message": {
+            "role": openai_message.get("role", "assistant"),
+            "content": openai_message.get("content"),
+        }
+    }
+    tool_calls = openai_message.get("tool_calls")
+    if tool_calls:
+        normalized_calls = []
+        for tc in tool_calls:
+            func = tc.get("function", {})
+            raw_args = func.get("arguments", "{}")
+            if isinstance(raw_args, str):
+                try:
+                    import json
+                    raw_args = json.loads(raw_args)
+                except json.JSONDecodeError:
+                    raw_args = {}
+            entry = {
+                "type": "function",
+                "function": {
+                    "name": func.get("name", ""),
+                    "arguments": raw_args,
+                },
+            }
+            if "id" in tc:
+                entry["id"] = tc["id"]
+            normalized_calls.append(entry)
+        normalized["message"]["tool_calls"] = normalized_calls
+    return normalized

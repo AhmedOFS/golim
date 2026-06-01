@@ -81,7 +81,7 @@ class SkillsLoader:
             binary=binary,
             response_format="json",
         )
-        content = response.get("message", {}).get("content", "")
+        content = response.get("message", {}).get("content") or ""
         selected_names = self._parse_selected_names(content)
         if not selected_names:
             return []

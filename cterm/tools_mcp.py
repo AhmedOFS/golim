@@ -39,8 +39,8 @@ def tool(func):
 # ---------------------------------------------------------------------------
 
 def _read_cterm_config() -> dict:
-    """Read ~/.configcterm/config.json, returning {} on any error."""
-    config_path = os.path.expanduser("~/.configcterm/config.json")
+    """Read ~/.config/cterm/config.json, returning {} on any error."""
+    config_path = os.path.expanduser("~/.config/cterm/config.json")
     try:
         with open(config_path, "r", encoding="utf-8") as f:
             data = json.load(f)

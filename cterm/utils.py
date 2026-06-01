@@ -26,11 +26,11 @@ FORBIDDEN_CHARS = set("><`\\'()")
 # Binaries that are blocked in favour of a cterm tool equivalent.
 # Maps resolved binary name -> (tool_name, usage_hint)
 _BLOCKED_BINARIES = {
-    "find": (
-        "finder",
-        "Use the `finder` tool instead of the `find` command. "
-        "Example: finder(path=\".\", pattern=\"*.py\")",
-    ),
+    # "find": (
+    #     "finder",
+    #     "Use the `finder` tool instead of the `find` command. "
+    #     "Example: finder(path=\".\", pattern=\"*.py\")",
+    # ),
 }
 
 
