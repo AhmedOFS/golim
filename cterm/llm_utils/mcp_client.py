@@ -85,6 +85,16 @@ class FastMCPClient:
         'list_files': {'type':'object','properties':{'path':{'type':'string','description':'Directory path to list'}},'required':['path']},
         'read_file':  {'type':'object','properties':{'path':{'type':'string','description':'File path to read'}},'required':['path']},
         'bash':  {'type':'object','properties':{'command':{'type':'string','description':'Shell command to execute'}},'required':['command']},
+        'exec':  {
+            'type': 'object',
+            'properties': {
+                'code': {'type': 'string', 'description': 'Python source code to run'},
+                'timeout': {'type': 'integer', 'description': 'Maximum run time in seconds, capped at 120'},
+                'cwd': {'type': 'string', 'description': 'Optional working directory'},
+                'stdin': {'type': 'string', 'description': 'Optional stdin text'},
+            },
+            'required': ['code'],
+        },
         'finder': {
             'type': 'object',
             'properties': {
@@ -106,8 +116,6 @@ class FastMCPClient:
             },
             'required': ['path', 'pattern'],
         },
-        'calculate':  {'type':'object','properties':{'a':{'type':'number','description':'First number'},'b':{'type':'number','description':'Second number'},'op':{'type':'string','description':'Operation: add, sub, mul, div','enum':['add','sub','mul','div']}},'required':['a','b','op']},
-        'fetch_json': {'type':'object','properties':{'url':{'type':'string','description':'URL to fetch JSON from'}},'required':['url']},
     }
 
     def _make_tool(self, name, description='', parameters=None):

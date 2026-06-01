@@ -137,33 +137,63 @@ class ToolAgent:
         output = result.get("output") or ""
         if not result.get("complete"):
             return output
-        finder_lines = self._build_finder_handoff_lines(result.get("tool_history", []))
-        if not finder_lines:
+        saved_path = self._save_last_finder_result(result.get("tool_history", []))
+        if not saved_path:
             return output
         return (
             f"{output}\n\n"
-            f"Finder matches for planner and next agent:\n" +
-            "\n".join(finder_lines)
+            f"Finder results file for planner and next agent: {saved_path}. "
+            "The JSON field `paths` is a list of path strings."
         ).strip()
 
-    def _build_finder_handoff_lines(self, tool_history):
-        lines = []
-        for item in tool_history:
+    def _last_finder_history_item(self, tool_history):
+        for item in reversed(tool_history):
             if item.get("tool") != "finder":
                 continue
             result = item.get("result")
             if not isinstance(result, dict) or "matches" not in result:
                 continue
-            root = result.get("path", "")
-            matches = result.get("matches") or []
-            lines.append(f"path: {root}")
-            lines.append(f"total matches: {result.get('total', len(matches))}")
-            lines.append(f"truncated: {bool(result.get('truncated'))}")
-            for match in matches[:50]:
-                lines.append(f"match: {os.path.join(root, match) if root else match}")
-            if len(matches) > 50:
-                lines.append(f"... {len(matches) - 50} more matches omitted ...")
-        return lines
+            return item
+        return None
+
+    def _finder_result_paths(self, finder_result):
+        root = str(finder_result.get("path") or "")
+        matches = finder_result.get("matches") or []
+        if not isinstance(matches, list):
+            return []
+        return [
+            os.path.join(root, str(match)) if root else str(match)
+            for match in matches
+        ]
+
+    def _finder_results_dir(self):
+        return Path(os.path.expanduser("~/cterm/data"))
+
+    def _save_last_finder_result(self, tool_history):
+        item = self._last_finder_history_item(tool_history)
+        if not item:
+            return None
+
+        result = item.get("result") or {}
+        data_dir = self._finder_results_dir()
+        data_dir.mkdir(parents=True, exist_ok=True)
+
+        base_name = f"finder_results_{int(time.time() * 1000)}_{os.getpid()}"
+        path = data_dir / f"{base_name}.json"
+        counter = 2
+        while path.exists():
+            path = data_dir / f"{base_name}_{counter}.json"
+            counter += 1
+
+        payload = {
+            "tool": "finder",
+            "arguments": item.get("arguments", {}),
+            "status": item.get("status"),
+            "result": result,
+            "paths": self._finder_result_paths(result),
+        }
+        path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+        return str(path)
 
     def _verify_history(self, user_message, tool_history):
         execution_summary = self._build_execution_summary(tool_history)
@@ -339,8 +369,8 @@ class ToolAgent:
 
     def _ollama_tools(self, skills_prompt=""):
         allowed = None
-        if "## Finder_Search" in skills_prompt:
-            allowed = {"finder", "bash", "read_file", "write_file"}
+        if "## Filesystem_Operations" in skills_prompt:
+            allowed = {"finder", "bash", "exec", "read_file", "write_file"}
 
         return [
             {
@@ -394,6 +424,16 @@ class ToolAgent:
                 },
             },
         }]
+
+    def _worker_tools_notice(self):
+        names = sorted(
+            str(getattr(tool, "name", ""))
+            for tool in self.tools
+            if getattr(tool, "name", "")
+        )
+        if not names:
+            return "Worker tools available: none loaded."
+        return f"Worker tools available: {', '.join(names)}."
 
     def _run_action_agent(self, original_task, action, previous_output, step_index, total_steps):
         system_prompt = self._agent_system_prompt()
@@ -593,7 +633,8 @@ class ToolAgent:
                         "installing if needed, and verifying. Actions should not embed "
                         "unsupported shell syntax such as cd, ||, ;, command substitution, "
                         "or extra tool arguments; worker agents can use separate bash "
-                        "calls when needed."
+                        "calls when needed.\n\n"
+                        f"{self._worker_tools_notice()}"
                     ),
                 },
                 {"role": "user", "content": user_message},

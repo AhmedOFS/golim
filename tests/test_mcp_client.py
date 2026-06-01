@@ -59,6 +59,14 @@ class MCPClientTests(unittest.TestCase):
         self.assertEqual(tool.parameters["required"], ["path", "pattern"])
         self.assertIn("pattern", tool.parameters["properties"])
 
+    def test_exec_schema_requires_code(self):
+        client = FastMCPClient("/tmp")
+        tool = client._make_tool("exec", "Tool: exec", {})
+
+        self.assertEqual(tool.parameters["required"], ["code"])
+        self.assertIn("code", tool.parameters["properties"])
+        self.assertIn("timeout", tool.parameters["properties"])
+
 
 if __name__ == "__main__":
     unittest.main()

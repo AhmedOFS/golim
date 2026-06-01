@@ -3,7 +3,7 @@
 import json
 import os
 import subprocess
-import requests
+import sys
 import time
 
 
@@ -434,27 +434,70 @@ def bash(command: str, stream: bool = False, allow_privileged: bool = False) -> 
 
 
 @tool
-def calculate(a: float, b: float, op: str) -> dict:
-    """Performs basic math operations (add, sub, mul, div)"""
-    ops = {
-        "add": lambda x, y: x + y,
-        "sub": lambda x, y: x - y,
-        "mul": lambda x, y: x * y,
-        "div": lambda x, y: x / y if y != 0 else None
-    }
-    if op not in ops:
-        return {"ok": False, "error": f"Invalid op: {op}. Use: add, sub, mul, div"}
-    result = ops[op](a, b)
-    if result is None:
-        return {"ok": False, "error": "Division by zero"}
-    return {"ok": True, "result": result}
+def exec_python(
+    code: str | None = None,
+    timeout: int = 30,
+    cwd: str | None = None,
+    stdin: str | None = None,
+    **kwargs,
+) -> dict:
+    """
+    Runs Python code directly with the current Python interpreter.
 
-@tool
-def fetch_json(url: str) -> dict:
-    """Fetches and parses JSON from a URL"""
+    Args:
+        code:    Python source to run. Friendly aliases are also accepted:
+                 "script", "source", or "python".
+        timeout: Maximum run time in seconds. Capped at 120 seconds.
+        cwd:     Optional working directory.
+        stdin:   Optional text passed to the Python process on stdin.
+    """
+    if code is None:
+        for alias in ("script", "source", "python"):
+            if alias in kwargs:
+                code = kwargs[alias]
+                break
+
+    if code is None or not str(code).strip():
+        return {"ok": False, "error": "exec requires Python code in the 'code' argument"}
+
     try:
-        resp = requests.get(url, timeout=5)
-        return {"ok": True, "url": url, "data": resp.json()}
+        timeout = max(1, min(int(timeout), 120))
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "timeout must be an integer number of seconds"}
+
+    run_cwd = None
+    if cwd:
+        run_cwd = os.path.expanduser(str(cwd))
+        if not os.path.isdir(run_cwd):
+            return {"ok": False, "error": f"Working directory not found: {cwd}"}
+
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", str(code)],
+            input="" if stdin is None else str(stdin),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=timeout,
+            cwd=run_cwd,
+        )
+        response = {
+            "ok": result.returncode == 0,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "returncode": result.returncode,
+        }
+        if result.returncode != 0:
+            response["error"] = "Python code failed"
+        return response
+    except subprocess.TimeoutExpired as e:
+        return {
+            "ok": False,
+            "error": f"Python code timed out after {timeout}s",
+            "stdout": e.stdout or "",
+            "stderr": e.stderr or "",
+            "returncode": None,
+        }
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -519,7 +562,6 @@ def write_file(path: str, content: str, mode: str = "overwrite") -> dict:
 mcp.finder = finder
 mcp.read_file = read_file
 mcp.bash = bash
-mcp.calculate = calculate
-mcp.fetch_json = fetch_json
+mcp.exec=exec_python
 mcp.system_info = system_info
 mcp.write_file = write_file
