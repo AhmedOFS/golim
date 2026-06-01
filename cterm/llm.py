@@ -436,17 +436,9 @@ class ToolAgent:
             return "Worker tools available: none loaded."
         return f"Worker tools available: {', '.join(names)}."
 
-    def _run_action_agent(self, original_task, action, previous_output, step_index, total_steps):
+    def _run_action_agent(self, original_task, action, previous_output, step_index, total_steps, skills_prompt=""):
         system_prompt = self._agent_system_prompt()
-        skills_prompt = self._select_skills_prompt(action)
         ollama_tools = self._ollama_tools(skills_prompt)
-        if skills_prompt:
-            system_prompt = f"{system_prompt}\n\n{skills_prompt}"
-        self._debug_orchestration(
-            "agent_skills_ready",
-            step=step_index,
-            injected=bool(skills_prompt),
-        )
         self._debug_orchestration(
             "agent_tools_ready",
             step=step_index,
@@ -614,15 +606,18 @@ class ToolAgent:
 
     def _run_with_native_tools(self, user_message):
         try:
+            selected_skills, skills_prompt = self._select_skills(user_message)
+            self._debug_orchestration(
+                "planner_skills_selected",
+                skills=[s.name for s in selected_skills],
+            )
+
             previous_output = ""
             step_results = []
-            planner_messages = [
-                {
-                    "role": "system",
-                    "content": (
+
+            planner_system = (
                         "You are a planner. First decompose the user's request "
-                        "into concrete sequential actions. Describe actions and tasks not commands"
-                        "You have exactly one "
+                        "into concrete sequential actions. You have exactly one "
                         "tool: new_agent. Call new_agent once for each action, "
                         "in order. Wait for each result before calling the next "
                         "agent. Do not use task-specific skills yourself; skills "
@@ -635,10 +630,16 @@ class ToolAgent:
                         "installing if needed, and verifying. Actions should not embed "
                         "unsupported shell syntax such as cd, ||, ;, command substitution, "
                         "or extra tool arguments; worker agents can use separate bash "
-                        "calls when needed.\n\n"
-                        f"{self._worker_tools_notice()}"
-                    ),
-                },
+                        "calls when needed."
+                    )
+            if skills_prompt:
+                planner_system += (
+                    "Task-specific skills have been selected for this request:\n\n"
+                    f"{skills_prompt}\n\n"
+                )
+         
+            planner_messages = [
+                {"role": "system", "content": planner_system},
                 {"role": "user", "content": user_message},
             ]
 
@@ -701,7 +702,7 @@ class ToolAgent:
                 )
                 try:
                     result = self._run_action_agent(
-                        user_message, action, previous_output, step_index, "?"
+                        user_message, action, previous_output, step_index, "?", skills_prompt
                     )
                 except Exception as exc:
                     print(

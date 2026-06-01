@@ -24,14 +24,15 @@ class OrchestrationTests(unittest.TestCase):
             type("Tool", (), {"name": "exec"})(),
         ]
 
-        with patch("cterm.llm.chat_with_model_api", side_effect=fake_chat):
+        with patch.object(agent, "_select_skills", return_value=([], "")), \
+             patch("cterm.llm.chat_with_model_api", side_effect=fake_chat):
             result = agent._run_with_native_tools("Check files.")
 
         self.assertEqual(result, "Done.")
         planner_prompt = captured_messages[0][0]["content"]
         self.assertIn("Worker tools available: bash, exec, finder.", planner_prompt)
 
-    def test_planner_runs_before_sequential_skill_injected_agents(self):
+    def test_planner_injects_skills_in_planner_context_not_worker(self):
         captured_messages = []
         planner_calls = []
 
@@ -71,22 +72,21 @@ class OrchestrationTests(unittest.TestCase):
         agent = ToolAgent("main")
         agent.tools = []
 
-        with patch.object(agent, "_select_skills_prompt", return_value="SKILL PROMPT") as select_skills, \
+        with patch.object(agent, "_select_skills", return_value=([], "SKILL PROMPT")) as select_skills, \
              patch.object(agent, "_verify_history", return_value=(True, "")), \
              patch("cterm.llm.chat_with_model_api", side_effect=fake_chat):
             result = agent._run_with_native_tools("Find CVs and copy them.")
 
         self.assertEqual(result, "Done.")
-        select_skills.assert_any_call("Find CV files.")
-        select_skills.assert_any_call("Copy the matching files.")
-        self.assertEqual(select_skills.call_count, 2)
+        select_skills.assert_called_once_with("Find CVs and copy them.")
 
         planner_messages = captured_messages[0]
-        self.assertIn("skills are selected only inside worker agents", planner_messages[0]["content"])
-        self.assertNotIn("SKILL PROMPT", planner_messages[0]["content"])
+        self.assertIn("SKILL PROMPT", planner_messages[0]["content"])
+        self.assertIn("Task-specific skills have been selected", planner_messages[0]["content"])
+        self.assertNotIn("skills are selected only inside worker agents", planner_messages[0]["content"])
 
         first_agent_messages = captured_messages[1]
-        self.assertIn("SKILL PROMPT", first_agent_messages[0]["content"])
+        self.assertNotIn("SKILL PROMPT", first_agent_messages[0]["content"])
         self.assertIn("Assigned action (1/?):\nFind CV files.", first_agent_messages[1]["content"])
         self.assertIn("Previous agent output:\n<none>", first_agent_messages[1]["content"])
 
@@ -95,7 +95,7 @@ class OrchestrationTests(unittest.TestCase):
         self.assertIn("Found two CV files.", second_planner_messages[-1]["content"])
 
         second_agent_messages = captured_messages[3]
-        self.assertIn("SKILL PROMPT", second_agent_messages[0]["content"])
+        self.assertNotIn("SKILL PROMPT", second_agent_messages[0]["content"])
         self.assertIn("Assigned action (2/?):\nCopy the matching files.", second_agent_messages[1]["content"])
         self.assertIn("Previous agent output:\nFound two CV files.", second_agent_messages[1]["content"])
 
@@ -120,8 +120,7 @@ class OrchestrationTests(unittest.TestCase):
         agent = ToolAgent("main")
         agent.tools = []
 
-        with patch.object(agent, "_select_skills_prompt", return_value=""), \
-             patch.object(agent, "_execute_tool", return_value={"ok": True, "results": []}) as execute_tool, \
+        with patch.object(agent, "_execute_tool", return_value={"ok": True, "results": []}) as execute_tool, \
              patch.object(agent, "_verify_history", return_value=(True, "verified")) as verify, \
              patch("cterm.llm.chat_with_model_api", side_effect=fake_chat):
             result = agent._run_action_agent(
@@ -142,8 +141,7 @@ class OrchestrationTests(unittest.TestCase):
         agent = ToolAgent("main")
         agent.tools = []
 
-        with patch.object(agent, "_select_skills_prompt", return_value=""), \
-             patch.object(agent, "_verify_history", return_value=(True, "")) as verify, \
+        with patch.object(agent, "_verify_history", return_value=(True, "")) as verify, \
              patch("cterm.llm.chat_with_model_api", return_value={"message": {"content": "Stopped Plex."}}):
             agent._run_action_agent(
                 "Restart Plex.",
@@ -182,7 +180,7 @@ class OrchestrationTests(unittest.TestCase):
         agent = ToolAgent("main", debug=True)
         agent.tools = []
 
-        with patch.object(agent, "_select_skills_prompt", return_value=""), \
+        with patch.object(agent, "_select_skills", return_value=([], "")), \
              patch.object(agent, "_verify_history", return_value=(True, "")), \
              patch("cterm.llm.chat_with_model_api", side_effect=fake_chat), \
              patch("sys.stderr", new_callable=StringIO) as stderr:
@@ -253,7 +251,7 @@ class OrchestrationTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp, \
              patch.dict(os.environ, {"HOME": tmp}), \
-             patch.object(agent, "_select_skills_prompt", return_value=""), \
+             patch.object(agent, "_select_skills", return_value=([], "")), \
              patch.object(agent, "_execute_tool", return_value=finder_result), \
              patch.object(agent, "_verify_history", return_value=(True, "")), \
              patch("cterm.llm.chat_with_model_api", side_effect=fake_chat):

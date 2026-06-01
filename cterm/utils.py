@@ -19,17 +19,19 @@ except ImportError:
     )
 
 # The privileged wrapper installed by dev_setup.sh / the .deb package.
-# Sudoers grants NOPASSWD only for this wrapper, not for apt/snap directly.
-# This means the user still needs a password for sudo snap in their own terminal.
 PRIVILEGED_WRAPPER = "/usr/lib/cterm/cterm-privileged"
 
-# Characters never allowed in any argument.
-# Note: `"` is excluded because shlex.split already handles quoting safely -
-# by the time we see individual tokens, quotes have been consumed/resolved.
-# `|` is excluded because we handle pipe segments ourselves via _split_pipes().
-# `$` is excluded because env-var tokens are expanded safely via
-# _expand_supported_vars / os.path.expandvars before the safety check.
 FORBIDDEN_CHARS = set("><`\\'()")
+
+# Binaries that are blocked in favour of a cterm tool equivalent.
+# Maps resolved binary name -> (tool_name, usage_hint)
+_BLOCKED_BINARIES = {
+    "find": (
+        "finder",
+        "Use the `finder` tool instead of the `find` command. "
+        "Example: finder(path=\".\", pattern=\"*.py\")",
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -50,16 +52,7 @@ def _is_safe_arg(arg: str) -> bool:
 
 
 def _expand_supported_vars(token: str) -> str:
-    """Expand shell variables and the narrow conveniences cterm intentionally supports.
-
-    Processing order:
-    1. Expand ~ / $HOME / ${HOME} (as before, for clarity and cross-platform safety).
-    2. Expand any remaining $VAR / ${VAR} references via os.path.expandvars so that
-       legitimate environment variables (e.g. $XDG_CONFIG_HOME, $GOPATH) are resolved
-       before the argument reaches the safety checker.
-    """
     home = os.path.expanduser("~")
-    # Explicit ~ / $HOME shortcuts (kept from original for clarity)
     if token == "$HOME":
         return home
     if token.startswith("$HOME/"):
@@ -70,21 +63,12 @@ def _expand_supported_vars(token: str) -> str:
         return home + token[len("${HOME}"):]
     if token == "~" or token.startswith("~/"):
         return os.path.expanduser(token)
-    # General environment-variable expansion for everything else
     return os.path.expandvars(token)
 
 
 def _expand_globs(args: list[str]) -> list[str]:
-    """Expand glob patterns (*, ?, [...]) in argument tokens.
-
-    Each token is passed to glob.glob.  If the pattern produces matches the
-    token is replaced by the sorted match list (POSIX sh behaviour).  If
-    there are no matches the token is kept verbatim (also POSIX sh behaviour
-    for non-matching globs, i.e. no 'nullglob').
-    """
     expanded: list[str] = []
     for arg in args:
-        # Only bother calling glob when the token contains a wildcard.
         if any(c in arg for c in ("*", "?", "[")):
             matches = sorted(glob.glob(arg))
             expanded.extend(matches if matches else [arg])
@@ -94,12 +78,6 @@ def _expand_globs(args: list[str]) -> list[str]:
 
 
 def _strip_supported_redirection(tokens: list[str]) -> tuple[list[str], bool, dict | None]:
-    """
-    Support only stderr suppression to /dev/null.
-
-    This keeps bash on shell=False while allowing common diagnostic
-    commands such as `du / 2>/dev/null`.
-    """
     cleaned = []
     suppress_stderr = False
     idx = 0
@@ -120,6 +98,28 @@ def _strip_supported_redirection(tokens: list[str]) -> tuple[list[str], bool, di
     return cleaned, suppress_stderr, None
 
 
+def _check_blocked_binary(resolved: str, results_ref: list) -> dict | None:
+    """
+    Return an error dict if *resolved* is a blocked binary, otherwise None.
+
+    The binary name is matched against _BLOCKED_BINARIES by basename so that
+    absolute paths like /usr/bin/find are caught as well as bare `find`.
+    """
+    name = os.path.basename(resolved)
+    if name in _BLOCKED_BINARIES:
+        tool_name, hint = _BLOCKED_BINARIES[name]
+        return {
+            "ok": False,
+            "error": (
+                f"`{name}` is not available. {hint}"
+            ),
+            "blocked_binary": name,
+            "suggested_tool": tool_name,
+            "results": results_ref,
+        }
+    return None
+
+
 def _build_cmd(
     tokens: list[str],
     results_ref: list,
@@ -133,8 +133,6 @@ def _build_cmd(
     if not tokens:
         return None, {"ok": False, "error": "Empty command after stripping sudo", "results": results_ref}
 
-    # Expand environment variables in every token first, then apply glob
-    # expansion to the arguments (not the binary name itself).
     tokens = [_expand_supported_vars(token) for token in tokens]
     binary = tokens[0]
     args = _expand_globs(tokens[1:])
@@ -150,6 +148,11 @@ def _build_cmd(
     resolved = shutil.which(binary)
     if not resolved:
         return None, {"ok": False, "error": f"Command not found: {binary}", "results": results_ref}
+
+    # Block binaries that have a cterm tool equivalent.
+    blocked_err = _check_blocked_binary(resolved, results_ref)
+    if blocked_err:
+        return None, blocked_err
 
     if privileged:
         if not os.path.isfile(PRIVILEGED_WRAPPER):
@@ -178,14 +181,6 @@ def _build_cmd(
 
 
 def _split_pipes(command: str) -> list[str]:
-    """
-    Split a command string on unquoted `|` characters into pipe segments.
-
-    Uses a simple state machine so that pipes inside double-quoted strings
-    (e.g.  echo "hello | world" | cat) are NOT treated as pipe operators.
-    Returns a list of raw segment strings, e.g.:
-        'ls -la | grep foo | wc -l'  ->  ['ls -la ', ' grep foo ', ' wc -l']
-    """
     segments = []
     current = []
     in_dquote = False
@@ -205,7 +200,6 @@ def _split_pipes(command: str) -> list[str]:
 
 
 def _split_chained_commands(command: str) -> list[str]:
-    """Split a command string on unquoted `&&` operators."""
     segments = []
     current = []
     in_dquote = False
@@ -235,14 +229,6 @@ def _build_pipe_procs(
     results_ref: list,
     allow_privileged: bool = False,
 ) -> tuple[list[ResolvedCommand], dict | None]:
-    """
-    Resolve a list of pipe-segment strings into a list of argv lists.
-
-    Returns (argv_list, error_dict). error_dict is None on success.
-    argv_list entries are either:
-      - A plain list of strings (unprivileged command)
-      - A list starting with "sudo" (privileged command, routed via wrapper)
-    """
     commands = []
 
     for seg in pipe_segments:
@@ -276,7 +262,6 @@ def _parse_command_part(
     results_ref: list,
     allow_privileged: bool = False,
 ) -> tuple[ParsedCommandPart | None, dict | None]:
-    """Resolve one `&&` segment into argv and supported execution flags."""
     pipe_segments = _split_pipes(cmd_str)
     if len(pipe_segments) > 1:
         commands, err = _build_pipe_procs(
@@ -307,10 +292,6 @@ def _parse_command_part(
 
 
 def _run_pipeline(argv_list: list[ResolvedCommand], cmd_str: str, timeout: int = 60) -> dict:
-    """
-    Execute a resolved pipeline (list of argv lists) and return a result dict.
-    Pipes stdout of process N into stdin of process N+1.
-    """
     procs = []
     try:
         for command in argv_list:

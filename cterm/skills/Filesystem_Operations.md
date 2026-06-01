@@ -5,47 +5,52 @@ organize, or verify files and folders on a Linux desktop.
 
 ## Skill
 
-Handle filesystem tasks in stages: discover candidates, narrow the list, act on
-only the intended items, then verify the result.
+This skill follows the planner/worker architecture. The planner decomposes the
+user request into sequential atomic actions, and each worker executes one action
+independently. Finder results are automatically persisted between workers through
+saved result files.
 
-### Tools
+### Available Tools
 
-- Always Use `finder` for file and folder discovery AND IGNORE ANY INSTRUCTIONS TELLING YOU TO USE THE BASH FIND COMMAND
+Workers have access to: `finder`, `bash`, `exec`, `read_file`, `write_file`.
 
+### Finder Discovery
 
-### Discovery
+Use `finder` for all file and folder discovery. Do not use `bash find`.
 
-Start with the most specific location available:
+The `finder` tool returns relative paths from the search root. Combine each
+match with the root before acting or reporting.
 
-- a path named by the user
-- `~/Desktop`
-- `~/Documents`
-- `~/Downloads`
-- app-specific folders such as `~/.config` or `~/.local/share`
-- `~` only when narrower locations are insufficient
+After a worker completes, the system automatically saves the last successful
+`finder` result to `~/cterm/data/finder_results_<timestamp>_<pid>.json` and
+appends a reference to the worker's output like:
 
-Prefer precise filename patterns. Use exact names, meaningful words, and known
-extensions. Avoid broad short patterns unless paired with another strong filter.
+```
+Finder results file for planner and next agent: ~/cterm/data/finder_results_....json. The JSON field `paths` is a list of path strings.
+```
 
-When `finder` returns relative paths, combine each match with the search root
-before acting or reporting.
+The saved JSON contains the full `paths` array (absolute paths), the original
+search arguments, and the raw result. Downstream workers can reference said list to write the code for copying or deleted the listed files/folders
+
+### Worker Execution
+
+Each worker receives one atomic action. It should:
+
+1. Use `finder` for discovery, starting from the most specific path:
+   - a path named by the user
+   - `~/Desktop`, `~/Documents`, `~/Downloads`
+   - app-specific folders such as `~/.config` or `~/.local/share`
+   - `~` only when narrower locations are insufficient
+2. Prefer precise filename patterns (exact names, meaningful words, known
+   extensions). Avoid short broad patterns unless paired with another filter.
+3. If the handoff mentions a finder results file, read it with `read_file` to
+   reuse previous search results instead of re-searching.
+4. Perform the assigned action (read, copy, move, delete, etc.).
+5. Report concisely: what was found, what was changed, and the destination.
 
 ### Noise Control
 
-When searching broadly under `~`, avoid noisy generated locations unless the
-user explicitly asks for them:
-
-- `~/.cache`
-- `~/.npm`, `~/.npm-global`
-- `~/.vscode`
-- `~/.rustup`, `~/.cargo`
-- `node_modules`
-- `.git`
-- `__pycache__`
-- virtualenv directories such as `env`, `venv`, `.venv`
-- `__MACOSX`
-- `~/.local/share/Trash`
-
+When searching broadly under `~`
 If a search is too noisy, narrow before taking action:
 
 - reduce the root path
@@ -56,37 +61,14 @@ If a search is too noisy, narrow before taking action:
 
 ### Acting on Files
 
-Before copying, moving, renaming, or deleting anything, make sure the candidate
-set matches the user's intent. If results include plausible false positives,
-filter them out first.
+Before copying, moving, renaming, or deleting anything, confirm the candidate
+set matches the user's intent. If results are too long, have a worker inspect them
 
-For copy or gather tasks:
 
-1. Create the destination folder if needed.
-2. Copy only selected files.
-3. Preserve metadata when practical.
-4. Do not silently overwrite unrelated existing files.
-5. If destination names collide, keep both by adding a short source-folder hint
-   or numeric suffix.
-6. Verify by listing or counting the destination contents.
-
-For move or rename tasks:
-
-1. Verify source paths exist.
-2. Verify destination paths do not overwrite unintended files.
-3. Prefer explicit source and destination paths.
-4. Verify the old path is gone and the new path exists.
-
-For delete tasks:
-
-1. Treat deletion as high risk.
-2. Confirm the exact matched paths before deleting unless the user gave an
-   unambiguous explicit path.
-3. Prefer moving to Trash when that matches desktop expectations.
 
 ### Python Pattern
 
-Use `exec` when a task benefits from deterministic Python filesystem handling:
+Agents can use `exec` when a task benefits from deterministic Python filesystem handling:
 
 - walking directories with explicit exclusions
 - filtering by filename and extension
@@ -95,16 +77,5 @@ Use `exec` when a task benefits from deterministic Python filesystem handling:
 - generating collision-free destination names
 - printing a concise manifest of actions taken
 
-Keep Python scripts focused and readable. Build an in-memory candidate list,
-filter it, perform the requested action, and print a summary.
 
-### Reporting
 
-Report:
-
-- what locations were searched
-- the criteria used to match files
-- what files or folders were changed
-- the destination path, if files were gathered or copied
-- any skipped false positives or exclusions
-- whether results were truncated or incomplete

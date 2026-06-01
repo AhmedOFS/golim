@@ -1,3 +1,4 @@
+
 """MCP tools definitions for cterm"""
 import json
 import os
@@ -7,9 +8,19 @@ import time
 
 
 try:
-    from utils import _parse_command_part, _run_pipeline, _split_chained_commands
+    from utils import (
+        _parse_command_part,
+        _run_pipeline,
+        _split_chained_commands,
+        _BLOCKED_BINARIES,
+    )
 except ImportError:
-    from .utils import _parse_command_part, _run_pipeline, _split_chained_commands
+    from .utils import (
+        _parse_command_part,
+        _run_pipeline,
+        _split_chained_commands,
+        _BLOCKED_BINARIES,
+    )
 # Simple wrapper class to hold tools (no FastMCP dependency needed for server)
 class MCPTools:
     """Container for MCP tool functions"""
@@ -28,7 +39,7 @@ def tool(func):
 # ---------------------------------------------------------------------------
 
 def _read_cterm_config() -> dict:
-    """Read ~/.config/cterm/config.json, returning {} on any error."""
+    """Read ~/.configcterm/config.json, returning {} on any error."""
     config_path = os.path.expanduser("~/.configcterm/config.json")
     try:
         with open(config_path, "r", encoding="utf-8") as f:
@@ -85,6 +96,20 @@ def _run_unrestricted(command: str, timeout: int = 60) -> dict:
                 "results": [],
             }
 
+    # Block binaries that have a cterm tool equivalent.
+    for m in re.finditer(r'(?:^|[|&;(]\s*)(\S+)', command):
+        token = m.group(1).lstrip("(").strip()
+        resolved = shutil.which(token)
+        if resolved:
+            name = os.path.basename(resolved)
+            if name in _BLOCKED_BINARIES:
+                tool_name, hint = _BLOCKED_BINARIES[name]
+                return {
+                    "ok": False,
+                    "error": f"`{name}` is not available. {hint}",
+                    "results": [],
+                }
+
     try:
         result = subprocess.run(
             ["/bin/bash", "-c", command],
@@ -137,6 +162,22 @@ def _stream_unrestricted(command: str, timeout: int = 60):
                 "results": [],
             }
             return
+
+    # Block binaries that have a cterm tool equivalent.
+    for m in re.finditer(r'(?:^|[|&;(]\s*)(\S+)', command):
+        token = m.group(1).lstrip("(").strip()
+        resolved = shutil.which(token)
+        if resolved:
+            name = os.path.basename(resolved)
+            if name in _BLOCKED_BINARIES:
+                tool_name, hint = _BLOCKED_BINARIES[name]
+                yield {
+                    "type": "result",
+                    "ok": False,
+                    "error": f"`{name}` is not available. {hint}",
+                    "results": [],
+                }
+                return
 
     try:
         proc = subprocess.Popen(
