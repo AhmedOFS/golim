@@ -245,6 +245,26 @@ def init_command(binary: str = "ollama") -> int:
         else:
             config.unset(Config.SMALL_MODEL)
             print("✓ No small model configured")
+
+        # Unrestricted bash
+        current_unrestricted = config.unrestricted_bash
+        prompt = (
+            f"Enable unrestricted bash mode? [y/N]"
+            f"{' (currently enabled)' if current_unrestricted else ''}: "
+        )
+        try:
+            choice = input(prompt).strip().lower()
+        except (KeyboardInterrupt, EOFError):
+            choice = ""
+        if choice in ("y", "yes"):
+            if not current_unrestricted:
+                config.set(Config.BASH_UNRESTRICTED, True)
+                print("✓ Unrestricted bash mode enabled")
+        else:
+            if current_unrestricted:
+                config.set(Config.BASH_UNRESTRICTED, False)
+                print("✓ Unrestricted bash mode disabled")
+
         print("\nYou can now use cterm:")
         print('  cterm "Hello, how are you?"')
         return 0

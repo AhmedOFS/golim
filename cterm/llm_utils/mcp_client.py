@@ -84,7 +84,14 @@ class FastMCPClient:
     _PARAMS_MAP = {
         'list_files': {'type':'object','properties':{'path':{'type':'string','description':'Directory path to list'}},'required':['path']},
         'read_file':  {'type':'object','properties':{'path':{'type':'string','description':'File path to read'}},'required':['path']},
-        'bash':  {'type':'object','properties':{'command':{'type':'string','description':'Shell command to execute'}},'required':['command']},
+        'bash':  {
+            'type': 'object',
+            'properties': {
+                'command': {'type': 'string', 'description': 'Shell command to execute'},
+                'stream': {'type': 'boolean', 'description': 'Stream stdout/stderr incrementally'},
+            },
+            'required': ['command'],
+        },
         'exec':  {
             'type': 'object',
             'properties': {

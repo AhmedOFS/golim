@@ -285,17 +285,47 @@ class OrchestrationTests(unittest.TestCase):
                 ["~/Documents/Ahmed_CV.pdf", "~/Desktop/Resume.docx"],
             )
 
-    def test_incomplete_finder_matches_are_not_included_in_planner_handoff(self):
+    def test_incomplete_worker_still_hands_off_successful_finder_results(self):
+        agent = ToolAgent("main")
+
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"HOME": tmp}):
+            handoff = agent._build_worker_handoff({
+                "output": "Search did not finish.",
+                "complete": False,
+                "tool_history": [{
+                    "tool": "finder",
+                    "arguments": {"path": "~", "pattern": "*CV*"},
+                    "status": "success",
+                    "result": {
+                        "ok": True,
+                        "path": "~",
+                        "matches": ["Documents/Ahmed_CV.pdf"],
+                        "total": 1,
+                        "truncated": False,
+                    },
+                }],
+            })
+
+            self.assertIn("Finder results file for planner and next agent:", handoff)
+            self.assertNotIn("~/Documents/Ahmed_CV.pdf", handoff)
+            saved_path_text = handoff.split(
+                "Finder results file for planner and next agent: ", 1
+            )[1].split(". The JSON field", 1)[0]
+            saved = json.loads(Path(saved_path_text).read_text(encoding="utf-8"))
+
+        self.assertEqual(saved["paths"], ["~/Documents/Ahmed_CV.pdf"])
+
+    def test_failed_finder_result_is_not_handed_off(self):
         agent = ToolAgent("main")
         handoff = agent._build_worker_handoff({
-            "output": "Search did not finish.",
+            "output": "Search failed.",
             "complete": False,
             "tool_history": [{
                 "tool": "finder",
                 "arguments": {"path": "~", "pattern": "*CV*"},
-                "status": "success",
+                "status": "failed",
                 "result": {
-                    "ok": True,
+                    "ok": False,
                     "path": "~",
                     "matches": ["Documents/Ahmed_CV.pdf"],
                     "total": 1,
@@ -304,10 +334,10 @@ class OrchestrationTests(unittest.TestCase):
             }],
         })
 
-        self.assertEqual(handoff, "Search did not finish.")
-        self.assertNotIn("Ahmed_CV.pdf", handoff)
+        self.assertEqual(handoff, "Search failed.")
+        self.assertNotIn("Finder results file", handoff)
 
-    def test_only_last_completed_finder_result_is_saved(self):
+    def test_only_last_successful_finder_result_is_saved(self):
         agent = ToolAgent("main")
 
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"HOME": tmp}):

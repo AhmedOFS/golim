@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """MCP tools definitions for cterm"""
 import json
 import os
@@ -23,6 +22,208 @@ def tool(func):
     """Decorator to mark a function as an MCP tool"""
     func.__mcp_tool__ = True
     return func
+
+# ---------------------------------------------------------------------------
+# Config helper
+# ---------------------------------------------------------------------------
+
+def _read_cterm_config() -> dict:
+    """Read ~/.config/cterm/config.json, returning {} on any error."""
+    config_path = os.path.expanduser("~/.configcterm/config.json")
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+
+
+def _is_bash_unrestricted() -> bool:
+    """Return True when bash_unrestricted is set to true in cterm config."""
+    return bool(_read_cterm_config().get("bash_unrestricted", False))
+
+
+# ---------------------------------------------------------------------------
+# Unrestricted bash helpers
+# ---------------------------------------------------------------------------
+
+def _run_unrestricted(command: str, timeout: int = 60) -> dict:
+    """
+    Run *command* via a real bash shell.
+
+    The sudo whitelist is still enforced: any `sudo <binary>` invocation in
+    the command is pre-scanned and rejected when the resolved binary is not
+    on cterm's privileged whitelist.  Everything else runs unfiltered under
+    the current user.
+    """
+    try:
+        from privilege import is_privileged_binary_allowed
+    except ImportError:
+        from .privilege import is_privileged_binary_allowed
+
+    import shutil
+    import re
+
+    # Best-effort whitelist check: find `sudo <word>` tokens and verify each.
+    # This is intentionally conservative — it catches the common cases without
+    # trying to fully parse arbitrary shell syntax.
+    for m in re.finditer(r'(?<![^\s])sudo\s+(\S+)', command):
+        binary_token = m.group(1)
+        # Strip leading flags (e.g. -n / --non-interactive)
+        if binary_token.startswith("-"):
+            continue
+        resolved = shutil.which(binary_token)
+        if resolved and not is_privileged_binary_allowed(resolved):
+            return {
+                "ok": False,
+                "error": (
+                    f"Privileged command requires approval: {resolved}"
+                ),
+                "approval_required": True,
+                "approval_kind": "privileged_whitelist",
+                "binary": resolved,
+                "results": [],
+            }
+
+    try:
+        result = subprocess.run(
+            ["/bin/bash", "-c", command],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=timeout,
+        )
+        entry = {
+            "command": command,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "returncode": result.returncode,
+        }
+        ok = result.returncode == 0 or bool(result.stdout.strip())
+        return {"ok": ok, "command": command, "results": [entry]}
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": f"Command timed out: {command}", "results": []}
+    except Exception as e:
+        return {"ok": False, "error": str(e), "results": []}
+
+
+def _stream_unrestricted(command: str, timeout: int = 60):
+    """
+    Streaming variant of _run_unrestricted.  Yields the same dict protocol
+    as the streaming path in bash().
+    """
+    try:
+        from privilege import is_privileged_binary_allowed
+    except ImportError:
+        from .privilege import is_privileged_binary_allowed
+
+    import shutil
+    import re
+    import select
+
+    for m in re.finditer(r'(?<![^\s])sudo\s+(\S+)', command):
+        binary_token = m.group(1)
+        if binary_token.startswith("-"):
+            continue
+        resolved = shutil.which(binary_token)
+        if resolved and not is_privileged_binary_allowed(resolved):
+            yield {
+                "type": "result",
+                "ok": False,
+                "error": f"Privileged command requires approval: {resolved}",
+                "approval_required": True,
+                "approval_kind": "privileged_whitelist",
+                "binary": resolved,
+                "results": [],
+            }
+            return
+
+    try:
+        proc = subprocess.Popen(
+            ["/bin/bash", "-c", command],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=0,
+            close_fds=True,
+        )
+    except Exception as e:
+        yield {"type": "result", "ok": False, "error": str(e), "results": []}
+        return
+
+    output_lines = {"stdout": [], "stderr": []}
+    pending = {"stdout": "", "stderr": ""}
+    deadline = time.time() + timeout
+    fd_map = {proc.stdout.fileno(): "stdout", proc.stderr.fileno(): "stderr"}
+
+    while fd_map:
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            proc.kill()
+            proc.wait()
+            proc.stdout.close()
+            proc.stderr.close()
+            yield {"type": "result", "ok": False,
+                   "error": f"Command timed out: {command}", "results": []}
+            return
+
+        readable, _, exceptional = select.select(
+            list(fd_map), [], list(fd_map), min(remaining, 1.0)
+        )
+        for fd in exceptional:
+            fd_map.pop(fd, None)
+
+        for fd in readable:
+            stream_name = fd_map.get(fd)
+            if stream_name is None:
+                continue
+            try:
+                data = os.read(fd, 4096)
+            except OSError:
+                fd_map.pop(fd, None)
+                continue
+            if not data:
+                fd_map.pop(fd, None)
+                continue
+            text = data.decode(errors="replace")
+            buf = pending[stream_name] + text
+            while True:
+                nl = buf.find("\n")
+                cr = buf.find("\r")
+                positions = [p for p in (nl, cr) if p != -1]
+                if not positions:
+                    break
+                split_at = min(positions)
+                end_ch = buf[split_at]
+                chunk = buf[:split_at]
+                if end_ch == "\r" and buf[split_at + 1:split_at + 2] == "\n":
+                    end_ch = "\n"
+                    buf = buf[split_at + 2:]
+                else:
+                    buf = buf[split_at + 1:]
+                if chunk:
+                    output_lines[stream_name].append(chunk)
+                    yield {"type": "stream", "fd": stream_name, "line": chunk, "end": end_ch}
+            pending[stream_name] = buf
+
+    for stream_name, chunk in pending.items():
+        if chunk:
+            output_lines[stream_name].append(chunk)
+            yield {"type": "stream", "fd": stream_name, "line": chunk, "end": "\n"}
+
+    proc.wait()
+    proc.stdout.close()
+    proc.stderr.close()
+
+    entry = {
+        "command": command,
+        "stdout": "\n".join(output_lines["stdout"]),
+        "stderr": "\n".join(output_lines["stderr"]),
+        "returncode": proc.returncode,
+    }
+    ok = proc.returncode == 0 or bool(entry["stdout"].strip())
+    yield {"type": "result", "ok": ok, "command": command, "results": [entry]}
+
 
 # --- Tool Definitions ---
 
@@ -156,38 +357,38 @@ def read_file(path: str) -> dict:
 @tool
 def bash(command: str, stream: bool = False, allow_privileged: bool = False) -> dict:
     """
-    Executes command lines using cterm's safe argv parser, not a shell.
+    Executes command lines.
 
-    Supports unquoted `&&` command chaining, unquoted `|` pipelines, quoted
-    arguments, environment-variable and `~` expansion, glob expansion in
-    arguments, and stderr suppression only in the form `2>/dev/null` or
-    `2> /dev/null`. Other redirection and shell-only syntax are rejected by
-    the parser or by the argument safety checks.
+    When `bash_unrestricted` is set to true in ~/.configcterm/config.json the
+    command is passed directly to /bin/bash -c, giving full shell access
+    (pipes, redirections, subshells, here-docs, etc.).  The only remaining
+    restriction is cterm's sudo whitelist: any `sudo <binary>` call whose
+    resolved path is not on the whitelist is rejected and an
+    approval_required result is returned, exactly as in the restricted path.
 
-    Commands run as the current user unless the command starts with `sudo`.
-    A sudo command is resolved to an absolute binary path and checked against
-    cterm's user config whitelist. If it is missing, the tool returns an
-    approval_required result. The client asks the user and retries with
-    allow_privileged=True; the MCP service then updates the whitelist and
-    routes the command through cterm's privileged wrapper. The wrapper checks
-    the same whitelist before running the binary as root.
+    When `bash_unrestricted` is false (the default) the original safe argv
+    parser is used.  It supports unquoted `&&` chaining, unquoted `|`
+    pipelines, quoted arguments, environment-variable and `~` expansion,
+    glob expansion, and `2>/dev/null` stderr suppression.  Other redirection
+    and shell-only syntax are rejected.
 
-    Results include stdout, stderr, and returncode for each chained command.
-    A non-zero command that produced stdout is treated as partial success
-    (ok=True) so the caller can inspect the output and returncode. A non-zero
-    command with no stdout is a hard failure (ok=False).
-
-    With stream=True, stdout/stderr chunks are yielded incrementally as
-    {"type": "stream", "fd": "stdout"|"stderr", "line": "...", "end": "..."}
-    dicts, followed by a final {"type": "result", ...} summary dict. With
-    stream=False, a single result dict is returned.
+    In both modes, `stream=True` yields incremental output chunks followed by
+    a final result dict.
     """
+    # ------------------------------------------------------------------ #
+    #  Unrestricted path                                                   #
+    # ------------------------------------------------------------------ #
+    if _is_bash_unrestricted():
+        if stream:
+            return _stream_unrestricted(command, timeout=60)
+        return _run_unrestricted(command, timeout=60)
+
+    # ------------------------------------------------------------------ #
+    #  Original restricted path (unchanged)                               #
+    # ------------------------------------------------------------------ #
     parts = _split_chained_commands(command)
     results = []
 
-    # ------------------------------------------------------------------ #
-    #  Non-streaming path                                                  #
-    # ------------------------------------------------------------------ #
     if not stream:
         for cmd_str in parts:
             parsed, err = _parse_command_part(
@@ -224,9 +425,6 @@ def bash(command: str, stream: bool = False, allow_privileged: bool = False) -> 
                 if result_entry.get("ok") is False:
                     return {"ok": False, "error": result_entry["error"], "results": results}
 
-                # Hard failure: non-zero exit with no output to show.
-                # Partial success: non-zero exit but stdout has content —
-                # keep going and let the caller inspect returncode/stderr.
                 if result_entry["returncode"] != 0 and not result_entry["stdout"].strip():
                     stderr_detail = result_entry.get("stderr", "").strip()
                     error_msg = f"Command failed: {cmd_str}"
@@ -242,11 +440,7 @@ def bash(command: str, stream: bool = False, allow_privileged: bool = False) -> 
         return {"ok": True, "command": command, "results": results}
 
     # ------------------------------------------------------------------ #
-    #  Streaming path                                                      #
-    #  Returns a generator; each yield is a dict to be serialised         #
-    #  by the caller. Protocol:                                            #
-    #    {"type": "stream", "fd": "stdout"|"stderr", "line": str}         #
-    #    {"type": "result", "ok": bool, ...}   ← final item               #
+    #  Streaming path (restricted)                                         #
     # ------------------------------------------------------------------ #
     def _stream_generator():
         import select
@@ -338,7 +532,7 @@ def bash(command: str, stream: bool = False, allow_privileged: bool = False) -> 
                        "error": str(e), "results": results}
                 return
 
-            deadline = time.time() + 60  # 60-second timeout
+            deadline = time.time() + 60
             fd_to_stream = {
                 proc.stdout.fileno(): "stdout",
             }
@@ -523,6 +717,7 @@ def system_info() -> dict:
         }
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
 @tool
 def write_file(path: str, content: str, mode: str = "overwrite") -> dict:
     """
@@ -558,10 +753,11 @@ def write_file(path: str, content: str, mode: str = "overwrite") -> dict:
         }
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
 # Attach tools to mcp object
 mcp.finder = finder
 mcp.read_file = read_file
 mcp.bash = bash
-mcp.exec=exec_python
+mcp.exec = exec_python
 mcp.system_info = system_info
 mcp.write_file = write_file

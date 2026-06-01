@@ -135,8 +135,6 @@ class ToolAgent:
 
     def _build_worker_handoff(self, result):
         output = result.get("output") or ""
-        if not result.get("complete"):
-            return output
         saved_path = self._save_last_finder_result(result.get("tool_history", []))
         if not saved_path:
             return output
@@ -150,8 +148,12 @@ class ToolAgent:
         for item in reversed(tool_history):
             if item.get("tool") != "finder":
                 continue
+            if item.get("status") != "success":
+                continue
             result = item.get("result")
             if not isinstance(result, dict) or "matches" not in result:
+                continue
+            if result.get("ok") is not True:
                 continue
             return item
         return None
@@ -408,9 +410,8 @@ class ToolAgent:
                 "name": "new_agent",
                 "description": (
                     "Run one sequential worker agent on an atomic concrete action. "
-                    "The worker receives the previous worker's final output, "
-                    "has at most three iterations, and is verified before the "
-                    "planner can continue."
+
+                    
                 ),
                 "parameters": {
                     "type": "object",
@@ -620,7 +621,8 @@ class ToolAgent:
                     "role": "system",
                     "content": (
                         "You are a planner. First decompose the user's request "
-                        "into concrete sequential actions. You have exactly one "
+                        "into concrete sequential actions. Describe actions and tasks not commands"
+                        "You have exactly one "
                         "tool: new_agent. Call new_agent once for each action, "
                         "in order. Wait for each result before calling the next "
                         "agent. Do not use task-specific skills yourself; skills "

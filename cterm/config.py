@@ -8,6 +8,7 @@ class Config:
     """Simple config manager with auto-save."""
     SELECTED_MODEL = "selected_model"
     SMALL_MODEL = "small_model"
+    BASH_UNRESTRICTED = "bash_unrestricted"
     
     def __init__(self):
         cfg_home = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
@@ -53,3 +54,8 @@ class Config:
     def small_model(self) -> str | None:
         """Optional smaller model for lightweight future tasks."""
         return self.get(self.SMALL_MODEL)
+
+    @property
+    def unrestricted_bash(self) -> bool:
+        """Run bash commands through /bin/bash -c with full shell syntax."""
+        return bool(self.get(self.BASH_UNRESTRICTED, False))

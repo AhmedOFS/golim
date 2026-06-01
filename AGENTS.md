@@ -9,14 +9,14 @@ Cterm is a Python CLI and local tool harness for completing desktop OS tasks wit
 The main pieces are:
 
 - `cterm/__main__.py`: CLI entry point. Handles `cterm -i`, configured model selection, service startup, and chat invocation.
-- `cterm/llm.py`: planner/worker orchestration, Ollama tool-call integration, skill selection, verification, debug logging, and MCP client lifecycle.
+- `cterm/llm.py`: planner/worker orchestration, Ollama tool-call integration, skill selection, verification, debug logging, and MCP client lifecycle. Worker tool filtering is driven by the selected skill — when `## Filesystem_Operations` is injected, the worker's tool set is restricted to `{finder, bash, exec, read_file, write_file}`. Finder results are persisted to `~/cterm/data/` and handed off to the next agent. `_last_finder_history_item` only considers finder calls with `status == "success"` and `result.ok is True`.
 - `cterm/cterm_server.py`: persistent MCP-like tool server over a Unix domain socket in `/tmp`, with inactivity shutdown and newline-delimited JSON frames for streaming output.
-- `cterm/tools_mcp.py`: exposed tool implementations. The `bash` tool is the highest-risk surface and must stay constrained.
+- `cterm/tools_mcp.py`: exposed tool implementations. The `bash` tool is the highest-risk surface and must stay constrained. Also provides `exec` (sandboxed Python), `finder` (file search), `read_file`, `write_file`, and `system_info`. `calculate` and `fetch_json` were removed.
 - `cterm/utils.py`: safe command parsing and execution helpers for `bash`, including pipelines, `&&`, glob/env expansion, and privileged command routing.
 - `cterm/llm_utils/`: Ollama HTTP client, Unix-socket MCP client, spinner, and async helper utilities.
 - `cterm/skills_loader/`: markdown skill loading, strict skill selection, and prompt rendering.
-- `cterm/skills/`: built-in skill markdown files. Each skill needs `## When to use` and `## Skill` sections.
-- `tests/`: stdlib `unittest` coverage for orchestration, skill loading, and bash parsing.
+- `cterm/skills/`: built-in skill markdown files. Each skill needs `## When to use` and `## Skill` sections. `Finder_Search.md` was replaced by `Filesystem_Operations.md`.
+- `tests/`: stdlib `unittest` coverage for orchestration, skill loading, bash parsing, finder, exec, and MCP client.
 
 ## Development Commands
 
@@ -61,7 +61,8 @@ python3 -m cterm -d "your prompt"
 - It supports only the command features implemented in `cterm/utils.py`: unquoted `&&`, unquoted `|`, double-quoted args, env var and `~` expansion, glob expansion, and stderr suppression as `2>/dev/null` or `2> /dev/null`.
 - Other redirection and shell metacharacters are intentionally rejected through `FORBIDDEN_CHARS`.
 - A leading `sudo` enters privileged routing. The MCP service resolves the binary and returns an approval-required result if it is missing from the whitelist; the client asks the user, retries with approval, and the MCP service updates the whitelist before routing through `/usr/lib/cterm/cterm-privileged`.
-- Any change to parsing, return-code handling, streaming, or privileged routing needs focused coverage in `tests/test_bash_parsing.py`.
+- The unrestricted mode runs commands through `/bin/bash -c` with normal shell syntax when the config key `bash_unrestricted` is true (set via `~/.config/cterm/config.json`). `sudo` still uses the cterm privileged wrapper and whitelist by shadowing `sudo` in PATH via a generated Python shim. The shim checks the whitelist and either prints an approval marker or executes through the real `sudo` and wrapper.
+- Any change to parsing, return-code handling, streaming, unrestricted mode, or privileged routing needs focused coverage in `tests/test_bash_parsing.py`.
 - Be careful with commands that may modify the desktop OS. The test suite should not require root, package installation, or external services.
 
 ## Service and Privilege Notes
