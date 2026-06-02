@@ -155,6 +155,57 @@ class OrchestrationTests(unittest.TestCase):
         self.assertIn("Verify only whether the assigned action is complete", verification_task)
         self.assertIn("Assigned action:\nStop Plex.", verification_task)
 
+    def test_worker_final_answer_is_computed_only_after_successful_verification(self):
+        calls = []
+
+        def fake_chat(model, messages, tools=None, binary="ollama", response_format=None):
+            calls.append(tools)
+            if tools is None:
+                return {"message": {"content": "Final worker output."}}
+            return {"message": {"content": "Premature worker output."}}
+
+        agent = ToolAgent("main")
+        agent.tools = []
+
+        with patch.object(agent, "_verify_history", return_value=(True, "Verifier summary.")), \
+             patch("cterm.llm.chat_with_model_api", side_effect=fake_chat):
+            result = agent._run_action_agent(
+                "Do work.",
+                "Complete the assigned work.",
+                "",
+                1,
+                1,
+            )
+
+        self.assertTrue(result["complete"])
+        self.assertEqual(result["output"], "Final worker output.")
+        self.assertNotIn("Verifier summary.", result["output"])
+        self.assertEqual(calls, [[], None])
+
+    def test_incomplete_worker_outputs_verifier_summary_without_final_answer_call(self):
+        calls = []
+
+        def fake_chat(model, messages, tools=None, binary="ollama", response_format=None):
+            calls.append(tools)
+            return {"message": {"content": "Premature worker output."}}
+
+        agent = ToolAgent("main")
+        agent.tools = []
+
+        with patch.object(agent, "_verify_history", return_value=(False, "Still missing the copied file.")), \
+             patch("cterm.llm.chat_with_model_api", side_effect=fake_chat):
+            result = agent._run_action_agent(
+                "Copy the file.",
+                "Copy the selected file.",
+                "",
+                1,
+                1,
+            )
+
+        self.assertFalse(result["complete"])
+        self.assertEqual(result["output"], "Still missing the copied file.")
+        self.assertEqual(calls, [[]])
+
     def test_debug_logs_orchestration_events(self):
         planner_calls = 0
 

@@ -462,7 +462,7 @@ class ToolAgent:
         ]
 
         tool_history = []
-        final_answer = ""
+        stopped_for_final_response = False
 
         for iteration in range(1, self.MAX_AGENT_ITERATIONS + 1):
             self._debug_orchestration(
@@ -527,57 +527,16 @@ class ToolAgent:
 
                 continue
 
-            final_answer = message.get("content", "No response")
-            self._debug_agent_response(final_answer)
-            self._debug_orchestration(
-                "agent_final_answer",
-                step=step_index,
-                iteration=iteration,
-                chars=len(final_answer),
-            )
+            stopped_for_final_response = True
             break
 
-        if not final_answer:
+        if not stopped_for_final_response:
             self._debug_orchestration(
                 "agent_iteration_limit",
                 step=step_index,
                 max_iterations=self.MAX_AGENT_ITERATIONS,
                 tool_calls=len(tool_history),
             )
-            final_messages = [
-                {"role": "system", "content": no_tools_system_prompt},
-                *messages[1:],
-                {
-                    "role": "user",
-                    "content": (
-                        f"You have reached the {self.MAX_AGENT_ITERATIONS}-iteration "
-                        "tool limit. Provide the best final response for this assigned "
-                        "action using the tool results already available."
-                    ),
-                },
-            ]
-            spinner = Spinner(f"Agent {step_index}/{total_steps} Final")
-            spinner.start()
-            try:
-                response = chat_with_model_api(
-                    self.model,
-                    final_messages,
-                    tools=None,
-                    binary=self.binary,
-                )
-                final_answer = response.get("message", {}).get("content") or ""
-            finally:
-                spinner.stop()
-            self._debug_orchestration(
-                "agent_forced_final_answer",
-                step=step_index,
-                chars=len(final_answer),
-            )
-            if not final_answer:
-                final_answer = (
-                    f"Agent reached the {self.MAX_AGENT_ITERATIONS}-iteration limit.\n\n"
-                    f"Execution history:\n{self._build_execution_summary(tool_history)}"
-                )
 
         verification_task = (
             f"Assigned action:\n{action}\n\n"
@@ -595,6 +554,51 @@ class ToolAgent:
             complete=complete,
             summary=verifier_summary,
         )
+
+        if complete:
+            final_instruction = (
+                "The verifier deemed the assigned action complete. Provide only "
+                "the concise final output for this assigned action using the tool "
+                "results already available. Do not mention the verifier."
+            )
+            if not stopped_for_final_response:
+                final_instruction = (
+                    f"You reached the {self.MAX_AGENT_ITERATIONS}-iteration tool "
+                    "limit, but the verifier deemed the assigned action complete. "
+                    "Provide only the concise final output for this assigned action "
+                    "using the tool results already available. Do not mention the verifier."
+                )
+            final_messages = [
+                {"role": "system", "content": no_tools_system_prompt},
+                *messages[1:],
+                {"role": "user", "content": final_instruction},
+            ]
+            spinner = Spinner(f"Agent {step_index}/{total_steps} Final")
+            spinner.start()
+            try:
+                response = chat_with_model_api(
+                    self.model,
+                    final_messages,
+                    tools=None,
+                    binary=self.binary,
+                )
+                final_answer = response.get("message", {}).get("content") or ""
+            finally:
+                spinner.stop()
+            self._debug_agent_response(final_answer)
+            self._debug_orchestration(
+                "agent_final_answer",
+                step=step_index,
+                chars=len(final_answer),
+            )
+            if not final_answer:
+                final_answer = (
+                    "Agent completed the assigned action, but did not produce a final "
+                    "response.\n\n"
+                    f"Execution history:\n{self._build_execution_summary(tool_history)}"
+                )
+        else:
+            final_answer = verifier_summary or "Verifier determined the assigned action is incomplete."
 
         return {
             "action": action,
@@ -726,7 +730,6 @@ class ToolAgent:
                             "action": result["action"],
                             "output": previous_output,
                             "complete": result["complete"],
-                            "verifier_summary": result["verifier_summary"],
                         }),
                     })
                     # planner sees complete=false and can dispatch a follow-up agent
@@ -749,7 +752,6 @@ class ToolAgent:
                             "action": result["action"],
                             "output": previous_output,
                             "complete": result["complete"],
-                            "verifier_summary": result["verifier_summary"],
                         }),
                     })
                 self._debug_orchestration(
