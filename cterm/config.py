@@ -13,6 +13,9 @@ class Config:
     OPENROUTER_API_KEY = "openrouter_api_key"
     OPENROUTER_MODEL = "openrouter_model"
     OPENROUTER_SMALL_MODEL = "openrouter_small_model"
+    LLAMACPP_SERVER_URL = "llamacpp_server_url"
+    LLAMACPP_MODEL = "llamacpp_model"
+    LLAMACPP_SMALL_MODEL = "llamacpp_small_model"
 
     def __init__(self):
         cfg_home = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
@@ -66,7 +69,7 @@ class Config:
 
     @property
     def api_provider(self) -> str:
-        """API provider: 'ollama' or 'openrouter'."""
+        """API provider: 'ollama', 'openrouter', or 'llamacpp'."""
         return self.get(self.API_PROVIDER, "ollama")
 
     @property
@@ -83,3 +86,18 @@ class Config:
     def openrouter_small_model(self) -> str | None:
         """Optional smaller OpenRouter model for lightweight tasks."""
         return self.get(self.OPENROUTER_SMALL_MODEL)
+
+    @property
+    def llamacpp_server_url(self) -> str:
+        """llama.cpp server URL."""
+        return self.get(self.LLAMACPP_SERVER_URL, "http://127.0.0.1:8083")
+
+    @property
+    def llamacpp_model(self) -> str | None:
+        """llama.cpp model identifier."""
+        return self.get(self.LLAMACPP_MODEL)
+
+    @property
+    def llamacpp_small_model(self) -> str | None:
+        """Optional smaller llama.cpp model for lightweight tasks."""
+        return self.get(self.LLAMACPP_SMALL_MODEL)

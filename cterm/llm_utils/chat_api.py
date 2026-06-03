@@ -22,6 +22,8 @@ def chat_with_model_api(model, messages, tools=None, binary="ollama", response_f
 
     if provider == "openrouter":
         return _chat_openrouter(model, messages, tools, response_format, config)
+    if provider == "llamacpp":
+        return _chat_llamacpp(model, messages, tools, response_format, config)
     return _chat_ollama(model, messages, tools, response_format)
 
 
@@ -104,6 +106,44 @@ def _chat_openrouter(model, messages, tools=None, response_format=None, config=N
         )
         raise RuntimeError(
             f"OpenRouter API error {response.status_code} for model {model!r}: {body}"
+        ) from exc
+
+    raw = response.json()
+    return _normalize_openai_response(raw)
+
+
+def _chat_llamacpp(model, messages, tools=None, response_format=None, config=None):
+    import json
+    import sys
+    import requests
+
+    server_url = config.llamacpp_server_url if config else "http://127.0.0.1:8083"
+    url = server_url.rstrip("/") + "/v1/chat/completions"
+
+    normalized_messages = _normalize_messages_for_openai(messages)
+
+    payload = {"model": model, "messages": normalized_messages, "stream": False}
+    if tools:
+        payload["tools"] = tools
+    if response_format:
+        payload["response_format"] = {"type": "json_object"}
+
+    n_msg = len(normalized_messages)
+    n_tools = len(tools) if tools else 0
+
+    try:
+        response = requests.post(url, json=payload, timeout=120)
+        response.raise_for_status()
+    except requests.exceptions.HTTPError as exc:
+        body = response.text
+        print(
+            f"[debug] chat_api HTTP {response.status_code} from llama.cpp:\n"
+            f"  request: model={model!r} messages={n_msg} tools={n_tools}\n"
+            f"  response body: {body}",
+            file=sys.stderr,
+        )
+        raise RuntimeError(
+            f"llama.cpp API error {response.status_code} for model {model!r}: {body}"
         ) from exc
 
     raw = response.json()

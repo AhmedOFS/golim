@@ -32,8 +32,14 @@ class ToolAgent:
         self.use_native_tools = self._check_native_tool_support()
 
     def _check_native_tool_support(self):
+        from cterm.config import Config
+        config = Config()
+        provider = config.api_provider
         try:
             import requests
+            if provider == "llamacpp":
+                url = config.llamacpp_server_url.rstrip("/") + "/v1/models"
+                return requests.get(url, timeout=5).status_code == 200
             return requests.get("http://localhost:11434/api/tags", timeout=5).status_code == 200
         except Exception:
             return False
@@ -454,7 +460,6 @@ class ToolAgent:
             {
                 "role": "user",
                 "content": (
-                    f"Original user request:\n{original_task}\n\n"
                     f"Assigned action ({step_index}/{total_steps}):\n{action}\n\n"
                     f"Previous agent output:\n{previous_output or '<none>'}"
                 ),
@@ -514,16 +519,20 @@ class ToolAgent:
                     status=status,
                 )
 
-                messages.append({
-                    "role": "user",
-                    "content": (
-                        f"Tool execution result for `{tool_name}`:\n"
-                        f"Arguments:\n{self._compact_json(args)}\n\n"
-                        f"Result:\n{self._compact_json(compact_result)}\n\n"
-                        "Continue the assigned action. If it is complete, "
-                        "respond with the final concise summary."
-                    ),
-                })
+                execution_summary = self._build_execution_summary(tool_history)
+                messages = [
+                    {"role": "system", "content": system_prompt},
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Assigned action ({step_index}/{total_steps}):\n{action}\n\n"
+                            f"Previous agent output:\n{previous_output or '<none>'}\n\n"
+                            f"Tool execution history:\n{execution_summary}\n\n"
+                            "Continue the assigned action. If it is complete, "
+                            "respond with the final concise summary."
+                        ),
+                    },
+                ]
 
                 continue
 

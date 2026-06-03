@@ -208,18 +208,23 @@ def select_optional_model(models: list[str], saved: str | None, label: str) -> s
 ## Main Commands
 
 def choose_provider(config: Config) -> str:
-    """Let the user choose between Ollama and OpenRouter."""
+    """Let the user choose between Ollama, OpenRouter, and llama.cpp."""
     current = config.api_provider
     print("\nAPI Provider selection:")
     print(f"  1. Ollama (local, default)")
     print(f"  2. OpenRouter (cloud, requires API key)")
-    default = "1" if current == "ollama" else "2"
+    print(f"  3. llama.cpp (local, llama.cpp server)")
+    default = "1" if current == "ollama" else "2" if current == "openrouter" else "3"
     try:
-        choice = input(f"Select provider [1-2, default {default}]: ").strip() or default
+        choice = input(f"Select provider [1-3, default {default}]: ").strip() or default
     except (KeyboardInterrupt, EOFError):
         print()
         return current
-    return "openrouter" if choice == "2" else "ollama"
+    if choice == "2":
+        return "openrouter"
+    if choice == "3":
+        return "llamacpp"
+    return "ollama"
 
 
 def init_openrouter(config: Config) -> int:
@@ -325,6 +330,55 @@ def init_ollama(config: Config, binary: str) -> int:
     return 0
 
 
+def init_llamacpp(config: Config) -> int:
+    """Configure cterm to use llama.cpp server."""
+    saved_url = config.llamacpp_server_url
+    prompt = f"llama.cpp server URL [{saved_url}]: "
+    try:
+        url = input(prompt).strip() or saved_url
+    except (KeyboardInterrupt, EOFError):
+        print()
+        return 1
+    config.set(Config.LLAMACPP_SERVER_URL, url)
+
+    saved_model = config.llamacpp_model
+    prompt = f"Enter model name [{saved_model or 'default'}]: "
+    try:
+        model = input(prompt).strip()
+    except (KeyboardInterrupt, EOFError):
+        print()
+        return 1
+    if not model:
+        model = saved_model or "default"
+    config.set(Config.LLAMACPP_MODEL, model)
+    config.set(Config.SELECTED_MODEL, model)
+    print(f"✓ Model: {model}")
+
+    small = config.llamacpp_small_model
+    print(f"\nOptional small model for lightweight tasks (skills selection,")
+    print(f"  verification). Enter to skip or 'none' to clear.")
+    prompt = f"Small model [{small or 'none'}]: "
+    try:
+        small_choice = input(prompt).strip()
+    except (KeyboardInterrupt, EOFError):
+        print()
+        small_choice = ""
+    if small_choice and small_choice.lower() not in ("none", "clear", "skip"):
+        config.set(Config.LLAMACPP_SMALL_MODEL, small_choice)
+        config.set(Config.SMALL_MODEL, small_choice)
+        print(f"✓ Small model: {small_choice}")
+    elif small_choice and small_choice.lower() in ("none", "clear"):
+        config.unset(Config.LLAMACPP_SMALL_MODEL)
+        config.unset(Config.SMALL_MODEL)
+        print("✓ Small model cleared")
+    elif small:
+        print(f"✓ Small model: {small}")
+
+    config.set(Config.API_PROVIDER, "llamacpp")
+    print(f"\n✓ llama.cpp configured with provider: llamacpp")
+    return 0
+
+
 def init_command(binary: str = "ollama") -> int:
     """Initialize cterm by detecting Ollama and selecting a model."""
     config = Config()
@@ -334,6 +388,10 @@ def init_command(binary: str = "ollama") -> int:
 
     if provider == "openrouter":
         result = init_openrouter(config)
+        if result != 0:
+            return result
+    elif provider == "llamacpp":
+        result = init_llamacpp(config)
         if result != 0:
             return result
     else:
@@ -386,6 +444,11 @@ def chat_command(message: str, binary: str = "ollama", debug: bool = False) -> i
             print("Error: OpenRouter API key not configured")
             print("Run 'cterm -i' to set it up")
             return 1
+    elif provider == "llamacpp":
+        if not config.llamacpp_server_url:
+            print("Error: llama.cpp server URL not configured")
+            print("Run 'cterm -i' to set it up")
+            return 1
 
     # Ensure the UDS server daemon is running for tool execution
     if not ensure_server_running():
@@ -407,7 +470,7 @@ def main(argv: list[str] | None = None) -> int:
     """Main entry point for cterm CLI."""
     parser = argparse.ArgumentParser(
         prog="cterm",
-        description="Terminal interface for LLMs (Ollama and OpenRouter)"
+        description="Terminal interface for LLMs (Ollama, OpenRouter, llama.cpp)"
     )
     parser.add_argument(
         "--version",
