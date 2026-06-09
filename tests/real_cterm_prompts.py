@@ -70,20 +70,32 @@ def normalize_output(raw: str) -> str:
 
 def run_prompt(prompt: str) -> tuple[int, float, str]:
     start = time.monotonic()
+    lines: list[str] = []
+    last_spinner_text: str | None = None
     try:
-        result = subprocess.run(
+        proc = subprocess.Popen(
             [sys.executable, "-m", "cterm", "-d", prompt],
             cwd=ROOT,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
-            timeout=TIMEOUT_SECONDS,
         )
-        return result.returncode, time.monotonic() - start, result.stdout
-    except subprocess.TimeoutExpired as exc:
-        output = exc.stdout or ""
-        if isinstance(output, bytes):
-            output = output.decode(errors="replace")
+        assert proc.stdout is not None
+        for line in iter(proc.stdout.readline, ""):
+            lines.append(line)
+            if line.startswith(SPINNER_PREFIXES):
+                matched = next(p for p in SPINNER_PREFIXES if line.startswith(p))
+                rest = line[len(matched):]
+                if rest == last_spinner_text:
+                    continue
+                last_spinner_text = rest
+            print(line, end="", flush=True)
+        proc.wait(timeout=TIMEOUT_SECONDS)
+        return proc.returncode, time.monotonic() - start, "".join(lines)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        output = "".join(lines)
         return 124, time.monotonic() - start, output + "\n[TIMEOUT]\n"
 
 
@@ -101,7 +113,9 @@ def main() -> int:
         handle.flush()
 
         for index, prompt in enumerate(PROMPTS, start=1):
-            write_section(handle, f"TEST {index}/{len(PROMPTS)}: {prompt}")
+            title = f"TEST {index}/{len(PROMPTS)}: {prompt}"
+            write_section(handle, title)
+            print(f"\n{'=' * 80}\n{title}\n{'=' * 80}")
             returncode, duration, output = run_prompt(prompt)
             handle.write(f"Return code: {returncode}\n")
             handle.write(f"Duration: {duration:.2f}s\n")
@@ -112,6 +126,8 @@ def main() -> int:
                 handle.write("\n")
             handle.write("--- end normalized output ---\n")
             handle.flush()
+
+            print(f"Return code: {returncode}")
 
             if returncode != 0:
                 failures += 1
