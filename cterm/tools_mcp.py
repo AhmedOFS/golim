@@ -196,19 +196,22 @@ def _finalize_bash_payload(payload: dict) -> dict:
 # Unrestricted bash helpers
 # ---------------------------------------------------------------------------
 
-def _run_unrestricted(command: str, timeout: int = 60) -> dict:
+def _run_unrestricted(command: str, timeout: int = 60, allow_privileged: bool = False) -> dict:
     """
     Run *command* via a real bash shell.
 
     The sudo whitelist is still enforced: any `sudo <binary>` invocation in
     the command is pre-scanned and rejected when the resolved binary is not
-    on cterm's privileged whitelist.  Everything else runs unfiltered under
-    the current user.
+    on cterm's privileged whitelist.  When `allow_privileged` is True, missing
+    binaries are automatically added to the whitelist and the command is
+    re-routed through cterm's privileged wrapper.  Everything else runs
+    unfiltered under the current user.
     """
     try:
-        from privilege import is_privileged_binary_allowed
+        from privilege import is_privileged_binary_allowed, add_privileged_binary
     except ImportError:
-        from .privilege import is_privileged_binary_allowed
+        from .privilege import is_privileged_binary_allowed, add_privileged_binary
+    from .utils import PRIVILEGED_WRAPPER
 
     import shutil
     import re
@@ -216,23 +219,40 @@ def _run_unrestricted(command: str, timeout: int = 60) -> dict:
     # Best-effort whitelist check: find `sudo <word>` tokens and verify each.
     # This is intentionally conservative — it catches the common cases without
     # trying to fully parse arbitrary shell syntax.
+    sudo_replacements = []
     for m in re.finditer(r'(?<![^\s])sudo\s+(\S+)', command):
         binary_token = m.group(1)
         # Strip leading flags (e.g. -n / --non-interactive)
         if binary_token.startswith("-"):
             continue
         resolved = shutil.which(binary_token)
-        if resolved and not is_privileged_binary_allowed(resolved):
-            return {
-                "ok": False,
-                "error": (
-                    f"Privileged command requires approval: {resolved}"
-                ),
-                "approval_required": True,
-                "approval_kind": "privileged_whitelist",
-                "binary": resolved,
-                "results": [],
-            }
+        if not resolved:
+            continue
+        if not is_privileged_binary_allowed(resolved):
+            if not allow_privileged:
+                return {
+                    "ok": False,
+                    "error": f"Privileged command requires approval: {resolved}",
+                    "approval_required": True,
+                    "approval_kind": "privileged_whitelist",
+                    "binary": resolved,
+                    "results": [],
+                }
+            add_privileged_binary(resolved)
+        sudo_replacements.append((m.start(), m.end(), resolved))
+
+    # Build the transformed command: replace `sudo <binary>` with the wrapper
+    # invocation so that whitelisted sudo commands go through
+    # /usr/lib/cterm/cterm-privileged instead of real sudo.
+    if sudo_replacements:
+        parts = []
+        last_end = 0
+        for start, end, resolved in sudo_replacements:
+            parts.append(command[last_end:start])
+            parts.append(f"sudo --non-interactive {PRIVILEGED_WRAPPER} {resolved}")
+            last_end = end
+        parts.append(command[last_end:])
+        command = "".join(parts)
 
     # Block binaries that have a cterm tool equivalent.
     for m in re.finditer(r'(?:^|[|&;(]\s*)(\S+)', command):
@@ -270,36 +290,53 @@ def _run_unrestricted(command: str, timeout: int = 60) -> dict:
         return {"ok": False, "error": str(e), "results": []}
 
 
-def _stream_unrestricted(command: str, timeout: int = 60):
+def _stream_unrestricted(command: str, timeout: int = 60, allow_privileged: bool = False):
     """
     Streaming variant of _run_unrestricted.  Yields the same dict protocol
     as the streaming path in bash().
     """
     try:
-        from privilege import is_privileged_binary_allowed
+        from privilege import is_privileged_binary_allowed, add_privileged_binary
     except ImportError:
-        from .privilege import is_privileged_binary_allowed
+        from .privilege import is_privileged_binary_allowed, add_privileged_binary
+    from .utils import PRIVILEGED_WRAPPER
 
     import shutil
     import re
     import select
 
+    sudo_replacements = []
     for m in re.finditer(r'(?<![^\s])sudo\s+(\S+)', command):
         binary_token = m.group(1)
         if binary_token.startswith("-"):
             continue
         resolved = shutil.which(binary_token)
-        if resolved and not is_privileged_binary_allowed(resolved):
-            yield {
-                "type": "result",
-                "ok": False,
-                "error": f"Privileged command requires approval: {resolved}",
-                "approval_required": True,
-                "approval_kind": "privileged_whitelist",
-                "binary": resolved,
-                "results": [],
-            }
-            return
+        if not resolved:
+            continue
+        if not is_privileged_binary_allowed(resolved):
+            if not allow_privileged:
+                yield {
+                    "type": "result",
+                    "ok": False,
+                    "error": f"Privileged command requires approval: {resolved}",
+                    "approval_required": True,
+                    "approval_kind": "privileged_whitelist",
+                    "binary": resolved,
+                    "results": [],
+                }
+                return
+            add_privileged_binary(resolved)
+        sudo_replacements.append((m.start(), m.end(), resolved))
+
+    if sudo_replacements:
+        parts = []
+        last_end = 0
+        for start, end, resolved in sudo_replacements:
+            parts.append(command[last_end:start])
+            parts.append(f"sudo --non-interactive {PRIVILEGED_WRAPPER} {resolved}")
+            last_end = end
+        parts.append(command[last_end:])
+        command = "".join(parts)
 
     # Block binaries that have a cterm tool equivalent.
     for m in re.finditer(r'(?:^|[|&;(]\s*)(\S+)', command):
@@ -602,8 +639,8 @@ def bash(command: str, stream: bool = False, allow_privileged: bool = False) -> 
     # ------------------------------------------------------------------ #
     if _is_bash_unrestricted():
         if stream:
-            return _stream_unrestricted(command, timeout=60)
-        return _run_unrestricted(command, timeout=60)
+            return _stream_unrestricted(command, timeout=60, allow_privileged=allow_privileged)
+        return _run_unrestricted(command, timeout=60, allow_privileged=allow_privileged)
 
     # ------------------------------------------------------------------ #
     #  Original restricted path (unchanged)                               #
