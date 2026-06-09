@@ -20,7 +20,7 @@ from cterm.skills_loader import SkillsLoader
 
 
 class ToolAgent:
-    MAX_AGENT_ITERATIONS = 10
+    MAX_AGENT_ITERATIONS = 5
 
     def __init__(self, model, binary="ollama", small_model=None, debug=False):
         self.model = model
@@ -112,6 +112,12 @@ class ToolAgent:
             if isinstance(result, dict):
                 if result.get("error"):
                     lines.append(f"   error: {result.get('error')}")
+                if result.get("message"):
+                    lines.append(f"   message: {result.get('message')}")
+                if result.get("output_truncated"):
+                    lines.append(f"   output truncated: true")
+                    lines.append(f"   output file: {result.get('output_file')}")
+                    lines.append(f"   output lines: {result.get('output_line_count')}")
                 if "matches" in result:
                     root = result.get("path", "")
                     matches = result.get("matches") or []
@@ -126,6 +132,19 @@ class ToolAgent:
                         lines.append(f"   match: {full_path}")
                     if len(matches) > 50:
                         lines.append(f"   ... {len(matches) - 50} more matches omitted ...")
+                if "content" in result:
+                    if result.get("path"):
+                        lines.append(f"   path: {result.get('path')}")
+                    if "page" in result:
+                        lines.append(
+                            f"   page: {result.get('page')} of {result.get('total_pages')}"
+                        )
+                        lines.append(f"   total lines: {result.get('total_lines')}")
+                        if result.get("has_next_page"):
+                            lines.append(f"   next page: {result.get('next_page')}")
+                    content = _clip(result.get("content", ""))
+                    if content:
+                        lines.append(f"   content:\n{_indent(content, '      ')}")
                 for result_idx, entry in enumerate(result.get("results", [])[:3], start=1):
                     if not isinstance(entry, dict):
                         continue
@@ -141,14 +160,41 @@ class ToolAgent:
 
     def _build_worker_handoff(self, result):
         output = result.get("output") or ""
-        saved_path = self._save_last_finder_result(result.get("tool_history", []))
-        if not saved_path:
+        tool_history = result.get("tool_history", [])
+        handoff_lines = []
+
+        saved_path = self._save_last_finder_result(tool_history)
+        if saved_path:
+            handoff_lines.append(
+                f"Finder results file for planner and next agent: {saved_path}. "
+                "The JSON field `paths` is a list of path strings."
+            )
+
+        bash_output_path = self._last_bash_output_file(tool_history)
+        if bash_output_path:
+            handoff_lines.append(
+                f"Bash output file for planner and next agent: {bash_output_path}. "
+                "The JSON field `results` contains full stdout and stderr."
+            )
+
+        if not handoff_lines:
             return output
-        return (
-            f"{output}\n\n"
-            f"Finder results file for planner and next agent: {saved_path}. "
-            "The JSON field `paths` is a list of path strings."
-        ).strip()
+        handoff_text = "\n".join(handoff_lines)
+        return f"{output}\n\n{handoff_text}".strip()
+
+    def _last_bash_output_file(self, tool_history):
+        for item in reversed(tool_history):
+            if item.get("tool") != "bash":
+                continue
+            if item.get("status") != "success":
+                continue
+            result = item.get("result")
+            if not isinstance(result, dict):
+                continue
+            output_file = result.get("output_file")
+            if output_file:
+                return str(output_file)
+        return None
 
     def _last_finder_history_item(self, tool_history):
         for item in reversed(tool_history):

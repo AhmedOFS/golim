@@ -67,6 +67,14 @@ class MCPClientTests(unittest.TestCase):
         self.assertIn("code", tool.parameters["properties"])
         self.assertIn("timeout", tool.parameters["properties"])
 
+    def test_read_file_schema_accepts_page(self):
+        client = FastMCPClient("/tmp")
+        tool = client._make_tool("read_file", "Tool: read_file", {})
+
+        self.assertEqual(tool.parameters["required"], ["path"])
+        self.assertIn("path", tool.parameters["properties"])
+        self.assertIn("page", tool.parameters["properties"])
+
 
 if __name__ == "__main__":
     unittest.main()

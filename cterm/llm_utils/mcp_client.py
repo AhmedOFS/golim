@@ -83,7 +83,14 @@ class FastMCPClient:
 
     _PARAMS_MAP = {
         'list_files': {'type':'object','properties':{'path':{'type':'string','description':'Directory path to list'}},'required':['path']},
-        'read_file':  {'type':'object','properties':{'path':{'type':'string','description':'File path to read'}},'required':['path']},
+        'read_file':  {
+            'type': 'object',
+            'properties': {
+                'path': {'type': 'string', 'description': 'File path to read'},
+                'page': {'type': 'integer', 'description': '1-based page number; each page returns up to 50 lines'},
+            },
+            'required': ['path'],
+        },
         'bash':  {
             'type': 'object',
             'properties': {

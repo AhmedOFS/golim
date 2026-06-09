@@ -2,9 +2,13 @@
 """MCP tools definitions for cterm"""
 import json
 import os
+import shlex
+import shutil
 import subprocess
 import sys
 import time
+
+OUTPUT_LINE_LIMIT = 50
 
 
 try:
@@ -52,6 +56,140 @@ def _read_cterm_config() -> dict:
 def _is_bash_unrestricted() -> bool:
     """Return True when bash_unrestricted is set to true in cterm config."""
     return bool(_read_cterm_config().get("bash_unrestricted", False))
+
+
+def _data_dir() -> str:
+    path = os.path.expanduser("~/cterm/data")
+    try:
+        os.makedirs(path, exist_ok=True)
+        return path
+    except OSError:
+        fallback = "/tmp/cterm/data"
+        os.makedirs(fallback, exist_ok=True)
+        return fallback
+
+
+def _count_output_lines(results: list[dict]) -> int:
+    total = 0
+    for entry in results:
+        total += len(str(entry.get("stdout", "")).splitlines())
+        total += len(str(entry.get("stderr", "")).splitlines())
+    return total
+
+
+def _command_uses_output_file_binary(command: str) -> bool:
+    for separator in ("&&", "||", "|", ";", "&", "(", ")"):
+        command = command.replace(separator, "\n")
+
+    for segment in command.splitlines():
+        segment = segment.strip()
+        if not segment:
+            continue
+        try:
+            tokens = shlex.split(segment)
+        except ValueError:
+            tokens = segment.split()
+
+        idx = 0
+        while idx < len(tokens):
+            token = tokens[idx]
+            if token == "sudo":
+                idx += 1
+                while idx < len(tokens) and tokens[idx].startswith("-"):
+                    idx += 1
+                continue
+            if token == "env" or "=" in token and not token.startswith("="):
+                idx += 1
+                continue
+            if token == "command":
+                idx += 1
+                continue
+
+            name = os.path.basename(token)
+            if "/" not in token:
+                resolved = shutil.which(token)
+                if resolved:
+                    name = os.path.basename(resolved)
+            if name in {"find", "du"}:
+                return True
+            break
+    return False
+
+
+def _payload_allows_output_file(payload: dict) -> bool:
+    if _command_uses_output_file_binary(str(payload.get("command") or "")):
+        return True
+    for entry in payload.get("results") or []:
+        if isinstance(entry, dict) and _command_uses_output_file_binary(
+            str(entry.get("command") or "")
+        ):
+            return True
+    return False
+
+
+def _save_bash_output(payload: dict) -> str:
+    base_name = f"bash_output_{int(time.time() * 1000)}_{os.getpid()}"
+
+    for directory in (_data_dir(), "/tmp/cterm/data"):
+        os.makedirs(directory, exist_ok=True)
+        path = os.path.join(directory, f"{base_name}.json")
+        counter = 2
+        while os.path.exists(path):
+            path = os.path.join(directory, f"{base_name}_{counter}.json")
+            counter += 1
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2, ensure_ascii=False)
+            return path
+        except OSError:
+            continue
+
+    raise OSError("Could not write bash output file")
+
+
+def _truncate_text_lines(text: str, remaining: int) -> tuple[str, int]:
+    lines = str(text).splitlines()
+    if remaining <= 0:
+        return "", 0
+    kept = lines[:remaining]
+    return "\n".join(kept), max(0, remaining - len(kept))
+
+
+def _truncate_result_entries(results: list[dict], limit: int = OUTPUT_LINE_LIMIT) -> list[dict]:
+    remaining = limit
+    truncated = []
+    for entry in results:
+        copied = dict(entry)
+        copied["stdout"], remaining = _truncate_text_lines(copied.get("stdout", ""), remaining)
+        copied["stderr"], remaining = _truncate_text_lines(copied.get("stderr", ""), remaining)
+        truncated.append(copied)
+    return truncated
+
+
+def _finalize_bash_payload(payload: dict) -> dict:
+    results = payload.get("results")
+    if not isinstance(results, list):
+        return payload
+
+    line_count = _count_output_lines(results)
+    payload["output_line_count"] = line_count
+    payload["output_limit"] = OUTPUT_LINE_LIMIT
+    payload["output_truncated"] = False
+    if line_count <= OUTPUT_LINE_LIMIT:
+        return payload
+    if not _payload_allows_output_file(payload):
+        return payload
+
+    saved_path = _save_bash_output(payload)
+    truncated_payload = dict(payload)
+    truncated_payload["results"] = _truncate_result_entries(results)
+    truncated_payload["output_truncated"] = True
+    truncated_payload["output_file"] = saved_path
+    truncated_payload["message"] = (
+        f"Output exceeded {OUTPUT_LINE_LIMIT} lines. "
+        f"Full output saved to {saved_path}."
+    )
+    return truncated_payload
 
 
 # ---------------------------------------------------------------------------
@@ -125,7 +263,7 @@ def _run_unrestricted(command: str, timeout: int = 60) -> dict:
             "returncode": result.returncode,
         }
         ok = result.returncode == 0 or bool(result.stdout.strip())
-        return {"ok": ok, "command": command, "results": [entry]}
+        return _finalize_bash_payload({"ok": ok, "command": command, "results": [entry]})
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": f"Command timed out: {command}", "results": []}
     except Exception as e:
@@ -194,6 +332,18 @@ def _stream_unrestricted(command: str, timeout: int = 60):
 
     output_lines = {"stdout": [], "stderr": []}
     pending = {"stdout": "", "stderr": ""}
+    cap_stream_output = _command_uses_output_file_binary(command)
+    streamed_lines = 0
+
+    def should_emit_stream():
+        nonlocal streamed_lines
+        if not cap_stream_output:
+            return True
+        if streamed_lines >= OUTPUT_LINE_LIMIT:
+            return False
+        streamed_lines += 1
+        return True
+
     deadline = time.time() + timeout
     fd_map = {proc.stdout.fileno(): "stdout", proc.stderr.fileno(): "stderr"}
 
@@ -244,13 +394,15 @@ def _stream_unrestricted(command: str, timeout: int = 60):
                     buf = buf[split_at + 1:]
                 if chunk:
                     output_lines[stream_name].append(chunk)
-                    yield {"type": "stream", "fd": stream_name, "line": chunk, "end": end_ch}
+                    if should_emit_stream():
+                        yield {"type": "stream", "fd": stream_name, "line": chunk, "end": end_ch}
             pending[stream_name] = buf
 
     for stream_name, chunk in pending.items():
         if chunk:
             output_lines[stream_name].append(chunk)
-            yield {"type": "stream", "fd": stream_name, "line": chunk, "end": "\n"}
+            if should_emit_stream():
+                yield {"type": "stream", "fd": stream_name, "line": chunk, "end": "\n"}
 
     proc.wait()
     proc.stdout.close()
@@ -263,7 +415,8 @@ def _stream_unrestricted(command: str, timeout: int = 60):
         "returncode": proc.returncode,
     }
     ok = proc.returncode == 0 or bool(entry["stdout"].strip())
-    yield {"type": "result", "ok": ok, "command": command, "results": [entry]}
+    final_payload = _finalize_bash_payload({"ok": ok, "command": command, "results": [entry]})
+    yield {"type": "result", **final_payload}
 
 
 # --- Tool Definitions ---
@@ -384,14 +537,42 @@ def finder(
     return {"ok": True, "path": path, "matches": matches, "total": len(matches), "truncated": truncated}
 
 @tool
-def read_file(path: str) -> dict:
-    """Reads the content of a file"""
+def read_file(path: str, page: int = 1) -> dict:
+    """
+    Reads one 50-line page from a file.
+
+    Args:
+        path: File path to read.
+        page: 1-based page number. Each page returns up to 50 lines.
+    """
     if not os.path.isfile(path):
         return {"ok": False, "error": f"File not found: {path}"}
     try:
-        with open(path, "r") as f:
-            content = f.read()
-        return {"ok": True, "path": path, "content": content}
+        page = int(page)
+        if page < 1:
+            return {"ok": False, "error": "page must be greater than or equal to 1"}
+
+        with open(path, "r", encoding="utf-8") as f:
+            lines = f.read().splitlines()
+
+        page_size = OUTPUT_LINE_LIMIT
+        total_lines = len(lines)
+        total_pages = max(1, (total_lines + page_size - 1) // page_size)
+        start = (page - 1) * page_size
+        end = start + page_size
+        page_lines = lines[start:end] if start < total_lines else []
+
+        return {
+            "ok": True,
+            "path": path,
+            "content": "\n".join(page_lines),
+            "page": page,
+            "page_size": page_size,
+            "total_lines": total_lines,
+            "total_pages": total_pages,
+            "has_next_page": page < total_pages,
+            "next_page": page + 1 if page < total_pages else None,
+        }
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -464,27 +645,38 @@ def bash(command: str, stream: bool = False, allow_privileged: bool = False) -> 
                 results.append(result_entry)
 
                 if result_entry.get("ok") is False:
-                    return {"ok": False, "error": result_entry["error"], "results": results}
+                    return _finalize_bash_payload({"ok": False, "error": result_entry["error"], "results": results})
 
                 if result_entry["returncode"] != 0 and not result_entry["stdout"].strip():
                     stderr_detail = result_entry.get("stderr", "").strip()
                     error_msg = f"Command failed: {cmd_str}"
                     if stderr_detail:
                         error_msg += f"\n{stderr_detail}"
-                    return {"ok": False, "error": error_msg, "results": results}
+                    return _finalize_bash_payload({"ok": False, "error": error_msg, "results": results})
 
             except subprocess.TimeoutExpired:
                 return {"ok": False, "error": f"Command timed out: {cmd_str}", "results": results}
             except Exception as e:
                 return {"ok": False, "error": str(e), "results": results}
 
-        return {"ok": True, "command": command, "results": results}
+        return _finalize_bash_payload({"ok": True, "command": command, "results": results})
 
     # ------------------------------------------------------------------ #
     #  Streaming path (restricted)                                         #
     # ------------------------------------------------------------------ #
     def _stream_generator():
         import select
+        cap_stream_output = _command_uses_output_file_binary(command)
+        streamed_lines = 0
+
+        def should_emit_stream():
+            nonlocal streamed_lines
+            if not cap_stream_output:
+                return True
+            if streamed_lines >= OUTPUT_LINE_LIMIT:
+                return False
+            streamed_lines += 1
+            return True
 
         def emit_completed_chunks(fd, text, pending, output_chunks):
             pending += text
@@ -505,12 +697,13 @@ def bash(command: str, stream: bool = False, allow_privileged: bool = False) -> 
                     pending = pending[split_at + 1:]
                 if chunk:
                     output_chunks.append(chunk)
-                    yield {
-                        "type": "stream",
-                        "fd": fd,
-                        "line": chunk,
-                        "end": end,
-                    }
+                    if should_emit_stream():
+                        yield {
+                            "type": "stream",
+                            "fd": fd,
+                            "line": chunk,
+                            "end": end,
+                        }
 
             return pending
 
@@ -531,22 +724,24 @@ def bash(command: str, stream: bool = False, allow_privileged: bool = False) -> 
                 result_entry = _run_pipeline(argv_list, cmd_str, timeout=60)
                 if result_entry.get("stdout"):
                     for line in result_entry["stdout"].splitlines():
-                        yield {"type": "stream", "fd": "stdout", "line": line}
+                        if should_emit_stream():
+                            yield {"type": "stream", "fd": "stdout", "line": line}
                 if result_entry.get("stderr"):
                     for line in result_entry["stderr"].splitlines():
-                        yield {"type": "stream", "fd": "stderr", "line": line}
+                        if should_emit_stream():
+                            yield {"type": "stream", "fd": "stderr", "line": line}
                 results.append(result_entry)
                 if result_entry.get("ok") is False:
-                    yield {"type": "result", "ok": False,
-                           "error": result_entry["error"], "results": results}
+                    final_payload = _finalize_bash_payload({"ok": False, "error": result_entry["error"], "results": results})
+                    yield {"type": "result", **final_payload}
                     return
                 if result_entry["returncode"] != 0 and not result_entry["stdout"].strip():
                     stderr_detail = result_entry.get("stderr", "").strip()
                     error_msg = f"Command failed: {cmd_str}"
                     if stderr_detail:
                         error_msg += f"\n{stderr_detail}"
-                    yield {"type": "result", "ok": False,
-                           "error": error_msg, "results": results}
+                    final_payload = _finalize_bash_payload({"ok": False, "error": error_msg, "results": results})
+                    yield {"type": "result", **final_payload}
                     return
                 continue
 
@@ -634,12 +829,13 @@ def bash(command: str, stream: bool = False, allow_privileged: bool = False) -> 
             for stream_name, chunk in pending.items():
                 if chunk:
                     output_lines[stream_name].append(chunk)
-                    yield {
-                        "type": "stream",
-                        "fd": stream_name,
-                        "line": chunk,
-                        "end": "\n",
-                    }
+                    if should_emit_stream():
+                        yield {
+                            "type": "stream",
+                            "fd": stream_name,
+                            "line": chunk,
+                            "end": "\n",
+                        }
 
             proc.wait()
             proc.stdout.close()
@@ -659,11 +855,12 @@ def bash(command: str, stream: bool = False, allow_privileged: bool = False) -> 
                 error_msg = f"Command failed: {cmd_str}"
                 if stderr_detail:
                     error_msg += f"\n{stderr_detail}"
-                yield {"type": "result", "ok": False,
-                       "error": error_msg, "results": results}
+                final_payload = _finalize_bash_payload({"ok": False, "error": error_msg, "results": results})
+                yield {"type": "result", **final_payload}
                 return
 
-        yield {"type": "result", "ok": True, "command": command, "results": results}
+        final_payload = _finalize_bash_payload({"ok": True, "command": command, "results": results})
+        yield {"type": "result", **final_payload}
 
     return _stream_generator()
 

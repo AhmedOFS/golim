@@ -455,6 +455,115 @@ class OrchestrationTests(unittest.TestCase):
         self.assertEqual(handoff, "Printed files.")
         self.assertNotIn("secret", handoff)
 
+    def test_bash_output_file_is_included_in_planner_handoff(self):
+        agent = ToolAgent("main")
+        handoff = agent._build_worker_handoff({
+            "output": "Measured disk usage.",
+            "complete": True,
+            "tool_history": [{
+                "tool": "bash",
+                "arguments": {"command": "du -a /tmp"},
+                "status": "success",
+                "result": {
+                    "ok": True,
+                    "output_file": "/tmp/cterm/data/bash_output.json",
+                    "output_truncated": True,
+                    "results": [],
+                },
+            }],
+        })
+
+        self.assertIn("Measured disk usage.", handoff)
+        self.assertIn("Bash output file for planner and next agent:", handoff)
+        self.assertIn("/tmp/cterm/data/bash_output.json", handoff)
+        self.assertIn("The JSON field `results` contains full stdout and stderr.", handoff)
+
+    def test_finder_and_bash_output_files_share_planner_handoff(self):
+        agent = ToolAgent("main")
+
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"HOME": tmp}):
+            handoff = agent._build_worker_handoff({
+                "output": "Found files and measured usage.",
+                "complete": True,
+                "tool_history": [
+                    {
+                        "tool": "finder",
+                        "arguments": {"path": "~", "pattern": "*.txt"},
+                        "status": "success",
+                        "result": {
+                            "ok": True,
+                            "path": "~",
+                            "matches": ["a.txt"],
+                            "total": 1,
+                            "truncated": False,
+                        },
+                    },
+                    {
+                        "tool": "bash",
+                        "arguments": {"command": "du -a ~"},
+                        "status": "success",
+                        "result": {
+                            "ok": True,
+                            "output_file": "/tmp/cterm/data/bash_output.json",
+                            "output_truncated": True,
+                            "results": [],
+                        },
+                    },
+                ],
+            })
+
+        self.assertIn("Finder results file for planner and next agent:", handoff)
+        self.assertIn("Bash output file for planner and next agent:", handoff)
+
+    def test_execution_summary_includes_bash_output_file(self):
+        agent = ToolAgent("main")
+
+        summary = agent._build_execution_summary([{
+            "tool": "bash",
+            "arguments": {"command": "seq 1 60"},
+            "status": "success",
+            "result": {
+                "ok": True,
+                "output_truncated": True,
+                "output_file": "/tmp/cterm/data/bash_output.json",
+                "output_line_count": 60,
+                "message": "Output exceeded 50 lines.",
+                "results": [{
+                    "command": "seq 1 60",
+                    "stdout": "1\n2",
+                    "stderr": "",
+                    "returncode": 0,
+                }],
+            },
+        }])
+
+        self.assertIn("output truncated: true", summary)
+        self.assertIn("output file: /tmp/cterm/data/bash_output.json", summary)
+        self.assertIn("Output exceeded 50 lines.", summary)
+
+    def test_execution_summary_includes_read_file_page_content(self):
+        agent = ToolAgent("main")
+
+        summary = agent._build_execution_summary([{
+            "tool": "read_file",
+            "arguments": {"path": "/tmp/file.txt", "page": 2},
+            "status": "success",
+            "result": {
+                "ok": True,
+                "path": "/tmp/file.txt",
+                "content": "line 51\nline 52",
+                "page": 2,
+                "total_pages": 3,
+                "total_lines": 120,
+                "has_next_page": True,
+                "next_page": 3,
+            },
+        }])
+
+        self.assertIn("page: 2 of 3", summary)
+        self.assertIn("next page: 3", summary)
+        self.assertIn("line 51", summary)
+
 
 if __name__ == "__main__":
     unittest.main()
