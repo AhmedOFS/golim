@@ -13,7 +13,7 @@ from pathlib import Path
 
 from cterm.llm_utils.chat_api import chat_with_model_api
 from cterm.llm_utils.mcp_client import FastMCPClient
-from cterm.llm_utils.utils import Spinner, _indent, _run_async, get_socket_path
+from cterm.llm_utils.utils import Spinner, _indent, _clip_label, _run_async, get_socket_path
 from cterm.privilege import prompt_to_add_privileged_binary
 from cterm.skills_loader import SkillsLoader
 
@@ -342,7 +342,7 @@ class ToolAgent:
 
     def _execute_tool(self, tool_name, args):
         is_shell = tool_name == "bash"
-        label = args.get("command", tool_name) if tool_name == "bash" else tool_name
+        label = _clip_label(args.get("command", tool_name)) if tool_name == "bash" else tool_name
 
         def _on_shell_stream(fd, line, end="\n"):
             output = f"\033[33m{line}\033[0m" if fd == "stderr" else line
@@ -523,7 +523,7 @@ class ToolAgent:
                 max_iterations=self.MAX_AGENT_ITERATIONS,
             )
 
-            spinner = Spinner(f"Agent {step_index}/{total_steps}")
+            spinner = Spinner(_clip_label(action))
             spinner.start()
             try:
                 response = chat_with_model_api(
@@ -628,7 +628,7 @@ class ToolAgent:
                 *messages[1:],
                 {"role": "user", "content": final_instruction},
             ]
-            spinner = Spinner(f"Agent {step_index}/{total_steps} Final")
+            spinner = Spinner("Summarizing Task")
             spinner.start()
             try:
                 response = chat_with_model_api(
@@ -681,6 +681,7 @@ class ToolAgent:
                 "tool: new_agent. Call new_agent once for each action, "
                 "in order. Wait for each result before calling the next "
                 "agent. "
+                "use Snap or apt for app installations when relevant"
  
             )
 

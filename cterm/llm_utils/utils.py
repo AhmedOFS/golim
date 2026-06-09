@@ -79,5 +79,12 @@ def _indent(text, prefix="      "):
     return "\n".join(prefix + line for line in text.splitlines())
 
 
+def _clip_label(text, max_chars=80):
+    line = text.splitlines()[0] if text else (text or "")
+    if len(line) <= max_chars:
+        return line
+    return line[:max_chars] + "..."
+
+
 def get_socket_path() -> Path:
     return Path(f"/tmp/cterm_mcp_{os.getlogin()}.sock")
