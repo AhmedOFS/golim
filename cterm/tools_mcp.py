@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import time
+import requests
 
 OUTPUT_LINE_LIMIT = 50
 
@@ -196,7 +197,7 @@ def _finalize_bash_payload(payload: dict) -> dict:
 # Unrestricted bash helpers
 # ---------------------------------------------------------------------------
 
-def _run_unrestricted(command: str, timeout: int = 60, allow_privileged: bool = False) -> dict:
+def _run_unrestricted(command: str, timeout: int | None = None, allow_privileged: bool = False) -> dict:
     """
     Run *command* via a real bash shell.
 
@@ -290,7 +291,7 @@ def _run_unrestricted(command: str, timeout: int = 60, allow_privileged: bool = 
         return {"ok": False, "error": str(e), "results": []}
 
 
-def _stream_unrestricted(command: str, timeout: int = 60, allow_privileged: bool = False):
+def _stream_unrestricted(command: str, timeout: int | None = None, allow_privileged: bool = False):
     """
     Streaming variant of _run_unrestricted.  Yields the same dict protocol
     as the streaming path in bash().
@@ -381,12 +382,13 @@ def _stream_unrestricted(command: str, timeout: int = 60, allow_privileged: bool
         streamed_lines += 1
         return True
 
-    deadline = time.time() + timeout
+    has_deadline = timeout is not None
+    deadline = (time.time() + timeout) if has_deadline else float("inf")
     fd_map = {proc.stdout.fileno(): "stdout", proc.stderr.fileno(): "stderr"}
 
     while fd_map:
         remaining = deadline - time.time()
-        if remaining <= 0:
+        if has_deadline and remaining <= 0:
             proc.kill()
             proc.wait()
             proc.stdout.close()
@@ -396,7 +398,7 @@ def _stream_unrestricted(command: str, timeout: int = 60, allow_privileged: bool
             return
 
         readable, _, exceptional = select.select(
-            list(fd_map), [], list(fd_map), min(remaining, 1.0)
+            list(fd_map), [], list(fd_map), min(remaining, 1.0) if has_deadline else 1.0
         )
         for fd in exceptional:
             fd_map.pop(fd, None)
@@ -639,8 +641,8 @@ def bash(command: str, stream: bool = False, allow_privileged: bool = False) -> 
     # ------------------------------------------------------------------ #
     if _is_bash_unrestricted():
         if stream:
-            return _stream_unrestricted(command, timeout=60, allow_privileged=allow_privileged)
-        return _run_unrestricted(command, timeout=60, allow_privileged=allow_privileged)
+            return _stream_unrestricted(command, allow_privileged=allow_privileged)
+        return _run_unrestricted(command, allow_privileged=allow_privileged)
 
     # ------------------------------------------------------------------ #
     #  Original restricted path (unchanged)                               #
@@ -663,14 +665,13 @@ def bash(command: str, stream: bool = False, allow_privileged: bool = False) -> 
 
             try:
                 if len(argv_list) > 1:
-                    result_entry = _run_pipeline(argv_list, cmd_str, timeout=60)
+                    result_entry = _run_pipeline(argv_list, cmd_str)
                 else:
                     result = subprocess.run(
                         argv_list[0].argv,
                         stdout=subprocess.PIPE,
                         stderr=subprocess.DEVNULL if parsed.suppress_stderr else subprocess.PIPE,
                         text=True,
-                        timeout=60,
                     )
                     result_entry = {
                         "command": cmd_str,
@@ -758,7 +759,7 @@ def bash(command: str, stream: bool = False, allow_privileged: bool = False) -> 
                 continue
 
             if len(argv_list) > 1:
-                result_entry = _run_pipeline(argv_list, cmd_str, timeout=60)
+                result_entry = _run_pipeline(argv_list, cmd_str)
                 if result_entry.get("stdout"):
                     for line in result_entry["stdout"].splitlines():
                         if should_emit_stream():
@@ -805,7 +806,6 @@ def bash(command: str, stream: bool = False, allow_privileged: bool = False) -> 
                        "error": str(e), "results": results}
                 return
 
-            deadline = time.time() + 60
             fd_to_stream = {
                 proc.stdout.fileno(): "stdout",
             }
@@ -813,23 +813,11 @@ def bash(command: str, stream: bool = False, allow_privileged: bool = False) -> 
                 fd_to_stream[proc.stderr.fileno()] = "stderr"
 
             while fd_to_stream:
-                remaining = deadline - time.time()
-                if remaining <= 0:
-                    proc.kill()
-                    proc.wait()
-                    proc.stdout.close()
-                    if proc.stderr:
-                        proc.stderr.close()
-                    yield {"type": "result", "ok": False,
-                           "error": f"Command timed out: {cmd_str}",
-                           "results": results}
-                    return
-
                 readable, _, exceptional = select.select(
                     list(fd_to_stream),
                     [],
                     list(fd_to_stream),
-                    min(remaining, 1.0),
+                    1.0,
                 )
                 for fd in exceptional:
                     fd_to_stream.pop(fd, None)
@@ -993,6 +981,199 @@ def system_info() -> dict:
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
+EXA_MCP_URL = "https://mcp.exa.ai/mcp"
+PARALLEL_MCP_URL = "https://search.parallel.ai/mcp"
+MAX_NUM_RESULTS = 20
+MAX_RESPONSE_BYTES = 256 * 1024
+NO_RESULTS = "No search results found. Please try a different query."
+
+
+def _websearch_mcp_call(url: str, tool: str, args: dict, headers: dict | None = None) -> tuple[str | None, str | None]:
+    """
+    Call an MCP tool over HTTP.
+
+    Returns (text, None) on success, or (None, error_message) on failure.
+    """
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {"name": tool, "arguments": args},
+    }
+    req_headers = dict(headers or {})
+    req_headers.setdefault("Accept", "application/json, text/event-stream")
+    req_headers.setdefault("Content-Type", "application/json")
+    try:
+        resp = requests.post(
+            url,
+            json=payload,
+            headers=req_headers,
+            timeout=25,
+        )
+        resp.raise_for_status()
+        body = resp.text
+    except requests.exceptions.HTTPError as exc:
+        status = resp.status_code if isinstance(exc, requests.exceptions.HTTPError) and hasattr(exc, 'response') and exc.response is not None else 0
+        detail = resp.text[:200] if hasattr(exc, 'response') and exc.response is not None else str(exc)
+        return None, f"HTTP {status}: {detail}"
+    except requests.exceptions.RequestException as exc:
+        return None, str(exc)
+
+    if len(body.encode("utf-8")) > MAX_RESPONSE_BYTES:
+        return None, f"Response exceeded {MAX_RESPONSE_BYTES} bytes"
+
+    text = _parse_mcp_response(body)
+    if text is None:
+        return None, "Could not parse search results from MCP response"
+    return text, None
+
+
+def _parse_mcp_response(body: str) -> str | None:
+    """
+    Parse an MCP JSON-RPC response body.
+
+    Accepts both direct JSON and SSE/NDJSON frames (lines starting with 'data: ').
+    Returns the first text content block found, or None.
+    """
+    import json
+
+    def _try_extract(payload: str) -> str | None:
+        trimmed = payload.strip()
+        if not trimmed.startswith("{"):
+            return None
+        try:
+            parsed = json.loads(trimmed)
+        except json.JSONDecodeError:
+            return None
+        content = parsed.get("result", {}).get("content", [])
+        if isinstance(content, list):
+            for item in content:
+                if isinstance(item, dict) and item.get("text"):
+                    return item["text"]
+        return None
+
+    body = body.strip()
+    direct = _try_extract(body)
+    if direct:
+        return direct
+
+    for line in body.splitlines():
+        if line.startswith("data: "):
+            found = _try_extract(line[6:])
+            if found:
+                return found
+
+    return None
+
+
+def _websearch_provider() -> str:
+    """Return the configured web search provider, defaulting to 'exa'."""
+    config = _read_cterm_config()
+    provider = config.get("websearch_provider", "exa")
+    if provider not in ("exa", "parallel"):
+        return "exa"
+    return provider
+
+
+def _exa_api_key() -> str | None:
+    """Read Exa API key from config, then env var."""
+    config = _read_cterm_config()
+    key = config.get("exa_api_key") or os.environ.get("EXA_API_KEY")
+    return key if key else None
+
+
+def _parallel_api_key() -> str | None:
+    """Read Parallel API key from config, then env var."""
+    config = _read_cterm_config()
+    key = config.get("parallel_api_key") or os.environ.get("PARALLEL_API_KEY")
+    return key if key else None
+
+
+@tool
+def websearch(
+    query: str,
+    num_results: int = 8,
+    livecrawl: str = "fallback",
+    type: str = "auto",
+    context_max_characters: int | None = None,
+) -> dict:
+    """
+    Search the web using the session's local web search provider.
+
+    Supports Exa and Parallel as backends. Provider is selected via the
+    'websearch_provider' config key ('exa' or 'parallel'), defaulting to Exa.
+
+    Args:
+        query:                  Web search query.
+        num_results:            Number of search results to return (1-20, default 8).
+        livecrawl:              Live crawl mode: 'fallback' (default) or 'preferred'.
+        type:                   Search type: 'auto' (default), 'fast', or 'deep'.
+        context_max_characters: Maximum characters for context string (default 10000).
+
+    Returns:
+        {"ok": True, "provider": str, "text": str} or {"ok": False, "error": str}
+    """
+    try:
+        num_results = max(1, min(int(num_results), MAX_NUM_RESULTS))
+    except (TypeError, ValueError):
+        num_results = 8
+
+    if livecrawl not in ("fallback", "preferred"):
+        livecrawl = "fallback"
+
+    if type not in ("auto", "fast", "deep"):
+        type = "auto"
+
+    if context_max_characters is not None:
+        try:
+            context_max_characters = max(1, int(context_max_characters))
+        except (TypeError, ValueError):
+            context_max_characters = None
+
+    provider = _websearch_provider()
+
+    if provider == "exa":
+        exa_key = _exa_api_key()
+        url = EXA_MCP_URL
+        if exa_key:
+            url = f"{EXA_MCP_URL}?exaApiKey={exa_key}"
+
+        exa_args = {
+            "query": query,
+            "type": type,
+            "numResults": num_results,
+            "livecrawl": livecrawl,
+        }
+        if context_max_characters is not None:
+            exa_args["contextMaxCharacters"] = context_max_characters
+
+        text, _ = _websearch_mcp_call(url, "web_search_exa", exa_args)
+        return {
+            "ok": True,
+            "provider": "exa",
+            "text": text or NO_RESULTS,
+        }
+
+    else:
+        par_key = _parallel_api_key()
+        headers = {"User-Agent": "cterm/1.0"}
+        if par_key:
+            headers["Authorization"] = f"Bearer {par_key}"
+
+        par_args = {
+            "objective": query,
+            "search_queries": [query],
+            "session_id": f"cterm_{os.getpid()}",
+        }
+
+        text, _ = _websearch_mcp_call(PARALLEL_MCP_URL, "web_search", par_args, headers)
+        return {
+            "ok": True,
+            "provider": "parallel",
+            "text": text or NO_RESULTS,
+        }
+
+
 @tool
 def write_file(path: str, content: str, mode: str = "overwrite") -> dict:
     """
@@ -1035,4 +1216,5 @@ mcp.read_file = read_file
 mcp.bash = bash
 mcp.exec = exec_python
 mcp.system_info = system_info
+mcp.websearch = websearch
 mcp.write_file = write_file

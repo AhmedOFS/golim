@@ -291,7 +291,7 @@ def _parse_command_part(
     return ParsedCommandPart(argv_list=[ResolvedCommand(cmd)], suppress_stderr=suppress_stderr), None
 
 
-def _run_pipeline(argv_list: list[ResolvedCommand], cmd_str: str, timeout: int = 60) -> dict:
+def _run_pipeline(argv_list: list[ResolvedCommand], cmd_str: str, timeout: int | None = None) -> dict:
     procs = []
     try:
         for command in argv_list:

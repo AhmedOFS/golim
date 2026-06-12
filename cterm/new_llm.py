@@ -21,7 +21,7 @@ from cterm import task_tool
 
 
 class ToolAgent:
-    MAX_AGENT_ITERATIONS = 5
+    MAX_AGENT_ITERATIONS = 50
 
     def __init__(self, model, binary="ollama", small_model=None, debug=False):
         self.model = model

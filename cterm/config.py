@@ -16,6 +16,9 @@ class Config:
     LLAMACPP_SERVER_URL = "llamacpp_server_url"
     LLAMACPP_MODEL = "llamacpp_model"
     LLAMACPP_SMALL_MODEL = "llamacpp_small_model"
+    WEBSearch_PROVIDER = "websearch_provider"
+    EXA_API_KEY = "exa_api_key"
+    PARALLEL_API_KEY = "parallel_api_key"
 
     def __init__(self):
         cfg_home = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
@@ -101,3 +104,18 @@ class Config:
     def llamacpp_small_model(self) -> str | None:
         """Optional smaller llama.cpp model for lightweight tasks."""
         return self.get(self.LLAMACPP_SMALL_MODEL)
+
+    @property
+    def websearch_provider(self) -> str | None:
+        """Web search provider: 'exa' or 'parallel'."""
+        return self.get(self.WEBSearch_PROVIDER)
+
+    @property
+    def exa_api_key(self) -> str | None:
+        """Exa AI search API key."""
+        return self.get(self.EXA_API_KEY)
+
+    @property
+    def parallel_api_key(self) -> str | None:
+        """Parallel search API key."""
+        return self.get(self.PARALLEL_API_KEY)
