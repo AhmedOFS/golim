@@ -6,108 +6,52 @@ import unittest
 from unittest.mock import patch
 from io import StringIO
 
-from cterm.llm import ToolAgent
+from cterm.new_llm import ToolAgent
 
 
 class OrchestrationTests(unittest.TestCase):
-    def test_planner_prompt_lists_available_worker_tools(self):
-        captured_messages = []
-
-        def fake_chat(model, messages, tools=None, binary="ollama", response_format=None):
-            captured_messages.append([message.copy() for message in messages])
-            return {"message": {"content": "Done."}}
-
-        agent = ToolAgent("main")
-        agent.tools = [
-            type("Tool", (), {"name": "bash"})(),
-            type("Tool", (), {"name": "finder"})(),
-            type("Tool", (), {"name": "exec"})(),
-        ]
-
-        with patch.object(agent, "_select_skills", return_value=([], "")), \
-             patch("cterm.llm.chat_with_model_api", side_effect=fake_chat):
-            result = agent._run_with_native_tools("Check files.")
-
-        self.assertEqual(result, "Done.")
-        planner_prompt = captured_messages[0][0]["content"]
-        self.assertIn("Worker tools available: bash, exec, finder.", planner_prompt)
-
-    def test_planner_injects_skills_in_planner_context_not_worker(self):
-        captured_messages = []
-        planner_calls = []
-
-        def fake_chat(model, messages, tools=None, binary="ollama", response_format=None):
-            captured_messages.append([message.copy() for message in messages])
-            is_planner = tools and tools[0]["function"]["name"] == "new_agent"
-            if is_planner:
-                planner_calls.append(messages)
-            if is_planner and len(planner_calls) == 1:
-                return {
-                    "message": {
-                        "tool_calls": [{
-                            "function": {
-                                "name": "new_agent",
-                                "arguments": {"action": "Find CV files."},
-                            }
-                        }]
-                    }
-                }
-            if not is_planner and "Find CV files." in messages[1]["content"]:
-                return {"message": {"content": "Found two CV files."}}
-            if is_planner and len(planner_calls) == 2:
-                return {
-                    "message": {
-                        "tool_calls": [{
-                            "function": {
-                                "name": "new_agent",
-                                "arguments": {"action": "Copy the matching files."},
-                            }
-                        }]
-                    }
-                }
-            if not is_planner and "Copy the matching files." in messages[1]["content"]:
-                return {"message": {"content": "Copied both CV files."}}
-            return {"message": {"content": "Done."}}
-
-        agent = ToolAgent("main")
-        agent.tools = []
-
-        with patch.object(agent, "_select_skills", return_value=([], "SKILL PROMPT")) as select_skills, \
-             patch.object(agent, "_verify_history", return_value=(True, "")), \
-             patch("cterm.llm.chat_with_model_api", side_effect=fake_chat):
-            result = agent._run_with_native_tools("Find CVs and copy them.")
-
-        self.assertEqual(result, "Done.")
-        select_skills.assert_called_once_with("Find CVs and copy them.")
-
-        planner_messages = captured_messages[0]
-        self.assertIn("SKILL PROMPT", planner_messages[0]["content"])
-        self.assertIn("Task-specific skills have been selected", planner_messages[0]["content"])
-        self.assertNotIn("skills are selected only inside worker agents", planner_messages[0]["content"])
-
-        first_agent_messages = captured_messages[1]
-        self.assertNotIn("SKILL PROMPT", first_agent_messages[0]["content"])
-        self.assertIn("Assigned action (1/?):\nFind CV files.", first_agent_messages[1]["content"])
-        self.assertIn("Previous agent output:\n<none>", first_agent_messages[1]["content"])
-
-        second_planner_messages = captured_messages[2]
-        self.assertEqual(second_planner_messages[-1]["role"], "tool")
-        self.assertIn("Found two CV files.", second_planner_messages[-1]["content"])
-
-        second_agent_messages = captured_messages[3]
-        self.assertNotIn("SKILL PROMPT", second_agent_messages[0]["content"])
-        self.assertIn("Assigned action (2/?):\nCopy the matching files.", second_agent_messages[1]["content"])
-        self.assertIn("Previous agent output:\nFound two CV files.", second_agent_messages[1]["content"])
-
-    def test_action_agent_is_limited_to_three_iterations_before_verification(self):
+    def test_agent_executes_tool_calls_and_returns_final_answer(self):
         chat_calls = []
 
         def fake_chat(model, messages, tools=None, binary="ollama", response_format=None):
             chat_calls.append([message.copy() for message in messages])
+            if len(chat_calls) <= 3:
+                return {
+                    "message": {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [{
+                            "function": {
+                                "name": "bash",
+                                "arguments": {"command": "printf ok"},
+                            }
+                        }]
+                    }
+                }
+            return {"message": {"role": "assistant", "content": "Final answer after three tool iterations."}}
+
+        agent = ToolAgent("main")
+        agent.tools = []
+        agent.MAX_AGENT_ITERATIONS = 5
+
+        with patch.object(agent, "_select_skills", return_value=([], "")) as select_skills, \
+             patch.object(agent, "_execute_tool", return_value={"ok": True, "results": []}) as execute_tool, \
+             patch("cterm.new_llm.chat_with_model_api", side_effect=fake_chat):
+            result = agent._run_action_agent("Do work.")
+
+        self.assertEqual(result, "Final answer after three tool iterations.")
+        select_skills.assert_called_once_with("Do work.")
+        self.assertEqual(execute_tool.call_count, 3)
+        self.assertEqual(len(chat_calls), 4)
+
+    def test_agent_reaches_iteration_limit(self):
+        def fake_chat(model, messages, tools=None, binary="ollama", response_format=None):
             if tools is None:
-                return {"message": {"content": "Final answer after three tool iterations."}}
+                return {"message": {"role": "assistant", "content": "Hit the iteration limit summary."}}
             return {
                 "message": {
+                    "role": "assistant",
+                    "content": "",
                     "tool_calls": [{
                         "function": {
                             "name": "bash",
@@ -119,220 +63,51 @@ class OrchestrationTests(unittest.TestCase):
 
         agent = ToolAgent("main")
         agent.tools = []
-
-        with patch.object(agent, "_execute_tool", return_value={"ok": True, "results": []}) as execute_tool, \
-             patch.object(agent, "_verify_history", return_value=(True, "verified")) as verify, \
-             patch("cterm.llm.chat_with_model_api", side_effect=fake_chat):
-            result = agent._run_action_agent(
-                "Do work.",
-                "Run bounded work.",
-                "",
-                1,
-                1,
-            )
-
-        self.assertTrue(result["complete"])
-        self.assertEqual(result["output"], "Final answer after three tool iterations.")
-        self.assertEqual(execute_tool.call_count, 3)
-        self.assertEqual(verify.call_count, 1)
-        self.assertEqual(len(chat_calls), 4)
-
-    def test_verifier_is_scoped_to_assigned_action(self):
-        agent = ToolAgent("main")
-        agent.tools = []
-
-        with patch.object(agent, "_verify_history", return_value=(True, "")) as verify, \
-             patch("cterm.llm.chat_with_model_api", return_value={"message": {"content": "Stopped Plex."}}):
-            agent._run_action_agent(
-                "Restart Plex.",
-                "Stop Plex.",
-                "",
-                1,
-                "?",
-            )
-
-        verification_task = verify.call_args.args[0]
-        self.assertIn("Verify only whether the assigned action is complete", verification_task)
-        self.assertIn("Assigned action:\nStop Plex.", verification_task)
-
-    def test_worker_final_answer_is_computed_only_after_successful_verification(self):
-        calls = []
-
-        def fake_chat(model, messages, tools=None, binary="ollama", response_format=None):
-            calls.append(tools)
-            if tools is None:
-                return {"message": {"content": "Final worker output."}}
-            return {"message": {"content": "Premature worker output."}}
-
-        agent = ToolAgent("main")
-        agent.tools = []
-
-        with patch.object(agent, "_verify_history", return_value=(True, "Verifier summary.")), \
-             patch("cterm.llm.chat_with_model_api", side_effect=fake_chat):
-            result = agent._run_action_agent(
-                "Do work.",
-                "Complete the assigned work.",
-                "",
-                1,
-                1,
-            )
-
-        self.assertTrue(result["complete"])
-        self.assertEqual(result["output"], "Final worker output.")
-        self.assertNotIn("Verifier summary.", result["output"])
-        self.assertEqual(calls, [[], None])
-
-    def test_incomplete_worker_outputs_verifier_summary_without_final_answer_call(self):
-        calls = []
-
-        def fake_chat(model, messages, tools=None, binary="ollama", response_format=None):
-            calls.append(tools)
-            return {"message": {"content": "Premature worker output."}}
-
-        agent = ToolAgent("main")
-        agent.tools = []
-
-        with patch.object(agent, "_verify_history", return_value=(False, "Still missing the copied file.")), \
-             patch("cterm.llm.chat_with_model_api", side_effect=fake_chat):
-            result = agent._run_action_agent(
-                "Copy the file.",
-                "Copy the selected file.",
-                "",
-                1,
-                1,
-            )
-
-        self.assertFalse(result["complete"])
-        self.assertEqual(result["output"], "Still missing the copied file.")
-        self.assertEqual(calls, [[]])
-
-    def test_debug_logs_orchestration_events(self):
-        planner_calls = 0
-
-        def fake_chat(model, messages, tools=None, binary="ollama", response_format=None):
-            nonlocal planner_calls
-            is_planner = tools and tools[0]["function"]["name"] == "new_agent"
-            if is_planner:
-                planner_calls += 1
-                if planner_calls == 1:
-                    return {
-                        "message": {
-                            "tool_calls": [{
-                                "function": {
-                                    "name": "new_agent",
-                                    "arguments": {"action": "Check CPU count."},
-                                }
-                            }]
-                        }
-                    }
-                return {"message": {"content": "CPU count checked."}}
-            return {"message": {"content": "CPU count is 16."}}
-
-        agent = ToolAgent("main", debug=True)
-        agent.tools = []
+        agent.MAX_AGENT_ITERATIONS = 2
 
         with patch.object(agent, "_select_skills", return_value=([], "")), \
-             patch.object(agent, "_verify_history", return_value=(True, "")), \
-             patch("cterm.llm.chat_with_model_api", side_effect=fake_chat), \
-             patch("sys.stderr", new_callable=StringIO) as stderr:
-            result = agent._run_with_native_tools("How many CPUs?")
+             patch.object(agent, "_execute_tool", return_value={"ok": True, "results": []}), \
+             patch("cterm.new_llm.chat_with_model_api", side_effect=fake_chat) as chat:
+            result = agent._run_action_agent("Do work.")
 
-        self.assertEqual(result, "CPU count checked.")
-        debug_output = stderr.getvalue()
-        self.assertIn("event=planner_dispatch_agent", debug_output)
-        self.assertIn("event=agent_verified", debug_output)
-        self.assertIn("event=planner_handoff_recorded", debug_output)
-        self.assertIn("event=planner_final_answer", debug_output)
-        self.assertNotIn("event=planner_start", debug_output)
-        self.assertNotIn("event=planner_iteration", debug_output)
-        self.assertNotIn("event=agent_tool_call", debug_output)
-        self.assertNotIn("event=agent_start", debug_output)
+        self.assertIn("iteration limit", result.lower())
+        self.assertEqual(chat.call_count, 3)
 
-    def test_completed_finder_matches_are_saved_and_only_path_is_handed_to_planner(self):
-        captured_messages = []
-        planner_calls = 0
-        worker_calls = 0
+    def test_agent_appends_tool_call_and_result_to_messages(self):
+        chat_calls = []
 
         def fake_chat(model, messages, tools=None, binary="ollama", response_format=None):
-            nonlocal planner_calls, worker_calls
-            captured_messages.append([message.copy() for message in messages])
-            is_planner = tools and tools[0]["function"]["name"] == "new_agent"
-            if is_planner:
-                planner_calls += 1
-                if planner_calls == 1:
-                    return {
-                        "message": {
-                            "tool_calls": [{
-                                "function": {
-                                    "name": "new_agent",
-                                    "arguments": {"action": "Find CV files."},
-                                }
-                            }]
-                        }
-                    }
-                return {"message": {"content": "Done."}}
-
-            worker_calls += 1
-            if worker_calls == 1:
+            chat_calls.append([message.copy() for message in messages])
+            if len(chat_calls) == 1:
                 return {
                     "message": {
+                        "role": "assistant",
+                        "content": "",
                         "tool_calls": [{
                             "function": {
-                                "name": "finder",
-                                "arguments": {
-                                    "path": "~",
-                                    "pattern": "*CV*",
-                                    "type_filter": "file",
-                                },
+                                "name": "bash",
+                                "arguments": {"command": "printf ok"},
                             }
                         }]
                     }
                 }
-            return {"message": {"content": "Found CV files."}}
+            return {"message": {"role": "assistant", "content": "Done."}}
 
         agent = ToolAgent("main")
         agent.tools = []
-        finder_result = {
-            "ok": True,
-            "path": "~",
-            "matches": ["Documents/Ahmed_CV.pdf", "Desktop/Resume.docx"],
-            "total": 2,
-            "truncated": False,
-        }
+        agent.MAX_AGENT_ITERATIONS = 5
 
-        with tempfile.TemporaryDirectory() as tmp, \
-             patch.dict(os.environ, {"HOME": tmp}), \
-             patch.object(agent, "_select_skills", return_value=([], "")), \
-             patch.object(agent, "_execute_tool", return_value=finder_result), \
-             patch.object(agent, "_verify_history", return_value=(True, "")), \
-             patch("cterm.llm.chat_with_model_api", side_effect=fake_chat):
-            result = agent._run_with_native_tools("Find CVs.")
+        with patch.object(agent, "_select_skills", return_value=([], "")), \
+             patch.object(agent, "_execute_tool", return_value={"ok": True, "results": []}), \
+             patch("cterm.new_llm.chat_with_model_api", side_effect=fake_chat):
+            result = agent._run_action_agent("Do work.")
 
-            self.assertEqual(result, "Done.")
-            second_planner_messages = captured_messages[-1]
-            handoff = second_planner_messages[-1]["content"]
-            payload = json.loads(handoff)
-            output = payload["output"]
-            self.assertIn("Finder results file for planner and next agent:", output)
-            self.assertIn("The JSON field `paths` is a list of path strings.", output)
-            self.assertNotIn("~/Documents/Ahmed_CV.pdf", output)
-            self.assertNotIn("~/Desktop/Resume.docx", output)
-            self.assertIn('"complete": true', handoff)
-
-            saved_path_text = output.split(
-                "Finder results file for planner and next agent: ", 1
-            )[1].split(". The JSON field", 1)[0]
-            saved_path = Path(saved_path_text)
-            self.assertEqual(saved_path.parent, Path(tmp) / "cterm" / "data")
-            saved = json.loads(saved_path.read_text(encoding="utf-8"))
-            self.assertEqual(saved["result"], finder_result)
-            self.assertNotIn("full_paths", saved)
-            self.assertIsInstance(saved["paths"], list)
-            self.assertTrue(all(isinstance(path, str) for path in saved["paths"]))
-            self.assertEqual(
-                saved["paths"],
-                ["~/Documents/Ahmed_CV.pdf", "~/Desktop/Resume.docx"],
-            )
+        self.assertEqual(result, "Done.")
+        self.assertEqual(len(chat_calls), 2)
+        second_call = chat_calls[1]
+        self.assertEqual(second_call[-2]["role"], "assistant")
+        self.assertIn("tool_calls", second_call[-2])
+        self.assertEqual(second_call[-1]["role"], "tool")
 
     def test_incomplete_worker_still_hands_off_successful_finder_results(self):
         agent = ToolAgent("main")

@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from cterm.llm import ToolAgent
+from cterm.new_llm import ToolAgent
 
 
 class FakeMCPClient:
@@ -16,8 +16,7 @@ class FakeMCPClient:
 
 class ToolApprovalTests(unittest.TestCase):
     def _agent_with_client(self, client):
-        with patch.object(ToolAgent, "_check_native_tool_support", return_value=True):
-            agent = ToolAgent("model")
+        agent = ToolAgent("model")
         agent.mcp_client = client
         return agent
 
@@ -33,7 +32,7 @@ class ToolApprovalTests(unittest.TestCase):
         ])
         agent = self._agent_with_client(client)
 
-        with patch("cterm.llm.prompt_to_add_privileged_binary", return_value=True) as prompt:
+        with patch("cterm.new_llm.prompt_to_add_privileged_binary", return_value=True) as prompt:
             result = agent._execute_tool("bash", {"command": "sudo chmod 666 new-logs.txt"})
 
         self.assertTrue(result["ok"], result)
@@ -55,7 +54,7 @@ class ToolApprovalTests(unittest.TestCase):
         ])
         agent = self._agent_with_client(client)
 
-        with patch("cterm.llm.prompt_to_add_privileged_binary", return_value=False):
+        with patch("cterm.new_llm.prompt_to_add_privileged_binary", return_value=False):
             result = agent._execute_tool("bash", {"command": "sudo chmod 666 new-logs.txt"})
 
         self.assertFalse(result["ok"], result)

@@ -11,7 +11,7 @@ from pathlib import Path
 # --- ASSUMED IMPORTS ---
 from . import __version__
 from .config import Config
-from .llm import  chat_with_tools 
+from .new_llm import  chat_with_tools 
 
 # We must import get_socket_path from the server module to know where to check
 # NOTE: The actual location must be correct for your project structure (e.g., .cterm_server)
