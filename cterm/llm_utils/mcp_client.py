@@ -130,6 +130,31 @@ class FastMCPClient:
             },
             'required': ['path', 'pattern'],
         },
+        'websearch': {
+            'type': 'object',
+            'properties': {
+                'query': {'type': 'string', 'description': 'Web search query'},
+                'num_results': {'type': 'integer', 'description': 'Number of search results to return (1-20)'},
+                'livecrawl': {'type': 'string', 'enum': ['fallback', 'preferred'], 'description': 'Live crawl mode'},
+                'type': {'type': 'string', 'enum': ['auto', 'fast', 'deep'], 'description': 'Search type'},
+                'context_max_characters': {'type': 'integer', 'description': 'Maximum characters for context string'},
+            },
+            'required': ['query'],
+        },
+        'system_info': {
+            'type': 'object',
+            'properties': {},
+            'required': [],
+        },
+        'write_file': {
+            'type': 'object',
+            'properties': {
+                'path': {'type': 'string', 'description': 'Destination file path'},
+                'content': {'type': 'string', 'description': 'Text content to write'},
+                'mode': {'type': 'string', 'enum': ['overwrite', 'append'], 'description': 'Write mode'},
+            },
+            'required': ['path', 'content'],
+        },
     }
 
     def _make_tool(self, name, description='', parameters=None):

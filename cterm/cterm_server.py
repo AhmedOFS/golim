@@ -72,18 +72,42 @@ class MCPServer:
             request_id = request.get("id", 1)
 
             if method == "tools/list":
+                import inspect
                 tools = []
                 for tool_name in dir(self.mcp):
                     if not tool_name.startswith('_'):
                         tool_func = getattr(self.mcp, tool_name, None)
                         if callable(tool_func) and hasattr(tool_func, '__mcp_tool__'):
+                            sig = inspect.signature(tool_func)
+                            properties = {}
+                            required = []
+                            for pname, param in sig.parameters.items():
+                                if pname in ('kwargs', 'args'):
+                                    continue
+                                prop = {"type": "string"}
+                                if param.annotation is not inspect.Parameter.empty:
+                                    if param.annotation is int:
+                                        prop["type"] = "integer"
+                                    elif param.annotation is bool:
+                                        prop["type"] = "boolean"
+                                    elif param.annotation is list or (
+                                        hasattr(param.annotation, '__origin__')
+                                        and param.annotation.__origin__ is list
+                                    ):
+                                        prop["type"] = "array"
+                                        inner = getattr(param.annotation, '__args__', None)
+                                        if inner and len(inner) == 1 and inner[0] is str:
+                                            prop["items"] = {"type": "string"}
+                                if param.default is inspect.Parameter.empty:
+                                    required.append(pname)
+                                properties[pname] = prop
                             tools.append({
                                 "name": tool_name,
                                 "description": tool_func.__doc__ or f"Tool: {tool_name}",
                                 "inputSchema": {
                                     "type": "object",
-                                    "properties": {},
-                                    "required": []
+                                    "properties": properties,
+                                    "required": required,
                                 }
                             })
                 send({

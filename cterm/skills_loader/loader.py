@@ -116,16 +116,24 @@ class SkillsLoader:
 
     def _parse_sections(self, text: str) -> dict[str, str]:
         sections: dict[str, list[str]] = {}
-        current = None
+        heading_stack: list[tuple[str, int]] = []  # (normalised_name, level)
 
         for line in text.splitlines():
-            match = re.match(r"^#{1,6}\s+(.+?)\s*$", line)
+            match = re.match(r"^(#{1,6})\s+(.+?)\s*$", line)
             if match:
-                current = self._normalise_heading(match.group(1))
-                sections.setdefault(current, [])
+                level = len(match.group(1))
+                name = self._normalise_heading(match.group(2))
+                # Pop stack while last entry is at >= level (sibling or parent)
+                while heading_stack and heading_stack[-1][1] >= level:
+                    heading_stack.pop()
+                heading_stack.append((name, level))
+                for hname, _ in heading_stack:
+                    sections.setdefault(hname, [])
                 continue
-            if current:
-                sections[current].append(line)
+
+            if heading_stack:
+                for hname, _ in heading_stack:
+                    sections[hname].append(line)
 
         return {heading: "\n".join(lines).strip() for heading, lines in sections.items()}
 

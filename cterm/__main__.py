@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """cterm - Main entry point"""
 import argparse
+import datetime
 import logging
+import re
 import shutil
 import subprocess
 import sys
@@ -418,6 +420,31 @@ def init_command(binary: str = "ollama") -> int:
     return 0
 
 
+def _setup_session_log():
+    log_dir = Path.home() / "cterm" / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_path = log_dir / f"cterm_{timestamp}.log"
+    log_file = open(log_path, "w", encoding="utf-8")
+    _ansi_strip = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+    real_stderr = sys.stderr
+
+    class _Tee:
+        def write(self, text):
+            real_stderr.write(text)
+            real_stderr.flush()
+            if "\n" in text:
+                log_file.write(_ansi_strip.sub("", text))
+                log_file.flush()
+        def flush(self):
+            real_stderr.flush()
+            log_file.flush()
+        def isatty(self):
+            return real_stderr.isatty()
+
+    sys.stderr = _Tee()
+    return log_file, log_path, real_stderr
+
 def chat_command(message: str, binary: str = "ollama", debug: bool = False) -> int:
     """Send a message to the configured model."""
     config = Config()
@@ -449,8 +476,11 @@ def chat_command(message: str, binary: str = "ollama", debug: bool = False) -> i
     if not ensure_server_running():
         return 1
 
+    log_file, log_path, real_stderr = _setup_session_log()
     try:
         response = chat_with_tools(model, message, binary, small_model=small_model, debug=debug)
+        log_file.write(f"\nresponse: {response}\n")
+        log_file.flush()
         print(response)
         return 0
     except KeyboardInterrupt:
@@ -459,6 +489,10 @@ def chat_command(message: str, binary: str = "ollama", debug: bool = False) -> i
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
+    finally:
+        sys.stderr = real_stderr
+        log_file.close()
+        print(f"\n\033[2m(log: {log_path})\033[0m", file=sys.stderr)
 
 
 def main(argv: list[str] | None = None) -> int:

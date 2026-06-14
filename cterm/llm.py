@@ -470,6 +470,8 @@ class ToolAgent:
 
     def _select_skills(self, user_message):
         loader = SkillsLoader(debug=self.debug)
+        skills = loader.load()
+        sys.stderr.write(f"skills: {', '.join(s.name for s in skills) or 'none'}\n")
         spinner = Spinner("Selecting Skills")
         spinner.start()
         try:
@@ -485,8 +487,10 @@ class ToolAgent:
         finally:
             spinner.stop()
 
+        names = [skill.name for skill in selected]
+        if names:
+            sys.stderr.write(f"\033[32m✓\033[0m {' '.join(names)}\n")
         if self.debug:
-            names = [skill.name for skill in selected]
             logger.debug("selected_skills=%s", json.dumps(names))
 
         return selected, loader.render_for_system_prompt(selected)
