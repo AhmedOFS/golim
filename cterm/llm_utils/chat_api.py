@@ -1,6 +1,8 @@
+import logging
+logger = logging.getLogger(__name__)
+
 def chat_with_model_api(model, messages, tools=None, binary="ollama", response_format=None):
     import json
-    import sys
     import requests
     from cterm.config import Config
 
@@ -29,7 +31,6 @@ def chat_with_model_api(model, messages, tools=None, binary="ollama", response_f
 
 def _chat_ollama(model, messages, tools=None, response_format=None):
     import json
-    import sys
     import requests
 
     payload = {"model": model, "messages": messages, "stream": False}
@@ -48,11 +49,9 @@ def _chat_ollama(model, messages, tools=None, response_format=None):
         response.raise_for_status()
     except requests.exceptions.HTTPError as exc:
         body = response.text
-        print(
-            f"[debug] chat_api HTTP {response.status_code} from Ollama:\n"
-            f"  request: model={model!r} messages={n_msg} tools={n_tools}\n"
-            f"  response body: {body}",
-            file=sys.stderr,
+        logger.error(
+            "chat_api HTTP %s from Ollama: model=%r messages=%s tools=%s body=%s",
+            response.status_code, model, n_msg, n_tools, body,
         )
         raise RuntimeError(
             f"Ollama API error {response.status_code} for model {model!r}: {body}"
@@ -68,7 +67,6 @@ _OPENROUTER_HEADERS = {
 
 def _chat_openrouter(model, messages, tools=None, response_format=None, config=None):
     import json
-    import sys
     import requests
 
     api_key = config.openrouter_api_key if config else None
@@ -98,11 +96,9 @@ def _chat_openrouter(model, messages, tools=None, response_format=None, config=N
         response.raise_for_status()
     except requests.exceptions.HTTPError as exc:
         body = response.text
-        print(
-            f"[debug] chat_api HTTP {response.status_code} from OpenRouter:\n"
-            f"  request: model={model!r} messages={n_msg} tools={n_tools}\n"
-            f"  response body: {body}",
-            file=sys.stderr,
+        logger.error(
+            "chat_api HTTP %s from OpenRouter: model=%r messages=%s tools=%s body=%s",
+            response.status_code, model, n_msg, n_tools, body,
         )
         raise RuntimeError(
             f"OpenRouter API error {response.status_code} for model {model!r}: {body}"
@@ -114,7 +110,6 @@ def _chat_openrouter(model, messages, tools=None, response_format=None, config=N
 
 def _chat_llamacpp(model, messages, tools=None, response_format=None, config=None):
     import json
-    import sys
     import requests
 
     server_url = config.llamacpp_server_url if config else "http://127.0.0.1:8083"
@@ -136,11 +131,9 @@ def _chat_llamacpp(model, messages, tools=None, response_format=None, config=Non
         response.raise_for_status()
     except requests.exceptions.HTTPError as exc:
         body = response.text
-        print(
-            f"[debug] chat_api HTTP {response.status_code} from llama.cpp:\n"
-            f"  request: model={model!r} messages={n_msg} tools={n_tools}\n"
-            f"  response body: {body}",
-            file=sys.stderr,
+        logger.error(
+            "chat_api HTTP %s from llama.cpp: model=%r messages=%s tools=%s body=%s",
+            response.status_code, model, n_msg, n_tools, body,
         )
         raise RuntimeError(
             f"llama.cpp API error {response.status_code} for model {model!r}: {body}"

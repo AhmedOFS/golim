@@ -4,6 +4,7 @@ cterm_server - Persistent, self-terminating MCP tool server.
 This server runs in the background, bound to a Unix Domain Socket (UDS),
 and shuts down after a period of inactivity.
 """
+import logging
 import os
 import sys
 import time
@@ -14,6 +15,8 @@ import json
 from pathlib import Path
 import pwd
 
+logger = logging.getLogger(__name__)
+
 # Import the MCP server and tools
 try:
     from tools_mcp import mcp
@@ -21,7 +24,7 @@ except ImportError:
     try:
         from .tools_mcp import mcp
     except ImportError:
-        print("ERROR: Could not import tools_mcp. Ensure tools_mcp.py is in the same directory.", file=sys.stderr)
+        logger.error("Could not import tools_mcp. Ensure tools_mcp.py is in the same directory.")
         sys.exit(1)
 
 # 20 minutes of inactivity
@@ -188,7 +191,7 @@ def run_server():
             os.unlink(socket_path)
         except OSError as e:
             if e.errno != 13:  # errno 13 is Permission denied
-                print(f"Error unlinking old socket {socket_path}: {e}", file=sys.stderr)
+                logger.error("Error unlinking old socket %s: %s", socket_path, e)
     
     print(f"Server starting on UDS: {socket_path}")
     
@@ -197,7 +200,7 @@ def run_server():
         while True:
             time.sleep(30)  # Check every 30 seconds
             if time.time() - mcp_server.last_activity > INACTIVITY_TIMEOUT_SECONDS:
-                print("Inactivity timeout reached. Shutting down server.")
+                logger.info("Inactivity timeout reached. Shutting down server.")
                 mcp_loop.call_soon_threadsafe(mcp_loop.stop)
                 break
     
@@ -215,7 +218,7 @@ def run_server():
         # Make socket world-readable (but not world-writable)
         os.chmod(socket_path, 0o666)
         
-        print(f"DEBUG: Socket created at {socket_path}")
+        logger.debug("Socket created at %s", socket_path)
 
         # Handle client connections
         async def handle_client(reader, writer):
@@ -228,25 +231,23 @@ def run_server():
                     return
                 
                 request_text = data.decode('utf-8').strip()
-                print(f"DEBUG: Received request: {request_text[:100]}...")
+                logger.debug("Received request: %s...", request_text[:100])
 
                 # Process the request, streaming frames directly to writer
                 await mcp_server.handle_request(request_text, writer)
 
                 # Final drain to flush any buffered bytes
                 await writer.drain()
-                print("DEBUG: Response(s) sent.")
+                logger.debug("Response(s) sent.")
 
             except Exception as e:
-                print(f"ERROR handling client: {e}", file=sys.stderr)
-                import traceback
-                traceback.print_exc(file=sys.stderr)
+                logger.exception("Error handling client: %s", e)
             finally:
                 writer.close()
                 await writer.wait_closed()
         
         # Start the asyncio server
-        print("DEBUG: Starting asyncio server...")
+        logger.debug("Starting asyncio server...")
         server = mcp_loop.run_until_complete(
             asyncio.start_server(handle_client, sock=server_socket)
         )
@@ -263,14 +264,12 @@ def run_server():
         # Run event loop
         mcp_loop.run_forever()
         
-        print("DEBUG: Event loop stopped gracefully.")
+        logger.debug("Event loop stopped gracefully.")
         
     except SystemExit:
-        print("DEBUG: Caught SystemExit.", file=sys.stderr)
+        logger.debug("Caught SystemExit.")
     except Exception as e:
-        print(f"CRITICAL ERROR: Server loop failed: {e}", file=sys.stderr)
-        import traceback
-        traceback.print_exc(file=sys.stderr)
+        logger.exception("Server loop failed: %s", e)
     finally:
         # Cleanup
         if server:
@@ -278,11 +277,11 @@ def run_server():
             mcp_loop.run_until_complete(server.wait_closed())
         
         if socket_path.exists():
-            print(f"DEBUG: Unlinking socket file: {socket_path}")
+            logger.debug("Unlinking socket file: %s", socket_path)
             os.unlink(socket_path)
         
         mcp_loop.close()
-        print("Server process exiting.")
+        logger.info("Server process exiting.")
 
 if __name__ == "__main__":
     run_server()

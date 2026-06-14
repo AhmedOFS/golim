@@ -1,5 +1,6 @@
 
 """LLM interaction module for cterm using Ollama's native tool calling"""
+import logging
 import subprocess
 import sys
 import threading
@@ -10,6 +11,8 @@ import os
 import socket
 import select as _select
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 from cterm.llm_utils.chat_api import chat_with_model_api
 from cterm.llm_utils.mcp_client import FastMCPClient
@@ -74,7 +77,7 @@ class ToolAgent:
             f"{key}={self._compact_json(value)}" for key, value in fields.items()
         )
         suffix = f" {details}" if details else ""
-        print(f"\n[debug] orchestration event={event}{suffix}", file=sys.stderr)
+        logger.debug("orchestration event=%s%s", event, suffix)
 
     def _build_execution_summary(self, tool_history):
         if not tool_history:
@@ -267,16 +270,71 @@ class ToolAgent:
         else:
             state = "unknown"
 
-        print(
-            f"\n[debug] tool={tool_name} state={state} args={json.dumps(args)}",
-            file=sys.stderr,
-        )
+        logger.debug("tool=%s state=%s args=%s", tool_name, state, json.dumps(args))
 
     def _debug_agent_response(self, content):
         if not self.debug:
             return
 
-        print(f"\n[debug] agent_response={content!r}", file=sys.stderr)
+        logger.debug("agent_response=%r", content)
+
+    def _format_tool_call(self, tool_name, args):
+        if tool_name == "finder":
+            pattern = args.get("pattern", "")
+            path = args.get("path", "")
+            return f"finder: {pattern} in {path}"
+        if tool_name == "read_file":
+            path = args.get("path", "")
+            page = args.get("page", 1)
+            s = f"read_file: {path}"
+            if page > 1:
+                s += f" (page {page})"
+            return s
+        if tool_name == "write_file":
+            path = args.get("path", "")
+            mode = args.get("mode", "overwrite")
+            s = f"write_file: {path}"
+            if mode != "overwrite":
+                s += f" [{mode}]"
+            return s
+        if tool_name in ("exec_python", "exec"):
+            code = args.get("code") or args.get("script") or args.get("source") or ""
+            first_line = code.strip().split("\n")[0] if code else ""
+            return f"exec: {_clip_label(first_line, 80)}"
+        if tool_name == "websearch":
+            return f"websearch: {_clip_label(args.get('query', ''), 100)}"
+        if tool_name == "system_info":
+            return "system_info"
+        return f"{tool_name}: {str(list(args.keys()))}" if args else tool_name
+
+    def _format_tool_result(self, result):
+        ok = result.get("ok")
+        if ok is True:
+            if "matches" in result:
+                n = result.get("total", 0)
+                truncated = result.get("truncated", False)
+                s = f"\033[32m✓\033[0m {n} matches"
+                if truncated:
+                    s += " (truncated)"
+                return s
+            if "content" in result:
+                path = result.get("path", "")
+                page = result.get("page", 1)
+                total = result.get("total_pages", 1)
+                return f"\033[32m✓\033[0m {path} (pg {page}/{total})"
+            if "bytes_written" in result:
+                return f"\033[32m✓\033[0m {result.get('path', '')} ({result['bytes_written']} bytes)"
+            if "stdout" in result:
+                preview = _clip_label(result.get("stdout", "").strip(), 80)
+                return f"\033[32m✓\033[0m {preview}" if preview else "\033[32m✓\033[0m done"
+            if "text" in result:
+                preview = _clip_label(result.get("text", "").strip(), 80)
+                return f"\033[32m✓\033[0m {preview}" if preview else "\033[32m✓\033[0m done"
+            return "\033[32m✓\033[0m ok"
+        if ok is False:
+            error = result.get("error", "unknown error")
+            return f"\033[31m✗\033[0m {error}"
+        return None
 
     def _execute_tool(self, tool_name, args):
         is_shell = tool_name == "bash"
@@ -296,15 +354,23 @@ class ToolAgent:
                 )
             )
 
+        if is_shell:
+            sys.stderr.write(f"$ {label}\n")
+        else:
+            sys.stderr.write(self._format_tool_call(tool_name, args) + "\n")
+
         spinner = Spinner(label, reserve_above=is_shell)
         spinner.start()
-        if is_shell:
-            spinner.write_above(f"$ {label}")
 
         try:
             tool_result = _call_once(args)
         finally:
             spinner.stop()
+
+        if not is_shell and isinstance(tool_result, dict):
+            result_label = self._format_tool_result(tool_result)
+            if result_label:
+                sys.stderr.write(result_label + "\n")
 
         if (
             is_shell
@@ -321,12 +387,20 @@ class ToolAgent:
             else:
                 retry_args = dict(args)
                 retry_args["allow_privileged"] = True
+                if is_shell:
+                    sys.stderr.write(f"$ {label}\n")
+                else:
+                    sys.stderr.write(self._format_tool_call(tool_name, retry_args) + "\n")
                 spinner = Spinner(label, reserve_above=is_shell)
                 spinner.start()
                 try:
                     tool_result = _call_once(retry_args)
                 finally:
                     spinner.stop()
+                    if not is_shell and isinstance(tool_result, dict):
+                        result_label = self._format_tool_result(tool_result)
+                        if result_label:
+                            sys.stderr.write(result_label + "\n")
 
         self._debug_tool_result(tool_name, args, tool_result)
         return tool_result
@@ -343,15 +417,14 @@ class ToolAgent:
                 binary=self.binary,
             )
         except Exception as e:
-            if self.debug:
-                print(f"\n[debug] skills_selection_failed error={e}", file=sys.stderr)
+            logger.debug("skills_selection_failed error=%s", e)
             selected = []
         finally:
             spinner.stop()
 
         if self.debug:
             names = [skill.name for skill in selected]
-            print(f"\n[debug] selected_skills={json.dumps(names)}", file=sys.stderr)
+            logger.debug("selected_skills=%s", json.dumps(names))
 
         return selected, loader.render_for_system_prompt(selected)
 
@@ -573,9 +646,7 @@ class ToolAgent:
             return content
 
         except Exception as e:
-            import traceback
-            print(f"\nException in _run_action_agent: {e}", file=sys.stderr)
-            traceback.print_exc(file=sys.stderr)
+            logger.exception("Exception in _run_action_agent: %s", e)
             return f"Error: {e}"
 
 

@@ -1,19 +1,18 @@
 #!/usr/bin/env python3
 """cterm - Main entry point"""
 import argparse
+import logging
 import shutil
 import subprocess
 import sys
 import time
-import logging
 from pathlib import Path
 
-# --- ASSUMED IMPORTS ---
 from . import __version__
 from .config import Config
+from .logger import setup_root_logger
 from .new_llm import  chat_with_tools 
 
-# We must import get_socket_path from the server module to know where to check
 # NOTE: The actual location must be correct for your project structure (e.g., .cterm_server)
 # Assuming a file named cterm_server.py in the same package:
 def get_socket_path() -> Path:
@@ -21,10 +20,6 @@ def get_socket_path() -> Path:
     # This must match the implementation in cterm_server.py
     import os
     return Path(f"/tmp/cterm_mcp_{os.getlogin()}.sock")
-# -----------------------
-
-# Set up logging for clarity in the process
-logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
 ## Server Management Helper
 # This function encapsulates the logic to ensure the background server is running.
@@ -58,7 +53,7 @@ def ensure_server_running(service_name: str = "cterm-mcp.service", timeout: floa
             text=True,
             timeout=5
         )
-        logging.info(f"Service '{service_name}' successfully requested to start.")
+        logging.info(f"Attempting to start {service_name}")
     except subprocess.CalledProcessError as e:
         logging.error(f"Failed to start service '{service_name}' (systemctl error):\n{e.stderr.strip()}")
         return False
@@ -499,6 +494,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     
     args = parser.parse_args(argv or sys.argv[1:])
+    setup_root_logger(debug=args.debug)
     
     if args.version:
         print(f"cterm {__version__}")
