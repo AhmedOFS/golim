@@ -19,11 +19,12 @@ from cterm.llm_utils.mcp_client import FastMCPClient
 from cterm.llm_utils.utils import Spinner, _indent, _clip_label, _run_async, get_socket_path
 from cterm.privilege import prompt_to_add_privileged_binary
 from cterm.skills_loader import SkillsLoader
+from cterm import task_tool
 
 
 
 class ToolAgent:
-    MAX_AGENT_ITERATIONS = 5
+    MAX_AGENT_ITERATIONS = 50
 
     def __init__(self, model, binary="ollama", small_model=None, debug=False):
         self.model = model
@@ -32,20 +33,6 @@ class ToolAgent:
         self.debug = debug
         self.mcp_client = None
         self.tools = []
-        self.use_native_tools = self._check_native_tool_support()
-
-    def _check_native_tool_support(self):
-        from cterm.config import Config
-        config = Config()
-        provider = config.api_provider
-        try:
-            import requests
-            if provider == "llamacpp":
-                url = config.llamacpp_server_url.rstrip("/") + "/v1/models"
-                return requests.get(url, timeout=5).status_code == 200
-            return requests.get("http://localhost:11434/api/tags", timeout=5).status_code == 200
-        except Exception:
-            return False
 
     def __enter__(self):
         socket_path = get_socket_path()
@@ -252,60 +239,10 @@ class ToolAgent:
         path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
         return str(path)
 
-    def _verify_history(self, user_message, tool_history):
-        execution_summary = self._build_execution_summary(tool_history)
-        verification_messages = [
-            {
-                "role": "system",
-                "content": (
-                    "You are a strict task completion verifier.\n\n"
-                    "Determine whether the assigned task has been fully completed "
-                    "based solely on the tool execution history.\n\n"
-                    "Respond ONLY with valid JSON:\n"
-                    '{ "complete": true|false, "summary": "..." }'
-                ),
-            },
-            {
-                "role": "user",
-                "content": (
-                    f"Assigned task:\n\n"
-                    f"{user_message}\n\n"
-                    f"Tool execution history:\n\n"
-                    f"{execution_summary}"
-                ),
-            },
-        ]
 
-        spinner = Spinner("Evaluating Completion")
-        spinner.start()
-        try:
-            response = chat_with_model_api(
-                self.small_model or self.model,
-                verification_messages,
-                tools=None,
-                binary=self.binary,
-                response_format="json",
-            )
-            content = (response.get("message", {}).get("content") or "").strip()
-            verification = self._parse_json_object(content)
-            complete = bool(verification.get("complete"))
-            summary = verification.get("summary", "")
-            self._debug_orchestration(
-                "verifier_result",
-                complete=complete,
-                summary=summary,
-            )
-            return complete, summary
-        except Exception as e:
-            logger.debug("verifier_failed error=%s", e)
-            return False, "Verifier could not determine completion."
-        finally:
-            spinner.stop()
 
     def run(self, user_message):
-        if not self.use_native_tools:
-            logger.debug("tools aren't supported by this provider")
-        return self._run_with_native_tools(user_message) if self.use_native_tools else None
+        return self._run_action_agent(user_message)
 
     def _parse_json_object(self, content):
         decoder = json.JSONDecoder()
@@ -471,7 +408,7 @@ class ToolAgent:
     def _select_skills(self, user_message):
         loader = SkillsLoader(debug=self.debug)
         skills = loader.load()
-        sys.stderr.write(f"skills: {', '.join(s.name for s in skills) or 'none'}\n")
+        sys.stderr.write(f"Available Skills: {', '.join(s.name for s in skills) or 'none'}\n")
         spinner = Spinner("Selecting Skills")
         spinner.start()
         try:
@@ -504,7 +441,7 @@ class ToolAgent:
         if "## Filesystem_Operations" in skills_prompt:
             allowed = {"finder", "bash", "exec", "read_file", "write_file"}
 
-        return [
+        tools = [
             {
                 "type": "function",
                 "function": {
@@ -516,6 +453,8 @@ class ToolAgent:
             for t in self.tools
             if allowed is None or t.name in allowed
         ]
+        tools.append(task_tool.get_tool_definition())
+        return tools
 
     def _agent_system_prompt(self):
         return (
@@ -566,145 +505,125 @@ class ToolAgent:
             return "Worker tools available: none loaded."
         return f"Worker tools available: {', '.join(names)}."
 
-    def _run_action_agent(self, original_task, action, previous_output, step_index, total_steps, skills_prompt=""):
-        system_prompt = self._agent_system_prompt()
-        ollama_tools = self._ollama_tools(skills_prompt)
-        self._debug_orchestration(
-            "agent_tools_ready",
-            step=step_index,
-            tools=[tool["function"]["name"] for tool in ollama_tools],
-        )
-        no_tools_system_prompt = (
-            f"{system_prompt} Do not call any tools in this final response; "
-            "use the previous tool results to answer the assigned action."
-        )
-
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {
-                "role": "user",
-                "content": (
-                    f"Assigned action ({step_index}/{total_steps}):\n{action}\n\n"
-                    f"Previous agent output:\n{previous_output or '<none>'}"
-                ),
-            },
-        ]
-
-        tool_history = []
-        stopped_for_final_response = False
-
-        for iteration in range(1, self.MAX_AGENT_ITERATIONS + 1):
+    def _run_action_agent(self, user_message):
+        try:
+            selected_skills, skills_prompt = self._select_skills(user_message)
             self._debug_orchestration(
-                "agent_iteration",
-                step=step_index,
-                iteration=iteration,
-                max_iterations=self.MAX_AGENT_ITERATIONS,
+                "planner_skills_selected",
+                skills=[s.name for s in selected_skills],
             )
 
-            spinner = Spinner(_clip_label(action))
-            spinner.start()
-            try:
-                response = chat_with_model_api(
-                    self.model,
-                    messages,
-                    ollama_tools,
-                    self.binary
-                )
-            finally:
-                spinner.stop()
+            system_prompt = self._agent_system_prompt()
+            ollama_tools = self._ollama_tools(skills_prompt)
+            self._debug_orchestration(
+                "agent_tools_ready",
+                tools=[tool["function"]["name"] for tool in ollama_tools],
+            )
 
-            message = response.get("message", {})
+            no_tools_system_prompt = (
+                f"{system_prompt} Do not call any tools in this final response; "
+                "use the previous tool results to answer the task."
+            )
 
-            if message.get("tool_calls"):
-                function = message["tool_calls"][0].get("function", {})
-                tool_name = function.get("name")
-                args = function.get("arguments", {})
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message},
+            ]
 
-                tool_result = self._execute_tool(tool_name, args)
+            tool_history = []
+            stopped_for_final_response = False
 
-                compact_result = tool_result
-
-                status = "failed" if (
-                    isinstance(tool_result, dict) and
-                    (tool_result.get("ok") is False or tool_result.get("error"))
-                ) else "success"
-
-                tool_history.append({
-                    "tool": tool_name,
-                    "arguments": args,
-                    "result": compact_result,
-                    "status": status,
-                })
+            for iteration in range(1, self.MAX_AGENT_ITERATIONS + 1):
                 self._debug_orchestration(
-                    "agent_tool_result",
-                    step=step_index,
+                    "agent_iteration",
                     iteration=iteration,
-                    tool=tool_name,
-                    status=status,
+                    max_iterations=self.MAX_AGENT_ITERATIONS,
                 )
 
-                execution_summary = self._build_execution_summary(tool_history)
-                messages = [
-                    {"role": "system", "content": system_prompt},
-                    {
-                        "role": "user",
-                        "content": (
-                            f"Assigned action ({step_index}/{total_steps}):\n{action}\n\n"
-                            f"Previous agent output:\n{previous_output or '<none>'}\n\n"
-                            f"Tool execution history:\n{execution_summary}\n\n"
-                            "Continue the assigned action. If it is complete, "
-                            "respond with the final concise summary."
-                        ),
-                    },
-                ]
+                spinner = Spinner("Thinking")
+                spinner.start()
+                try:
+                    response = chat_with_model_api(
+                        self.model,
+                        messages,
+                        ollama_tools,
+                        self.binary
+                    )
+                finally:
+                    spinner.stop()
 
-                continue
+                message = response.get("message", {})
 
-            stopped_for_final_response = True
-            break
+                if message.get("tool_calls"):
+                    function = message["tool_calls"][0].get("function", {})
+                    tool_name = function.get("name")
+                    args = function.get("arguments", {})
 
-        if not stopped_for_final_response:
-            self._debug_orchestration(
-                "agent_iteration_limit",
-                step=step_index,
-                max_iterations=self.MAX_AGENT_ITERATIONS,
-                tool_calls=len(tool_history),
-            )
+                    if tool_name == "create_new_task":
+                        tool_result = task_tool.execute_task(
+                            task=args.get("task"),
+                            subagent_type=args.get("subagent_type"),
+                            thoroughness_level=args.get("thoroughness_level"),
+                        )
+                    else:
+                        tool_result = self._execute_tool(tool_name, args)
 
-        verification_task = (
-            f"Assigned action:\n{action}\n\n"
-            f"Context from original user request:\n{original_task}\n\n"
-            f"Previous agent output, if relevant:\n{previous_output or '<none>'}\n\n"
-            "Verify only whether the assigned action is complete. Do not require "
-            "later or broader user-request steps to be complete."
-        )
-        complete, verifier_summary = self._verify_history(
-            verification_task, tool_history
-        )
-        self._debug_orchestration(
-            "agent_verified",
-            step=step_index,
-            complete=complete,
-            summary=verifier_summary,
-        )
+                    status = "failed" if (
+                        isinstance(tool_result, dict) and
+                        (tool_result.get("ok") is False or tool_result.get("error"))
+                    ) else "success"
 
-        if complete:
-            final_instruction = (
-                "The verifier deemed the assigned action complete. Provide only "
-                "the concise final output for this assigned action using the tool "
-                "results already available. Do not mention the verifier."
-            )
+                    tool_history.append({
+                        "tool": tool_name,
+                        "arguments": args,
+                        "result": tool_result,
+                        "status": status,
+                    })
+                    self._debug_orchestration(
+                        "agent_tool_result",
+                        iteration=iteration,
+                        tool=tool_name,
+                        status=status,
+                    )
+
+                    messages.append(message)
+                    messages.append({
+                        "role": "tool",
+                        "tool_name": tool_name,
+                        "content": json.dumps(tool_result, ensure_ascii=False),
+                    })
+
+                    continue
+
+                stopped_for_final_response = True
+                break
+
             if not stopped_for_final_response:
-                final_instruction = (
-                    f"You reached the {self.MAX_AGENT_ITERATIONS}-iteration tool "
-                    "limit, but the verifier deemed the assigned action complete. "
-                    "Provide only the concise final output for this assigned action "
-                    "using the tool results already available. Do not mention the verifier."
+                self._debug_orchestration(
+                    "agent_iteration_limit",
+                    max_iterations=self.MAX_AGENT_ITERATIONS,
+                    tool_calls=len(tool_history),
                 )
+
+            if stopped_for_final_response:
+                content = message.get("content") or ""
+                self._debug_agent_response(content)
+                self._debug_orchestration(
+                    "agent_final_answer",
+                    chars=len(content),
+                )
+                if not content:
+                    content = (
+                        "Agent completed the task, but did not produce a final "
+                        "response.\n\n"
+                        f"Execution history:\n{self._build_execution_summary(tool_history)}"
+                    )
+                return content
+
             final_messages = [
                 {"role": "system", "content": no_tools_system_prompt},
                 *messages[1:],
-                {"role": "user", "content": final_instruction},
+                {"role": "user", "content": "Provide a concise final summary of what was accomplished."},
             ]
             spinner = Spinner("Summarizing Task")
             spinner.start()
@@ -715,198 +634,26 @@ class ToolAgent:
                     tools=None,
                     binary=self.binary,
                 )
-                final_answer = response.get("message", {}).get("content") or ""
+                content = response.get("message", {}).get("content") or ""
             finally:
                 spinner.stop()
-            self._debug_agent_response(final_answer)
+            self._debug_agent_response(content)
             self._debug_orchestration(
                 "agent_final_answer",
-                step=step_index,
-                chars=len(final_answer),
+                chars=len(content),
             )
-            if not final_answer:
-                final_answer = (
-                    "Agent completed the assigned action, but did not produce a final "
-                    "response.\n\n"
-                    f"Execution history:\n{self._build_execution_summary(tool_history)}"
+            if not content:
+                content = (
+                    "Agent reached the iteration limit.\n\n"
+                    f"Tool execution history:\n{self._build_execution_summary(tool_history)}"
                 )
-        else:
-            final_answer = verifier_summary or "Verifier determined the assigned action is incomplete."
-
-        return {
-            "action": action,
-            "output": final_answer,
-            "complete": complete,
-            "verifier_summary": verifier_summary,
-            "tool_history": tool_history,
-        }
-
-    def _run_with_native_tools(self, user_message):
-        try:
-            selected_skills, skills_prompt = self._select_skills(user_message)
-            self._debug_orchestration(
-                "planner_skills_selected",
-                skills=[s.name for s in selected_skills],
-            )
-
-            previous_output = ""
-            step_results = []
-
-            planner_system = (
-                "You are a planner. First decompose the user's request "
-                "into concrete sequential actions. Describe actions and tasks not commands"
-                "You have exactly one "
-                "tool: new_agent. Call new_agent once for each action, "
-                "in order. Wait for each result before calling the next "
-                "agent. "
-                "use Snap or apt for app installations when relevant"
- 
-            )
-
-            planner_messages = [
-                {"role": "system", "content": planner_system},
-                {"role": "user", "content": user_message},
-            ]
-
-            for planner_iteration in range(1, 25):
-                spinner = Spinner("Planning")
-                spinner.start()
-                try:
-                    response = chat_with_model_api(
-                        self.model,
-                        planner_messages,
-                        self._planner_tools(),
-                        self.binary,
-                    )
-                finally:
-                    spinner.stop()
-
-                message = response.get("message", {})
-                if not message.get("tool_calls"):
-                    content = message.get("content") or ""
-                    self._debug_orchestration(
-                        "planner_final_answer",
-                        iteration=planner_iteration,
-                        completed_agents=len(step_results),
-                        chars=len(content),
-                    )
-                    if content:
-                        logger.info("Task complete (%s agents)", len(step_results))
-                        return content
-                    if step_results:
-                        return step_results[-1]["output"]
-                    return "No response"
-
-                function = message["tool_calls"][0].get("function", {})
-                tool_name = function.get("name")
-                args = function.get("arguments", {})
-                if tool_name != "new_agent":
-                    self._debug_orchestration(
-                        "planner_unknown_tool",
-                        iteration=planner_iteration,
-                        tool=tool_name,
-                    )
-                    return f"Planner requested unknown tool: {tool_name}"
-
-                action = str(args.get("action", "")).strip()
-                if not action:
-                    self._debug_orchestration(
-                        "planner_missing_action",
-                        iteration=planner_iteration,
-                        arguments=args,
-                    )
-                    return "Planner requested new_agent without an action."
-
-                step_index = len(step_results) + 1
-                self._debug_orchestration(
-                    "planner_dispatch_agent",
-                    iteration=planner_iteration,
-                    step=step_index,
-                    action=action,
-                    previous_output=previous_output or None,
-                )
-                try:
-                    result = self._run_action_agent(
-                        user_message, action, previous_output, step_index, "?", skills_prompt
-                    )
-                except Exception as exc:
-                    logger.debug(
-                        "planner_agent_failed action=%r step=%s "
-                        "previous_output_len=%s error=%s",
-                        action, step_index,
-                        len(previous_output) if previous_output else 0,
-                        exc,
-                    )
-                    raise
-                step_results.append(result)
-                previous_output = self._build_worker_handoff(result)
-                self._debug_orchestration(
-                    "planner_agent_result",
-                    iteration=planner_iteration,
-                    step=step_index,
-                    action=action,
-                    complete=result["complete"],
-                    output_chars=len(result["output"]),
-                    verifier_summary=result["verifier_summary"],
-                )
-
-                if not result["complete"]:
-                    logger.debug(
-                        "verifier=incomplete action=%r summary=%r",
-                        action, result['verifier_summary'],
-                    )
-                    # Instead of returning, just record it and let the planner continue
-                    planner_messages.append({
-                        "role": "tool",
-                        "tool_name": "new_agent",
-                        "content": self._compact_json({
-                            "action": result["action"],
-                            "output": previous_output,
-                            "complete": result["complete"],
-                        }),
-                    })
-                    # planner sees complete=false and can dispatch a follow-up agent
-                else:
-                    planner_messages.append({
-                        "role": "assistant",
-                        "content": "",
-                        "tool_calls": [{
-                            "type": "function",
-                            "function": {
-                                "name": "new_agent",
-                                "arguments": {"action": action},
-                            }
-                        }],
-                    })
-                    planner_messages.append({
-                        "role": "tool",
-                        "tool_name": "new_agent",
-                        "content": self._compact_json({
-                            "action": result["action"],
-                            "output": previous_output,
-                            "complete": result["complete"],
-                        }),
-                    })
-                self._debug_orchestration(
-                    "planner_handoff_recorded",
-                    iteration=planner_iteration,
-                    step=step_index,
-                    planner_messages=len(planner_messages),
-                )
-
-            self._debug_orchestration(
-                "planner_iteration_limit",
-                completed_agents=len(step_results),
-                last_output_chars=len(previous_output),
-            )
-            return (
-                "Planner reached its iteration limit.\n\n"
-                f"Last agent output:\n{previous_output or 'No agent was run.'}"
-            )
+            return content
 
         except Exception as e:
-            logger.exception("Exception in _run_with_native_tools: %s", e)
+            logger.exception("Exception in _run_action_agent: %s", e)
             return f"Error: {e}"
+
+
 
 
 def chat_with_tools(model, message, binary="ollama", small_model=None, debug=False):

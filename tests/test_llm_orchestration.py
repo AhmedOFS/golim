@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 from io import StringIO
 
-from cterm.new_llm import ToolAgent
+from cterm.llm import ToolAgent
 
 
 class OrchestrationTests(unittest.TestCase):
@@ -36,7 +36,7 @@ class OrchestrationTests(unittest.TestCase):
 
         with patch.object(agent, "_select_skills", return_value=([], "")) as select_skills, \
              patch.object(agent, "_execute_tool", return_value={"ok": True, "results": []}) as execute_tool, \
-             patch("cterm.new_llm.chat_with_model_api", side_effect=fake_chat):
+             patch("cterm.llm.chat_with_model_api", side_effect=fake_chat):
             result = agent._run_action_agent("Do work.")
 
         self.assertEqual(result, "Final answer after three tool iterations.")
@@ -67,7 +67,7 @@ class OrchestrationTests(unittest.TestCase):
 
         with patch.object(agent, "_select_skills", return_value=([], "")), \
              patch.object(agent, "_execute_tool", return_value={"ok": True, "results": []}), \
-             patch("cterm.new_llm.chat_with_model_api", side_effect=fake_chat) as chat:
+             patch("cterm.llm.chat_with_model_api", side_effect=fake_chat) as chat:
             result = agent._run_action_agent("Do work.")
 
         self.assertIn("iteration limit", result.lower())
@@ -99,7 +99,7 @@ class OrchestrationTests(unittest.TestCase):
 
         with patch.object(agent, "_select_skills", return_value=([], "")), \
              patch.object(agent, "_execute_tool", return_value={"ok": True, "results": []}), \
-             patch("cterm.new_llm.chat_with_model_api", side_effect=fake_chat):
+             patch("cterm.llm.chat_with_model_api", side_effect=fake_chat):
             result = agent._run_action_agent("Do work.")
 
         self.assertEqual(result, "Done.")

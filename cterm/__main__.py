@@ -13,7 +13,7 @@ from pathlib import Path
 from . import __version__
 from .config import Config
 from .logger import setup_root_logger
-from .new_llm import  chat_with_tools 
+from .llm import  chat_with_tools 
 
 # NOTE: The actual location must be correct for your project structure (e.g., .cterm_server)
 # Assuming a file named cterm_server.py in the same package:
