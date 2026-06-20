@@ -459,7 +459,6 @@ def _stream_unrestricted(command: str, timeout: int | None = None, allow_privile
 
 
 # --- Tool Definitions ---
-
 @tool
 def finder(
     path: str,
@@ -469,111 +468,241 @@ def finder(
     max_depth: int | None = None,
     type_filter: str | None = None,
     max_results: int = 1000,
-) -> dict:
+    system_inclusive: bool = False,
+    ) -> dict:
     """
-    Recursively find files/dirs under path with glob filtering, depth control,
-    and type filtering. Returns relative paths from root.
+    Fast recursive filename finder.
 
-    Args:
-        path:        Root directory (~-expanded).
-        pattern:     Required filename glob, e.g. "*.py".
-        include:     Extra globs; entry matches if it fits pattern OR any of these.
-        exclude:     Path globs to skip. Layered on top of built-in defaults
-                     (.git, node_modules, __pycache__, .venv, dist, build, etc.).
-        max_depth:   Max recursion depth (1 = immediate children). None = unlimited.
-        type_filter: "file", "dir", or None for both.
-        max_results: Result cap (default 1000).
+    ```
+    Matching is performed against basenames only.
 
-    Returns:
-        {"ok": True, "path": str, "matches": [str, ...], "total": int, "truncated": bool}
+    system_inclusive=False:
+        - excludes hidden files/directories
+        - excludes common system locations
+        - if path == "/", searches only user-content roots
+
+    system_inclusive=True:
+        - searches exactly the requested tree
+        - includes hidden files/directories
+
+    max_results is a lexical-result cap:
+        all matches are collected, sorted, then truncated.
     """
+
     import fnmatch
+    import json
+    import os
 
     def coerce_glob_list(value):
         if value is None:
             return []
+
         if isinstance(value, list):
-            return [str(item) for item in value if str(item)]
+            return [str(x) for x in value if str(x)]
+
         if isinstance(value, str):
             text = value.strip()
+
             if not text:
                 return []
+
             if text.startswith("["):
                 try:
                     parsed = json.loads(text)
                 except json.JSONDecodeError:
                     return None
+
                 if not isinstance(parsed, list):
                     return None
-                return [str(item) for item in parsed if str(item)]
-            return [item.strip() for item in text.split(",") if item.strip()]
+
+                return [str(x) for x in parsed if str(x)]
+
+            return [x.strip() for x in text.split(",") if x.strip()]
+
         return None
 
-    if pattern is None or not str(pattern).strip():
-        return {"ok": False, "error": "finder requires an explicit pattern argument"}
-    pattern = str(pattern)
+    if not pattern or not str(pattern).strip():
+        return {
+            "ok": False,
+            "error": "finder requires an explicit pattern argument",
+        }
+
     include = coerce_glob_list(include)
     if include is None:
-        return {"ok": False, "error": "include must be a list or a JSON list string"}
+        return {
+            "ok": False,
+            "error": "include must be a list or JSON list string",
+        }
+
     exclude = coerce_glob_list(exclude)
     if exclude is None:
-        return {"ok": False, "error": "exclude must be a list or a JSON list string"}
+        return {
+            "ok": False,
+            "error": "exclude must be a list or JSON list string",
+        }
 
-    expanded_root = os.path.expanduser(path)
-    if not os.path.isdir(expanded_root):
-        return {"ok": False, "error": f"Not a directory: {path}"}
+    if type_filter not in (None, "file", "dir"):
+        return {
+            "ok": False,
+            "error": 'type_filter must be "file", "dir", or None',
+        }
 
-    DEFAULT_EXCLUDE = [
-        "**/.git/**", "**/node_modules/**", "**/__pycache__/**",
-        "**/.venv/**", "**/venv/**", "**/.mypy_cache/**", "**/.pytest_cache/**",
-        "**/*.pyc", "**/.DS_Store", "**/dist/**", "**/build/**",
-        "**/.next/**", "**/.nuxt/**", "**/.cache/**",
-    ]
-    if max_depth is not None:
-        max_depth = int(max_depth)
-    if max_results is not None:
+    try:
+        if max_depth is not None:
+            max_depth = int(max_depth)
+
+            if max_depth < 0:
+                raise ValueError
+
         max_results = int(max_results)
-    effective_exclude = DEFAULT_EXCLUDE + exclude
 
-    def match_any(s, pats):
-        return any(fnmatch.fnmatch(s, p) or fnmatch.fnmatch(os.path.basename(s), p) for p in pats)
+        if max_results <= 0:
+            raise ValueError
 
-    matches, truncated = [], False
+    except (TypeError, ValueError):
+        return {
+            "ok": False,
+            "error": "invalid numeric argument",
+        }
 
-    for dirpath, dirnames, filenames in os.walk(expanded_root):
-        rel_dir = os.path.relpath(dirpath, expanded_root)
-        depth = 0 if rel_dir == "." else rel_dir.count(os.sep) + 1
+    root = os.path.abspath(os.path.expanduser(path))
 
-        if depth > 0 and match_any(rel_dir.replace(os.sep, "/"), effective_exclude):
-            dirnames.clear()
-            continue
+    if not os.path.isdir(root):
+        return {
+            "ok": False,
+            "error": f"Not a directory: {path}",
+        }
 
-        if max_depth is not None and depth >= max_depth:
-            dirnames.clear()
+    DEFAULT_EXCLUDE = {
+        ".git",
+        "__pycache__",
+        ".venv",
+        "venv",
+        ".mypy_cache",
+        ".pytest_cache",
+        "node_modules",
+        "dist",
+        "build",
+        ".next",
+        ".nuxt",
+        ".cache",
+    }
 
-        dirnames[:] = [
-            d for d in dirnames
-            if not match_any(os.path.relpath(os.path.join(dirpath, d), expanded_root).replace(os.sep, "/"), effective_exclude)
+    matches = []
+
+    def name_matches(name):
+        if fnmatch.fnmatch(name, pattern):
+            return True
+
+        for p in include:
+            if fnmatch.fnmatch(name, p):
+                return True
+
+        return False
+
+    def excluded(rel_path, name):
+        if name in DEFAULT_EXCLUDE:
+            return True
+
+        for pat in exclude:
+            if (
+                fnmatch.fnmatch(rel_path, pat)
+                or fnmatch.fnmatch(name, pat)
+            ):
+                return True
+
+        return False
+
+    if not system_inclusive and root == "/":
+        search_roots = [
+            p
+            for p in ("/home", "/Users")
+            if os.path.isdir(p)
         ]
+    else:
+        search_roots = [root]
 
-        entries = ([(d, "dir") for d in dirnames] if type_filter != "file" else []) + \
-                  ([(f, "file") for f in filenames] if type_filter != "dir" else [])
+    def walk(base_root, current_dir, depth):
+        if (
+            max_depth is not None
+            and depth > max_depth
+        ):
+            return
 
-        for name, _ in sorted(entries):
-            rel = os.path.relpath(os.path.join(dirpath, name), expanded_root).replace(os.sep, "/")
-            if match_any(rel, effective_exclude):
-                continue
-            if not fnmatch.fnmatch(name, pattern) and not (include and match_any(name, include)):
-                continue
-            matches.append(rel)
-            if len(matches) >= max_results:
-                truncated = True
-                break
+        try:
+            entries = os.scandir(current_dir)
+        except (PermissionError, FileNotFoundError, OSError):
+            return
 
-        if truncated:
-            break
+        with entries:
+            for entry in entries:
+                name = entry.name
 
-    return {"ok": True, "path": path, "matches": matches, "total": len(matches), "truncated": truncated}
+                if not system_inclusive and name.startswith("."):
+                    continue
+
+                rel = os.path.relpath(
+                    entry.path,
+                    base_root,
+                ).replace(os.sep, "/")
+
+                if excluded(rel, name):
+                    continue
+
+                try:
+                    is_dir = entry.is_dir(
+                        follow_symlinks=False
+                    )
+                except OSError:
+                    continue
+
+                if is_dir:
+                    if (
+                        type_filter != "file"
+                        and name_matches(name)
+                    ):
+                        matches.append(rel)
+
+                    walk(
+                        base_root,
+                        entry.path,
+                        depth + 1,
+                    )
+
+                else:
+                    if type_filter == "dir":
+                        continue
+
+                    if not name_matches(name):
+                        continue
+
+                    matches.append(rel)
+
+    for search_root in search_roots:
+        walk(
+            search_root,
+            search_root,
+            0,
+        )
+
+    matches.sort()
+
+    total = len(matches)
+
+    if total > max_results:
+        matches = matches[:max_results]
+        truncated = True
+    else:
+        truncated = False
+
+    return {
+        "ok": True,
+        "path": path,
+        "matches": matches,
+        "total": total,
+        "truncated": truncated,
+    }
+
 
 @tool
 def read_file(path: str, page: int = 1) -> dict:
