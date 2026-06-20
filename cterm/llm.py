@@ -148,97 +148,6 @@ class ToolAgent:
                         lines.append(f"   result {result_idx} stderr:\n{_indent(stderr, '      ')}")
         return "\n".join(lines)
 
-    def _build_worker_handoff(self, result):
-        output = result.get("output") or ""
-        tool_history = result.get("tool_history", [])
-        handoff_lines = []
-
-        saved_path = self._save_last_finder_result(tool_history)
-        if saved_path:
-            handoff_lines.append(
-                f"Finder results file for planner and next agent: {saved_path}. "
-                "The JSON field `paths` is a list of path strings."
-            )
-
-        bash_output_path = self._last_bash_output_file(tool_history)
-        if bash_output_path:
-            handoff_lines.append(
-                f"Bash output file for planner and next agent: {bash_output_path}. "
-                "The JSON field `results` contains full stdout and stderr."
-            )
-
-        if not handoff_lines:
-            return output
-        handoff_text = "\n".join(handoff_lines)
-        return f"{output}\n\n{handoff_text}".strip()
-
-    def _last_bash_output_file(self, tool_history):
-        for item in reversed(tool_history):
-            if item.get("tool") != "bash":
-                continue
-            if item.get("status") != "success":
-                continue
-            result = item.get("result")
-            if not isinstance(result, dict):
-                continue
-            output_file = result.get("output_file")
-            if output_file:
-                return str(output_file)
-        return None
-
-    def _last_finder_history_item(self, tool_history):
-        for item in reversed(tool_history):
-            if item.get("tool") != "finder":
-                continue
-            if item.get("status") != "success":
-                continue
-            result = item.get("result")
-            if not isinstance(result, dict) or "matches" not in result:
-                continue
-            if result.get("ok") is not True:
-                continue
-            return item
-        return None
-
-    def _finder_result_paths(self, finder_result):
-        root = str(finder_result.get("path") or "")
-        matches = finder_result.get("matches") or []
-        if not isinstance(matches, list):
-            return []
-        return [
-            os.path.join(root, str(match)) if root else str(match)
-            for match in matches
-        ]
-
-    def _finder_results_dir(self):
-        return Path(os.path.expanduser("~/cterm/data"))
-
-    def _save_last_finder_result(self, tool_history):
-        item = self._last_finder_history_item(tool_history)
-        if not item:
-            return None
-
-        result = item.get("result") or {}
-        data_dir = self._finder_results_dir()
-        data_dir.mkdir(parents=True, exist_ok=True)
-
-        base_name = f"finder_results_{int(time.time() * 1000)}_{os.getpid()}"
-        path = data_dir / f"{base_name}.json"
-        counter = 2
-        while path.exists():
-            path = data_dir / f"{base_name}_{counter}.json"
-            counter += 1
-
-        payload = {
-            "tool": "finder",
-            "arguments": item.get("arguments", {}),
-            "status": item.get("status"),
-            "result": result,
-            "paths": self._finder_result_paths(result),
-        }
-        path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
-        return str(path)
-
 
 
     def run(self, user_message):
@@ -471,39 +380,6 @@ class ToolAgent:
             "respond with a concise plain text summary of what was done and "
             "any important result for the next agent."
         )
-
-    def _planner_tools(self):
-        return [{
-            "type": "function",
-            "function": {
-                "name": "new_agent",
-                "description": (
-                    "Run one sequential worker agent on an atomic concrete action. "
-
-                    
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "action": {
-                            "type": "string",
-                            "description": "The concrete action for the next worker agent to complete.",
-                        },
-                    },
-                    "required": ["action"],
-                },
-            },
-        }]
-
-    def _worker_tools_notice(self):
-        names = sorted(
-            str(getattr(tool, "name", ""))
-            for tool in self.tools
-            if getattr(tool, "name", "")
-        )
-        if not names:
-            return "Worker tools available: none loaded."
-        return f"Worker tools available: {', '.join(names)}."
 
     def _run_action_agent(self, user_message):
         try:
