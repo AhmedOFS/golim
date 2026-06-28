@@ -50,6 +50,10 @@ class Spinner:
         if self.thread:
             self.thread.join(timeout=0.5)
 
+    def update_message(self, message):
+        with self._lock:
+            self.message = message
+
     def write_above(self, text, end="\n"):
         if not self.reserve_above or not self._is_tty:
             sys.stderr.write(text + end)

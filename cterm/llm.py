@@ -16,7 +16,8 @@ logger = logging.getLogger(__name__)
 
 from cterm.llm_utils.chat_api import chat_with_model_api
 from cterm.llm_utils.mcp_client import FastMCPClient
-from cterm.llm_utils.utils import Spinner, _indent, _clip_label, _run_async, get_socket_path
+from cterm.llm_utils.utils import _indent, _clip_label, _run_async, get_socket_path
+from cterm.ui import TerminalUI
 from cterm.privilege import prompt_to_add_privileged_binary
 from cterm.skills_loader import SkillsLoader
 from cterm import task_tool
@@ -33,6 +34,7 @@ class ToolAgent:
         self.debug = debug
         self.mcp_client = None
         self.tools = []
+        self.ui = TerminalUI()
 
     def __enter__(self):
         socket_path = get_socket_path()
@@ -187,71 +189,12 @@ class ToolAgent:
 
         logger.debug("agent_response=%r", content)
 
-    def _format_tool_call(self, tool_name, args):
-        if tool_name == "finder":
-            pattern = args.get("pattern", "")
-            path = args.get("path", "")
-            return f"finder: {pattern} in {path}"
-        if tool_name == "read_file":
-            path = args.get("path", "")
-            page = args.get("page", 1)
-            s = f"read_file: {path}"
-            if page > 1:
-                s += f" (page {page})"
-            return s
-        if tool_name == "write_file":
-            path = args.get("path", "")
-            mode = args.get("mode", "overwrite")
-            s = f"write_file: {path}"
-            if mode != "overwrite":
-                s += f" [{mode}]"
-            return s
-        if tool_name in ("exec_python", "exec"):
-            code = args.get("code") or args.get("script") or args.get("source") or ""
-            first_line = code.strip().split("\n")[0] if code else ""
-            return f"exec: {_clip_label(first_line, 80)}"
-        if tool_name == "websearch":
-            return f"websearch: {_clip_label(args.get('query', ''), 100)}"
-        if tool_name == "system_info":
-            return "system_info"
-        return f"{tool_name}: {str(list(args.keys()))}" if args else tool_name
-
-    def _format_tool_result(self, result):
-        ok = result.get("ok")
-        if ok is True:
-            if "matches" in result:
-                n = result.get("total", 0)
-                truncated = result.get("truncated", False)
-                s = f"\033[32m✓\033[0m {n} matches"
-                if truncated:
-                    s += " (truncated)"
-                return s
-            if "content" in result:
-                path = result.get("path", "")
-                page = result.get("page", 1)
-                total = result.get("total_pages", 1)
-                return f"\033[32m✓\033[0m {path} (pg {page}/{total})"
-            if "bytes_written" in result:
-                return f"\033[32m✓\033[0m {result.get('path', '')} ({result['bytes_written']} bytes)"
-            if "stdout" in result:
-                preview = _clip_label(result.get("stdout", "").strip(), 80)
-                return f"\033[32m✓\033[0m {preview}" if preview else "\033[32m✓\033[0m done"
-            if "text" in result:
-                preview = _clip_label(result.get("text", "").strip(), 80)
-                return f"\033[32m✓\033[0m {preview}" if preview else "\033[32m✓\033[0m done"
-            return "\033[32m✓\033[0m ok"
-        if ok is False:
-            error = result.get("error", "unknown error")
-            return f"\033[31m✗\033[0m {error}"
-        return None
-
     def _execute_tool(self, tool_name, args):
         is_shell = tool_name == "bash"
         label = _clip_label(args.get("command", tool_name)) if tool_name == "bash" else tool_name
 
         def _on_shell_stream(fd, line, end="\n"):
-            output = f"\033[33m{line}\033[0m" if fd == "stderr" else line
-            spinner.write_above(output, end=end)
+            self.ui.handle_tool_output(fd=fd, line=line, end=end)
 
         def _call_once(call_args):
             return _run_async(
@@ -263,23 +206,16 @@ class ToolAgent:
                 )
             )
 
-        if is_shell:
-            sys.stderr.write(f"$ {label}\n")
-        else:
-            sys.stderr.write(self._format_tool_call(tool_name, args) + "\n")
-
-        spinner = Spinner(label, reserve_above=is_shell)
-        spinner.start()
+        self.ui.tool_call(tool_name, args)
+        self.ui.update_spinner(label)
 
         try:
             tool_result = _call_once(args)
         finally:
-            spinner.stop()
+            self.ui.stop_spinner()
 
         if not is_shell and isinstance(tool_result, dict):
-            result_label = self._format_tool_result(tool_result)
-            if result_label:
-                sys.stderr.write(result_label + "\n")
+            self.ui.handle_tool_output(result=tool_result)
 
         if (
             is_shell
@@ -296,20 +232,14 @@ class ToolAgent:
             else:
                 retry_args = dict(args)
                 retry_args["allow_privileged"] = True
-                if is_shell:
-                    sys.stderr.write(f"$ {label}\n")
-                else:
-                    sys.stderr.write(self._format_tool_call(tool_name, retry_args) + "\n")
-                spinner = Spinner(label, reserve_above=is_shell)
-                spinner.start()
+                self.ui.tool_call(tool_name, retry_args)
+                self.ui.update_spinner(label)
                 try:
                     tool_result = _call_once(retry_args)
                 finally:
-                    spinner.stop()
+                    self.ui.stop_spinner()
                     if not is_shell and isinstance(tool_result, dict):
-                        result_label = self._format_tool_result(tool_result)
-                        if result_label:
-                            sys.stderr.write(result_label + "\n")
+                        self.ui.handle_tool_output(result=tool_result)
 
         self._debug_tool_result(tool_name, args, tool_result)
         return tool_result
@@ -318,8 +248,7 @@ class ToolAgent:
         loader = SkillsLoader(debug=self.debug)
         skills = loader.load()
         sys.stderr.write(f"Available Skills: {', '.join(s.name for s in skills) or 'none'}\n")
-        spinner = Spinner("Selecting Skills")
-        spinner.start()
+        self.ui.update_spinner("Selecting Skills")
         try:
             selected = loader.select(
                 user_message,
@@ -331,7 +260,7 @@ class ToolAgent:
             logger.debug("skills_selection_failed error=%s", e)
             selected = []
         finally:
-            spinner.stop()
+            self.ui.stop_spinner()
 
         names = [skill.name for skill in selected]
         if names:
@@ -416,8 +345,7 @@ class ToolAgent:
                     max_iterations=self.MAX_AGENT_ITERATIONS,
                 )
 
-                spinner = Spinner("Thinking")
-                spinner.start()
+                self.ui.update_spinner("Thinking")
                 try:
                     response = chat_with_model_api(
                         self.model,
@@ -426,7 +354,7 @@ class ToolAgent:
                         self.binary
                     )
                 finally:
-                    spinner.stop()
+                    self.ui.stop_spinner()
 
                 message = response.get("message", {})
 
@@ -501,8 +429,7 @@ class ToolAgent:
                 *messages[1:],
                 {"role": "user", "content": "Provide a concise final summary of what was accomplished."},
             ]
-            spinner = Spinner("Summarizing Task")
-            spinner.start()
+            self.ui.update_spinner("Summarizing Task")
             try:
                 response = chat_with_model_api(
                     self.model,
@@ -512,7 +439,7 @@ class ToolAgent:
                 )
                 content = response.get("message", {}).get("content") or ""
             finally:
-                spinner.stop()
+                self.ui.stop_spinner()
             self._debug_agent_response(content)
             self._debug_orchestration(
                 "agent_final_answer",
