@@ -745,7 +745,7 @@ def read_file(path: str, page: int = 1) -> dict:
         return {"ok": False, "error": str(e)}
 
 @tool
-def bash(command: str, stream: bool = False, allow_privileged: bool = False) -> dict:
+def bash(command: str, stream: bool = False, allow_privileged: bool = False, timeout: int | None = 120) -> dict:
     """
     Executes command lines.
 
@@ -770,8 +770,8 @@ def bash(command: str, stream: bool = False, allow_privileged: bool = False) -> 
     # ------------------------------------------------------------------ #
     if _is_bash_unrestricted():
         if stream:
-            return _stream_unrestricted(command, allow_privileged=allow_privileged)
-        return _run_unrestricted(command, allow_privileged=allow_privileged)
+            return _stream_unrestricted(command, allow_privileged=allow_privileged, timeout=timeout)
+        return _run_unrestricted(command, allow_privileged=allow_privileged, timeout=timeout)
 
     # ------------------------------------------------------------------ #
     #  Original restricted path (unchanged)                               #
@@ -794,13 +794,14 @@ def bash(command: str, stream: bool = False, allow_privileged: bool = False) -> 
 
             try:
                 if len(argv_list) > 1:
-                    result_entry = _run_pipeline(argv_list, cmd_str)
+                    result_entry = _run_pipeline(argv_list, cmd_str, timeout=timeout)
                 else:
                     result = subprocess.run(
                         argv_list[0].argv,
                         stdout=subprocess.PIPE,
                         stderr=subprocess.DEVNULL if parsed.suppress_stderr else subprocess.PIPE,
                         text=True,
+                        timeout=timeout,
                     )
                     result_entry = {
                         "command": cmd_str,
@@ -941,12 +942,20 @@ def bash(command: str, stream: bool = False, allow_privileged: bool = False) -> 
             if not parsed.suppress_stderr:
                 fd_to_stream[proc.stderr.fileno()] = "stderr"
 
+            deadline = time.monotonic() + timeout if timeout is not None else float("inf")
+
             while fd_to_stream:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    proc.kill()
+                    yield {"type": "result", "ok": False,
+                           "error": f"Command timed out: {cmd_str}", "results": results}
+                    return
                 readable, _, exceptional = select.select(
                     list(fd_to_stream),
                     [],
                     list(fd_to_stream),
-                    1.0,
+                    min(1.0, remaining),
                 )
                 for fd in exceptional:
                     fd_to_stream.pop(fd, None)

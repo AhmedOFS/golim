@@ -367,6 +367,7 @@ class ToolAgent:
 
     def _agent_system_prompt(self):
         return (
+            "plan your approach as you go forward"
             "Use the tools available to you to perform the tasks "
             "assigned to you on the user's system. "
             "Use the bash tool to execute commands, and use snap "
@@ -377,8 +378,7 @@ class ToolAgent:
             "answer the question. Use exact file paths from tool results; "
             "do not invent or rename paths in the final answer. "
             "Work only on the assigned action. When the action is complete, "
-            "respond with a concise plain text summary of what was done and "
-            "any important result for the next agent."
+            "respond with a concise plain text summary of what was done"
         )
 
     def _run_action_agent(self, user_message):

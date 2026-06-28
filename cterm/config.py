@@ -13,6 +13,7 @@ class Config:
     OPENROUTER_API_KEY = "openrouter_api_key"
     OPENROUTER_MODEL = "openrouter_model"
     OPENROUTER_SMALL_MODEL = "openrouter_small_model"
+    OLLAMA_SERVER_URL = "ollama_server_url"
     LLAMACPP_SERVER_URL = "llamacpp_server_url"
     LLAMACPP_MODEL = "llamacpp_model"
     LLAMACPP_SMALL_MODEL = "llamacpp_small_model"
@@ -74,6 +75,11 @@ class Config:
     def api_provider(self) -> str:
         """API provider: 'ollama', 'openrouter', or 'llamacpp'."""
         return self.get(self.API_PROVIDER, "ollama")
+
+    @property
+    def ollama_server_url(self) -> str:
+        """Ollama server base URL (from OLLAMA_HOST or default)."""
+        return self.get(self.OLLAMA_SERVER_URL, "http://localhost:11434")
 
     @property
     def openrouter_api_key(self) -> str | None:
