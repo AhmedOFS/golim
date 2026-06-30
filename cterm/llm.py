@@ -20,7 +20,7 @@ from cterm.llm_utils.utils import _indent, _clip_label, _run_async, get_socket_p
 from cterm.ui import TerminalUI
 from cterm.privilege import prompt_to_add_privileged_binary
 from cterm.skills_loader import SkillsLoader
-from cterm import task_tool
+from cterm.llm_utils import task_tool
 
 
 
@@ -192,8 +192,11 @@ class ToolAgent:
     def _execute_tool(self, tool_name, args):
         is_shell = tool_name == "bash"
         label = _clip_label(args.get("command", tool_name)) if tool_name == "bash" else tool_name
+        shell_stream_seen = False
 
         def _on_shell_stream(fd, line, end="\n"):
+            nonlocal shell_stream_seen
+            shell_stream_seen = True
             self.ui.handle_tool_output(fd=fd, line=line, end=end)
 
         def _call_once(call_args):
@@ -240,6 +243,9 @@ class ToolAgent:
                     self.ui.stop_spinner()
                     if not is_shell and isinstance(tool_result, dict):
                         self.ui.handle_tool_output(result=tool_result)
+
+        if is_shell and not shell_stream_seen:
+            self.ui.handle_shell_result_output(tool_result)
 
         self._debug_tool_result(tool_name, args, tool_result)
         return tool_result
@@ -296,7 +302,7 @@ class ToolAgent:
 
     def _agent_system_prompt(self):
         return (
-            "plan your approach as you go forward"
+   
             "Use the tools available to you to perform the tasks "
             "assigned to you on the user's system. "
             "Use the bash tool to execute commands, and use snap "

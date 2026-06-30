@@ -44,6 +44,26 @@ class TerminalUI:
             output = f"\033[33m{line}\033[0m" if fd == "stderr" else line
             self._spinner.write_above(output, end=end)
 
+    def handle_shell_result_output(self, result):
+        if not isinstance(result, dict):
+            return
+
+        for entry in result.get("results", []):
+            if not isinstance(entry, dict):
+                continue
+            stdout = entry.get("stdout")
+            if stdout:
+                sys.stderr.write(str(stdout))
+                if not str(stdout).endswith("\n"):
+                    sys.stderr.write("\n")
+            stderr = entry.get("stderr")
+            if stderr:
+                text = str(stderr)
+                sys.stderr.write(f"\033[33m{text}\033[0m")
+                if not text.endswith("\n"):
+                    sys.stderr.write("\n")
+        sys.stderr.flush()
+
     def _format_tool_call(self, tool_name, args):
         if tool_name == "finder":
             return f"finder: {args.get('pattern', '')} in {args.get('path', '')}"

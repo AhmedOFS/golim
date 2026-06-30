@@ -1,12 +1,11 @@
 import unittest
 import os
-import json
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
-from cterm.tools_mcp import bash, read_file
-from cterm import utils
+from cterm.tools_mcp import bash, read_file, _should_stream_with_pty
+from cterm.mcp.utils import bash_utils
 
 
 class BashParsingTests(unittest.TestCase):
@@ -61,8 +60,8 @@ class BashParsingTests(unittest.TestCase):
             whitelist = Path(tmp) / "privileged_whitelist"
 
             with patch.dict(os.environ, {"CTERM_PRIVILEGED_WHITELIST": str(whitelist)}), \
-                 patch.object(utils, "PRIVILEGED_WRAPPER", str(wrapper)):
-                parsed, err = utils._parse_command_part("sudo test -d /", [])
+                 patch.object(bash_utils, "PRIVILEGED_WRAPPER", str(wrapper)):
+                parsed, err = bash_utils._parse_command_part("sudo test -d /", [])
 
         self.assertIsNone(parsed)
         self.assertFalse(err["ok"], err)
@@ -77,20 +76,67 @@ class BashParsingTests(unittest.TestCase):
             whitelist = Path(tmp) / "privileged_whitelist"
 
             with patch.dict(os.environ, {"CTERM_PRIVILEGED_WHITELIST": str(whitelist)}), \
-                 patch.object(utils, "PRIVILEGED_WRAPPER", str(wrapper)):
-                parsed, err = utils._parse_command_part(
+                 patch.object(bash_utils, "PRIVILEGED_WRAPPER", str(wrapper)):
+                parsed, err = bash_utils._parse_command_part(
                     "sudo test -d /",
                     [],
                     allow_privileged=True,
                 )
 
             self.assertIsNone(err)
-            resolved_test = utils.shutil.which("test")
+            resolved_test = bash_utils.shutil.which("test")
             self.assertEqual(
                 parsed.argv_list[0].argv,
                 ["sudo", "--non-interactive", str(wrapper), resolved_test, "-d", "/"],
             )
             self.assertIn(resolved_test, whitelist.read_text(encoding="utf-8").splitlines())
+
+    def test_privileged_snap_and_apt_stream_with_pty(self):
+        wrapper = bash_utils.PRIVILEGED_WRAPPER
+
+        self.assertTrue(_should_stream_with_pty(["sudo", "--non-interactive", wrapper, "/usr/bin/snap", "install", "spotify"]))
+        self.assertTrue(_should_stream_with_pty(["sudo", "--non-interactive", wrapper, "/usr/bin/apt", "install", "spotify"]))
+        self.assertTrue(_should_stream_with_pty(["sudo", "--non-interactive", wrapper, "/usr/bin/apt-get", "install", "spotify"]))
+        self.assertFalse(_should_stream_with_pty(["/usr/bin/snap", "run", "spotify"]))
+        self.assertFalse(_should_stream_with_pty(["sudo", "--non-interactive", wrapper, "/usr/bin/chmod", "666", "file"]))
+
+    def test_unrestricted_privileged_apt_command_requires_pty(self):
+        wrapper = bash_utils.PRIVILEGED_WRAPPER
+
+        self.assertTrue(
+            bash_utils._command_requires_pty_streaming(
+                f"sudo --non-interactive {wrapper} /usr/bin/apt install spotify"
+            )
+        )
+        self.assertFalse(
+            bash_utils._command_requires_pty_streaming(
+                f"sudo --non-interactive {wrapper} /usr/bin/chmod 666 file"
+            )
+        )
+
+    def test_unrestricted_streaming_privileged_apt_uses_pty_helper(self):
+        calls = []
+
+        def fake_stream_command_with_pty(argv, command, results_ref, **kwargs):
+            calls.append((argv, command, kwargs))
+            yield {"type": "stream", "fd": "stdout", "line": "pty output", "end": "\n"}
+            return {
+                "command": command,
+                "stdout": "pty output",
+                "stderr": "",
+                "returncode": 0,
+            }, None
+
+        with patch("cterm.tools_mcp._is_bash_unrestricted", return_value=True), \
+             patch("cterm.privilege.is_privileged_binary_allowed", return_value=True), \
+             patch.object(bash_utils, "_stream_command_with_pty", fake_stream_command_with_pty):
+            frames = list(bash("sudo apt install spotify", stream=True))
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][0], ["/bin/bash", "-c", calls[0][1]])
+        self.assertIn(f"{bash_utils.PRIVILEGED_WRAPPER} /usr/bin/apt", calls[0][1])
+        self.assertEqual(frames[0]["line"], "pty output")
+        self.assertTrue(frames[-1]["ok"], frames)
 
     def test_streaming_stdout_still_works(self):
         frames = list(bash("printf hello", stream=True))
@@ -149,18 +195,35 @@ class BashParsingTests(unittest.TestCase):
             frames,
         )
 
-    def test_long_non_find_du_bash_output_is_not_saved_to_file(self):
+    def test_long_output_is_truncated_to_first_and_last_half(self):
         with tempfile.TemporaryDirectory() as tmp, \
              patch.dict(os.environ, {"HOME": tmp}):
             result = bash("seq 1 60")
 
             self.assertTrue(result["ok"], result)
-            self.assertFalse(result["output_truncated"], result)
+            self.assertTrue(result["output_truncated"], result)
             self.assertEqual(result["output_line_count"], 60)
+            self.assertEqual(result["output_limit"], 50)
             self.assertNotIn("output_file", result)
-            self.assertEqual(len(result["results"][0]["stdout"].splitlines()), 60)
 
-    def test_long_find_output_is_saved_to_file(self):
+            lines = result["results"][0]["stdout"].splitlines()
+            # First 25 lines (1..25), a marker, then last 25 lines (36..60).
+            self.assertEqual(lines[:25], [str(i) for i in range(1, 26)])
+            self.assertIn("truncated", lines[25])
+            self.assertEqual(lines[26:], [str(i) for i in range(36, 61)])
+
+    def test_short_output_is_not_truncated(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.dict(os.environ, {"HOME": tmp}):
+            result = bash("seq 1 30")
+
+            self.assertTrue(result["ok"], result)
+            self.assertFalse(result["output_truncated"], result)
+            self.assertEqual(result["output_line_count"], 30)
+            self.assertNotIn("output_file", result)
+            self.assertEqual(len(result["results"][0]["stdout"].splitlines()), 30)
+
+    def test_long_find_output_is_truncated(self):
         with tempfile.TemporaryDirectory() as tmp, \
              patch.dict(os.environ, {"HOME": tmp}):
             root = Path(tmp) / "files"
@@ -173,14 +236,14 @@ class BashParsingTests(unittest.TestCase):
             self.assertTrue(result["ok"], result)
             self.assertTrue(result["output_truncated"], result)
             self.assertGreaterEqual(result["output_line_count"], 60)
-            self.assertEqual(len(result["results"][0]["stdout"].splitlines()), 50)
+            self.assertNotIn("output_file", result)
 
-            output_file = Path(result["output_file"])
-            self.assertEqual(output_file.parent, Path(tmp) / "cterm" / "data")
-            saved = json.loads(output_file.read_text(encoding="utf-8"))
-            self.assertGreaterEqual(len(saved["results"][0]["stdout"].splitlines()), 60)
+            lines = result["results"][0]["stdout"].splitlines()
+            self.assertEqual(len(lines[:25]), 25)
+            self.assertIn("truncated", lines[25])
+            self.assertEqual(len(lines[26:]), 25)
 
-    def test_long_du_output_is_saved_to_file(self):
+    def test_long_du_output_is_truncated(self):
         with tempfile.TemporaryDirectory() as tmp, \
              patch.dict(os.environ, {"HOME": tmp}):
             root = Path(tmp) / "sizes"
@@ -192,9 +255,9 @@ class BashParsingTests(unittest.TestCase):
 
             self.assertTrue(result["ok"], result)
             self.assertTrue(result["output_truncated"], result)
-            self.assertIn("output_file", result)
+            self.assertNotIn("output_file", result)
 
-    def test_streaming_long_find_output_emits_only_first_50_lines(self):
+    def test_streaming_emits_all_lines_and_truncates_final_result(self):
         with tempfile.TemporaryDirectory() as tmp, \
              patch.dict(os.environ, {"HOME": tmp}):
             root = Path(tmp) / "files"
@@ -205,18 +268,24 @@ class BashParsingTests(unittest.TestCase):
             frames = list(bash(f"find {root} -type f", stream=True))
 
             stream_frames = [frame for frame in frames if frame.get("type") == "stream"]
-            self.assertEqual(len(stream_frames), 50)
+            # Streaming is not capped; all 60 lines are emitted live.
+            self.assertEqual(len(stream_frames), 60)
+            # The final result frame is truncated (first 25 + marker + last 25).
             self.assertTrue(frames[-1]["output_truncated"], frames[-1])
-            self.assertTrue(Path(frames[-1]["output_file"]).exists())
+            self.assertNotIn("output_file", frames[-1])
+            result_lines = frames[-1]["results"][0]["stdout"].splitlines()
+            self.assertEqual(len(result_lines[:25]), 25)
+            self.assertIn("truncated", result_lines[25])
+            self.assertEqual(len(result_lines[26:]), 25)
 
-    def test_streaming_long_non_find_du_output_emits_all_lines(self):
+    def test_streaming_short_output_is_not_truncated(self):
         with tempfile.TemporaryDirectory() as tmp, \
              patch.dict(os.environ, {"HOME": tmp}):
-            frames = list(bash("seq 1 60", stream=True))
+            frames = list(bash("seq 1 30", stream=True))
 
             stream_frames = [frame for frame in frames if frame.get("type") == "stream"]
-            self.assertEqual(len(stream_frames), 60)
-            self.assertEqual(stream_frames[-1]["line"], "60")
+            self.assertEqual(len(stream_frames), 30)
+            self.assertEqual(stream_frames[-1]["line"], "30")
             self.assertFalse(frames[-1]["output_truncated"], frames[-1])
             self.assertNotIn("output_file", frames[-1])
 

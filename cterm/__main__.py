@@ -557,10 +557,7 @@ def chat_command(message: str, binary: str = "ollama", debug: bool = False) -> i
     small_model = config.small_model
     provider = config.api_provider
 
-    if not model:
-        print("Error: No model configured")
-        print("Run 'cterm -i' to initialize")
-        return 1
+
 
     if provider == "ollama":
         if not shutil.which(binary):
@@ -585,6 +582,10 @@ def chat_command(message: str, binary: str = "ollama", debug: bool = False) -> i
         else:
               model = config.llamacpp_model
               small_model = config.llamacpp_small_model
+    if not model:
+        print("Error: No model configured")
+        print("Run 'cterm -i' to initialize")
+        return 1
     # Ensure the UDS server daemon is running for tool execution
     if not ensure_server_running():
         return 1
