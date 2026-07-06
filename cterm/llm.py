@@ -2,7 +2,6 @@
 """LLM interaction module for cterm using Ollama's native tool calling"""
 import logging
 import subprocess
-import sys
 import threading
 import time
 import json
@@ -27,14 +26,14 @@ from cterm.llm_utils import task_tool
 class ToolAgent:
     MAX_AGENT_ITERATIONS = 50
 
-    def __init__(self, model, binary="ollama", small_model=None, debug=False):
+    def __init__(self, model, binary="ollama", small_model=None, debug=False, ui=None):
         self.model = model
         self.small_model = small_model
         self.binary = binary
         self.debug = debug
         self.mcp_client = None
         self.tools = []
-        self.ui = TerminalUI()
+        self.ui = ui or TerminalUI()
 
     def __enter__(self):
         socket_path = get_socket_path()
@@ -253,7 +252,7 @@ class ToolAgent:
     def _select_skills(self, user_message):
         loader = SkillsLoader(debug=self.debug)
         skills = loader.load()
-        sys.stderr.write(f"Available Skills: {', '.join(s.name for s in skills) or 'none'}\n")
+        self.ui.message(f"Available Skills: {', '.join(s.name for s in skills) or 'none'}")
         self.ui.update_spinner("Selecting Skills")
         try:
             selected = loader.select(
@@ -270,7 +269,7 @@ class ToolAgent:
 
         names = [skill.name for skill in selected]
         if names:
-            sys.stderr.write(f"\033[32m✓\033[0m {' '.join(names)}\n")
+            self.ui.message(f"\033[32m✓\033[0m {' '.join(names)}")
         if self.debug:
             logger.debug("selected_skills=%s", json.dumps(names))
 
@@ -465,6 +464,6 @@ class ToolAgent:
 
 
 
-def chat_with_tools(model, message, binary="ollama", small_model=None, debug=False):
-    with ToolAgent(model, binary, small_model, debug=debug) as agent:
+def chat_with_tools(model, message, binary="ollama", small_model=None, debug=False, ui=None):
+    with ToolAgent(model, binary, small_model, debug=debug, ui=ui) as agent:
         return agent.run(message)

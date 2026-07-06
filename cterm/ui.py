@@ -21,6 +21,10 @@ class TerminalUI:
             self._spinner.stop()
             self._spinner = None
 
+    def message(self, text):
+        sys.stderr.write(f"{text}\n")
+        sys.stderr.flush()
+
     def tool_call(self, tool_name, args):
         if tool_name == "bash":
             label = _clip_label(args.get("command", ""), 120)

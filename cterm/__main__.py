@@ -609,6 +609,90 @@ def chat_command(message: str, binary: str = "ollama", debug: bool = False) -> i
         print(f"\n\033[2m(log: {log_path})\033[0m", file=sys.stderr)
 
 
+def _resolve_chat_settings(binary: str = "ollama") -> tuple[str | None, str | None, str | None]:
+    config = Config()
+    model = config.selected_model
+    small_model = config.small_model
+    provider = config.api_provider
+
+    if provider == "ollama":
+        if not shutil.which(binary):
+            return f"Error: {binary} is not installed", None, None
+        model = config.selected_model
+        small_model = config.small_model
+    elif provider == "openrouter":
+        if not config.openrouter_api_key:
+            return "Error: OpenRouter API key not configured\nRun 'cterm -i' to set it up", None, None
+        model = config.openrouter_model
+        small_model = config.openrouter_small_model
+    elif provider == "llamacpp":
+        if not config.llamacpp_server_url:
+            return "Error: llama.cpp server URL not configured\nRun 'cterm -i' to set it up", None, None
+        model = config.llamacpp_model
+        small_model = config.llamacpp_small_model
+
+    if not model:
+        return "Error: No model configured\nRun 'cterm -i' to initialize", None, None
+
+    return None, model, small_model
+
+
+def _create_tui_log():
+    log_dir = Path.home() / "cterm" / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_path = log_dir / f"cterm_{timestamp}.log"
+    return open(log_path, "w", encoding="utf-8"), log_path
+
+
+def tui_command(binary: str = "ollama", debug: bool = False) -> int:
+    """Open the default Textual interface."""
+    from .tui import ChatResult, CtermApp
+
+    config = Config()
+    provider = config.api_provider
+    if provider == "openrouter":
+        model_label = config.openrouter_model or "OpenRouter"
+    elif provider == "llamacpp":
+        model_label = config.llamacpp_model or "llama.cpp"
+    else:
+        model_label = config.selected_model or "Ollama"
+
+    def _runner(message, ui):
+        error, model, small_model = _resolve_chat_settings(binary)
+        log_file, log_path = _create_tui_log()
+        try:
+            log_file.write(f"prompt: {message}\n")
+            if error:
+                log_file.write(f"error: {error}\n")
+                return ChatResult(False, error, str(log_path))
+            if not ensure_server_running():
+                error_text = "Error: cterm tool server could not be started"
+                log_file.write(f"error: {error_text}\n")
+                return ChatResult(False, error_text, str(log_path))
+
+            response = chat_with_tools(
+                model,
+                message,
+                binary,
+                small_model=small_model,
+                debug=debug,
+                ui=ui,
+            )
+            log_file.write(f"\nresponse: {response}\n")
+            return ChatResult(True, response, str(log_path))
+        finally:
+            log_file.flush()
+            log_file.close()
+
+    try:
+        result = CtermApp(_runner, model_label, debug=debug).run()
+        return int(result or 0)
+    except ImportError as exc:
+        print(f"Error: Textual is required for the default UI: {exc}")
+        return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     """Main entry point for cterm CLI."""
     parser = argparse.ArgumentParser(
@@ -641,7 +725,7 @@ def main(argv: list[str] | None = None) -> int:
         help="message to send to the LLM"
     )
     
-    args = parser.parse_args(argv or sys.argv[1:])
+    args = parser.parse_args(sys.argv[1:] if argv is None else argv)
     setup_root_logger(debug=args.debug)
     
     if args.version:
@@ -653,8 +737,7 @@ def main(argv: list[str] | None = None) -> int:
     
     # Chat mode
     if not args.message:
-        parser.print_help()
-        return 1
+        return tui_command(args.binary, debug=args.debug)
     
     message = " ".join(args.message)
     return chat_command(message, args.binary, debug=args.debug)
