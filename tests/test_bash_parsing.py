@@ -4,7 +4,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
-from cterm.tools_mcp import bash, read_file, _should_stream_with_pty
+from cterm.mcp.tools_mcp import bash, read_file, _should_stream_with_pty
 from cterm.mcp.utils import bash_utils
 
 

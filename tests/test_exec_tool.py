@@ -1,6 +1,6 @@
 import unittest
 
-from cterm.tools_mcp import mcp
+from cterm.mcp.tools_mcp import mcp
 
 
 class ExecToolTests(unittest.TestCase):

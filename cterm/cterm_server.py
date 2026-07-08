@@ -19,10 +19,10 @@ logger = logging.getLogger(__name__)
 
 # Import the MCP server and tools
 try:
-    from tools_mcp import mcp
+    from cterm.mcp.tools_mcp import mcp
 except ImportError:
     try:
-        from .tools_mcp import mcp
+        from .mcp.tools_mcp import mcp
     except ImportError:
         logger.error("Could not import tools_mcp. Ensure tools_mcp.py is in the same directory.")
         sys.exit(1)

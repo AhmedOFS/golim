@@ -1,11 +1,15 @@
 """Thin terminal UI layer for cterm client output."""
 
 import sys
+from typing import Any, Protocol
 
+from cterm.agent_ui import AgentUI
 from cterm.llm_utils.utils import Spinner, _clip_label
+from cterm.privilege import prompt_to_add_privileged_binary
 
 
-class TerminalUI:
+
+class TerminalUI(AgentUI):
     def __init__(self):
         self._spinner = None
 
@@ -67,6 +71,9 @@ class TerminalUI:
                 if not text.endswith("\n"):
                     sys.stderr.write("\n")
         sys.stderr.flush()
+
+    def approve_privileged_binary(self, binary):
+        return prompt_to_add_privileged_binary(binary)
 
     def _format_tool_call(self, tool_name, args):
         if tool_name == "finder":

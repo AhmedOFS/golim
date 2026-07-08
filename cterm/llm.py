@@ -11,13 +11,14 @@ import socket
 import select as _select
 from pathlib import Path
 
+from cterm.ui.basic import TerminalUI
+
 logger = logging.getLogger(__name__)
 
+from cterm.agent_ui import AgentUI
 from cterm.llm_utils.chat_api import chat_with_model_api
 from cterm.llm_utils.mcp_client import FastMCPClient
 from cterm.llm_utils.utils import _indent, _clip_label, _run_async, get_socket_path
-from cterm.ui import TerminalUI
-from cterm.privilege import prompt_to_add_privileged_binary
 from cterm.skills_loader import SkillsLoader
 from cterm.llm_utils import task_tool
 
@@ -26,7 +27,14 @@ from cterm.llm_utils import task_tool
 class ToolAgent:
     MAX_AGENT_ITERATIONS = 50
 
-    def __init__(self, model, binary="ollama", small_model=None, debug=False, ui=None):
+    def __init__(
+        self,
+        model,
+        binary="ollama",
+        small_model=None,
+        debug=False,
+        ui: AgentUI | None = None,
+    ):
         self.model = model
         self.small_model = small_model
         self.binary = binary
@@ -226,7 +234,7 @@ class ToolAgent:
             and tool_result.get("approval_kind") == "privileged_whitelist"
         ):
             binary = tool_result.get("binary", "")
-            if not prompt_to_add_privileged_binary(binary):
+            if not self.ui.approve_privileged_binary(binary):
                 tool_result = {
                     "ok": False,
                     "error": f"Privileged command not approved: {binary}",

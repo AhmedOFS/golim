@@ -30,8 +30,8 @@ try:
     )
 except ImportError:
     try:
-        from .mcp.utils.mcp_utils import _read_cterm_config
-        from .mcp.utils.web_utils import (
+        from .utils.mcp_utils import _read_cterm_config
+        from .utils.web_utils import (
             EXA_MCP_URL,
             MAX_NUM_RESULTS,
             NO_RESULTS,
@@ -42,7 +42,7 @@ except ImportError:
             _exa_api_key,
             _parallel_api_key
         )
-        from .mcp.utils.bash_utils import (
+        from .utils.bash_utils import (
             OUTPUT_LINE_LIMIT,
             _is_bash_unrestricted,
             _requires_pty_streaming,

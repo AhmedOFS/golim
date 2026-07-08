@@ -61,6 +61,7 @@ class FastMCPClient:
                     if not line:
                         continue
                     frame = json.loads(line.decode())
+
                     if "stream" in frame:
                         if on_stream:
                             stream = frame["stream"]
