@@ -32,3 +32,6 @@ class AgentUI(Protocol):
 
     def approve_privileged_binary(self, binary: str) -> bool:
         ...
+
+    def approve_python_code(self, code: str) -> bool:
+        ...

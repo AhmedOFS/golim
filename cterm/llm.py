@@ -12,6 +12,7 @@ import select as _select
 from pathlib import Path
 
 from cterm.ui.basic import TerminalUI
+from cterm.config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -198,6 +199,7 @@ class ToolAgent:
 
     def _execute_tool(self, tool_name, args):
         is_shell = tool_name == "bash"
+        is_exec = tool_name in ("exec_python", "exec")
         label = _clip_label(args.get("command", tool_name)) if tool_name == "bash" else tool_name
         shell_stream_seen = False
 
@@ -217,6 +219,19 @@ class ToolAgent:
             )
 
         self.ui.tool_call(tool_name, args)
+
+        if is_exec and not Config().unrestricted_bash:
+            code = args.get("code") or args.get("script") or args.get("source") or ""
+            if not self.ui.approve_python_code(code):
+                tool_result = {
+                    "ok": False,
+                    "error": "Python code execution not approved by user",
+                }
+                if not is_shell and isinstance(tool_result, dict):
+                    self.ui.handle_tool_output(result=tool_result)
+                self._debug_tool_result(tool_name, args, tool_result)
+                return tool_result
+
         self.ui.update_spinner(label)
 
         try:

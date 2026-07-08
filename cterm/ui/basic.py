@@ -75,6 +75,30 @@ class TerminalUI(AgentUI):
     def approve_privileged_binary(self, binary):
         return prompt_to_add_privileged_binary(binary)
 
+    def approve_python_code(self, code):
+        if self._spinner:
+            self._spinner.stop()
+            self._spinner = None
+
+        sys.stderr.write("\n\033[1mPython code requires approval:\033[0m\n")
+        sys.stderr.write("\033[90m" + "-" * 40 + "\033[0m\n")
+        for line in code.split("\n"):
+            sys.stderr.write(f"\033[33m{line}\033[0m\n")
+        sys.stderr.write("\033[90m" + "-" * 40 + "\033[0m\n")
+
+        prompt = "Execute this Python code? [Y/N] "
+        try:
+            with open("/dev/tty", "r+", encoding="utf-8") as tty:
+                tty.write(prompt)
+                tty.flush()
+                answer = tty.readline()
+        except OSError:
+            try:
+                answer = input(prompt)
+            except (EOFError, KeyboardInterrupt):
+                return False
+        return answer.strip().lower() in {"y", "yes"}
+
     def _format_tool_call(self, tool_name, args):
         if tool_name == "finder":
             return f"finder: {args.get('pattern', '')} in {args.get('path', '')}"

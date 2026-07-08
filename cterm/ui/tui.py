@@ -11,6 +11,7 @@ from rich.theme import Theme
 from rich.console import Console, RenderableType
 from rich.markdown import Markdown
 from rich.style import Style as RichStyle
+from rich.syntax import Syntax
 from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult
@@ -71,6 +72,7 @@ class ApprovalRequest:
     binary: str
     event: threading.Event
     answer: bool | None = None
+    code: str | None = None
 
 
 class Transcript(ScrollView, can_focus=False):
@@ -402,6 +404,15 @@ class TextualAgentUI(AgentUI):
         event.wait()
         return bool(request.answer)
 
+    def approve_python_code(self, code):
+        if not self.app.is_run_active(self.run_id):
+            return False
+        event = threading.Event()
+        request = ApprovalRequest(self.run_id, "", event, code=code)
+        self.app.call_from_thread(self.app.start_python_approval_prompt, request)
+        event.wait()
+        return bool(request.answer)
+
     def _format_tool_result(self, result):
         ok = result.get("ok") if isinstance(result, dict) else None
         if ok is True:
@@ -588,6 +599,7 @@ class CtermApp(App[int]):
         query_bar.display = True
         self.query_one("#transcript", Transcript).clear()
         self._active_run_id += 1
+        self._busy = True
         self.run_chat(text, self._active_run_id)
 
     def append_line(self, text: str, style: str = STYLE_TEXT, end: str = "\n") -> None:
@@ -621,6 +633,24 @@ class CtermApp(App[int]):
         else:
             self._stop_spinner()
 
+    def start_python_approval_prompt(self, request: ApprovalRequest) -> None:
+        if not self.is_run_active(request.run_id):
+            request.answer = False
+            request.event.set()
+            return
+        self._approval_request = request
+        self.set_status("")
+        syntax = Syntax(request.code or "", "python", theme="monokai", line_numbers=True)
+        self.append_line("Python code requires approval:", STYLE_WARNING)
+        transcript = self.query_one("#transcript", Transcript)
+        transcript.write(syntax)
+        self.append_line("Execute this Python code? [Y/N]", STYLE_WARNING)
+        prompt = self.query_one("#prompt", Input)
+        prompt.disabled = False
+        prompt.placeholder = "y or n"
+        prompt.value = ""
+        prompt.focus()
+
     # -- Privileged command approval ---------------------------------------
     def start_approval_prompt(self, request: ApprovalRequest) -> None:
         if not self.is_run_active(request.run_id):
@@ -644,7 +674,7 @@ class CtermApp(App[int]):
         self._approval_request = None
         prompt = self.query_one("#prompt", Input)
         prompt.placeholder = ""
-        prompt.disabled = True
+        prompt.disabled = False
         request.event.set()
 
     def _start_spinner(self) -> None:
@@ -669,12 +699,8 @@ class CtermApp(App[int]):
     def set_busy(self, busy: bool) -> None:
         self._busy = busy
         prompt = self.query_one("#prompt", Input)
-        # Deliberately NOT disabling the input while busy: the user can keep
-        # typing/editing during a run. Submission itself is still gated on
-        # self._busy in on_input_submitted, so it can't start a second
-        # concurrent run_chat — Escape/Ctrl+C (action_interrupt) remains the
-        # way to cancel an in-flight run.
         if not busy:
+            prompt.disabled = False
             prompt.placeholder = ""
             prompt.focus()
 
@@ -696,7 +722,6 @@ class CtermApp(App[int]):
 
     @work(exclusive=True, thread=True)
     def run_chat(self, message: str, run_id: int) -> None:
-        self.call_from_thread(self.set_busy, True)
         ui = TextualAgentUI(self, run_id)
         try:
             result = self.chat_runner(message, ui)
