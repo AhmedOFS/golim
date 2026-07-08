@@ -446,7 +446,7 @@ class CtermApp(App[int]):
     #outer {
         height: 100%;
         width: 100%;
-        padding: 0 4 1 4;
+        padding: 0 2 1 0;
         border: none;
         outline: none;
     }
@@ -470,6 +470,7 @@ class CtermApp(App[int]):
         width: 100%;
         border-left: solid #f3f3f3;
         padding-left: 1;
+        margin-left: 2;
     }
 
     #transcript {
@@ -495,6 +496,8 @@ class CtermApp(App[int]):
         height: 3;
         width: 100%;
         margin-top: 1;
+        margin-bottom: 1;
+        background: rgba(66, 56, 56, 0.4);
         padding: 0 1;
         align: left middle;
     }
@@ -510,12 +513,14 @@ class CtermApp(App[int]):
         height: 1;
         width: 1fr;
         border: none;
-        color: #f3f3f3;
+        background: transparent;
+        color: transparent;
         padding: 0;
     }
 
     #prompt:focus {
         border: none;
+        background: transparent;
     }
 
     #footer {
@@ -525,6 +530,7 @@ class CtermApp(App[int]):
     }
 
     #model {
+        margin-left: 1;
         width: 1fr;
     }
 
@@ -567,7 +573,7 @@ class CtermApp(App[int]):
                     yield Static("", id="status")
             with Horizontal(id="prompt_line"):
                 yield Static(">", id="prompt_marker")
-                yield Input(id="prompt", placeholder="")
+                yield Input(id="prompt", placeholder="Type your Request...")
             with Horizontal(id="footer"):
                 yield Static(self.model_label, id="model")
                 yield Static("esc Interrupt • ↑/↓ History • Tab Inspect", id="keys")
