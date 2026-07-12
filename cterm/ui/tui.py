@@ -23,6 +23,7 @@ from textual.timer import Timer
 from textual.widgets import Input, Static
 
 from cterm.agent_ui import AgentUI
+from cterm.ui.history import History
 
 
 _ANSI_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
@@ -481,9 +482,9 @@ class CtermApp(App[int]):
         scrollbar-size-vertical: 1;
         scrollbar-gutter: stable;
         scrollbar-background: #1e1e1e;
-        scrollbar-color: #2e8cff;
-        scrollbar-color-hover: #65a8ef;
-        scrollbar-color-active: #65a8ef;
+        scrollbar-color: #f3f3f3;
+        scrollbar-color-hover: #f3f3f3;
+        scrollbar-color-active: #f3f3f3;
     }
 
     #status {
@@ -514,7 +515,7 @@ class CtermApp(App[int]):
         width: 1fr;
         border: none;
         background: transparent;
-        color: transparent;
+        color: #f3f3f3;
         padding: 0;
     }
 
@@ -544,6 +545,8 @@ class CtermApp(App[int]):
         ("escape", "interrupt", "Interrupt"),
         ("ctrl+c", "interrupt", "Interrupt"),
         ("ctrl+q", "quit", "Quit"),
+        ("up", "previous_history", "History Up"),
+        ("down", "next_history", "History Down"),
     ]
 
     def __init__(
@@ -563,6 +566,7 @@ class CtermApp(App[int]):
         self._spinner_message = ""
         self._spinner_frame_index = 0
         self._spinner_timer: Timer | None = None
+        self._history = History()
 
     def compose(self) -> ComposeResult:
         with Vertical(id="outer"):
@@ -591,11 +595,9 @@ class CtermApp(App[int]):
         if not text:
             return
         if self._busy:
-            # A run is already in flight — don't start a second concurrent
-            # run_chat. Leave the typed text in place so the user can just
-            # press Enter again once the current run finishes.
             self.bell()
             return
+        self._history.add(text)
         event.input.value = ""
         # The active query is pinned above the transcript instead of being
         # written into the scrolling log, so it stays visible while the
@@ -709,6 +711,16 @@ class CtermApp(App[int]):
             prompt.disabled = False
             prompt.placeholder = ""
             prompt.focus()
+
+    def action_previous_history(self) -> None:
+        prompt = self.query_one("#prompt", Input)
+        value = self._history.previous()
+        prompt.value = value
+
+    def action_next_history(self) -> None:
+        prompt = self.query_one("#prompt", Input)
+        value = self._history.next()
+        prompt.value = value
 
     def is_run_active(self, run_id: int) -> bool:
         return self._busy and self._active_run_id == run_id
