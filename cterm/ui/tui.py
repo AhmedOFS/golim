@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import io
+import ctypes
+import os
 import re
 import threading
 from dataclasses import dataclass
@@ -84,6 +86,23 @@ class ApprovalRequest:
     event: threading.Event
     answer: bool | None = None
     code: str | None = None
+
+
+class RunCancelled(Exception):
+    """Raised inside the background chat worker when the active run is cancelled."""
+
+
+def _raise_in_thread(thread_id: int | None, exc_type: type[BaseException]) -> bool:
+    if thread_id is None:
+        return False
+    result = ctypes.pythonapi.PyThreadState_SetAsyncExc(
+        ctypes.c_ulong(thread_id),
+        ctypes.py_object(exc_type),
+    )
+    if result > 1:
+        ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_ulong(thread_id), None)
+        return False
+    return result == 1
 
 
 class Transcript(ScrollView, can_focus=False):
@@ -407,9 +426,10 @@ class Transcript(ScrollView, can_focus=False):
 class TextualAgentUI(AgentUI):
     """Adapter used by ToolAgent to render progress inside the Textual app."""
 
-    def __init__(self, app: "CtermApp", run_id: int):
+    def __init__(self, app: "CtermApp", run_id: int, cancel_event: threading.Event):
         self.app = app
         self.run_id = run_id
+        self.cancel_event = cancel_event
         self._spinner_message = ""
         self._thinking_buffer = ""
         # Per-fd "current terminal line" state. \n commits the line
@@ -418,9 +438,15 @@ class TextualAgentUI(AgentUI):
         # progress bars / spinners render correctly instead of scrolling.
         self._last_stream: dict[str, tuple[Text, str]] = {}
 
+    def is_cancelled(self) -> bool:
+        return self.cancel_event.is_set() or not self.app.is_run_active(self.run_id)
+
+    def _ensure_active(self) -> None:
+        if self.is_cancelled():
+            raise RunCancelled()
+
     def _emit(self, text: str, style: str = STYLE_TEXT) -> None:
-        if not self.app.is_run_active(self.run_id):
-            return
+        self._ensure_active()
         self.app.call_from_thread(self.app.append_line, text, style)
 
     # -- streaming tool output (stdout/stderr) ------------------------------
@@ -428,8 +454,7 @@ class TextualAgentUI(AgentUI):
         self._last_stream.clear()
 
     def _show_stream(self, fd: str, text: str, style: str) -> None:
-        if not self.app.is_run_active(self.run_id):
-            return
+        self._ensure_active()
         text = _sanitize_stream_text(text)
         if not text:
             return
@@ -444,8 +469,9 @@ class TextualAgentUI(AgentUI):
 
     def _commit_stream(self, fd: str) -> None:
         entry = self._last_stream.get(fd)
-        if entry is None or not self.app.is_run_active(self.run_id):
+        if entry is None:
             return
+        self._ensure_active()
         renderable, _ = entry
         self.app.call_from_thread(
             self.app.append_stream,
@@ -459,29 +485,28 @@ class TextualAgentUI(AgentUI):
         self._emit(_ANSI_RE.sub("", str(text)))
 
     def thinking_trace_delta(self, text):
-        if not text or not self.app.is_run_active(self.run_id):
+        if not text:
             return
+        self._ensure_active()
         clean = _ANSI_RE.sub("", str(text))
         self._thinking_buffer += clean
         self.app.call_from_thread(self.app.append_thinking_delta, self._thinking_buffer)
         self.app.call_from_thread(self.app.set_status, f"Thinking: {' '.join(self._thinking_buffer.split())[:80]}")
 
     def thinking_trace_complete(self, text):
-        if not self.app.is_run_active(self.run_id):
-            return
+        self._ensure_active()
         full_text = str(text or self._thinking_buffer).strip()
         self._thinking_buffer = ""
         if full_text:
             self.app.call_from_thread(self.app.append_thinking_trace, full_text)
 
     def update_spinner(self, message):
-        if not self.app.is_run_active(self.run_id):
-            return
+        self._ensure_active()
         self._spinner_message = str(message)
         self.app.call_from_thread(self.app.set_status, f"{self._spinner_message}...")
 
     def stop_spinner(self):
-        if not self.app.is_run_active(self.run_id):
+        if self.is_cancelled():
             return
         self.app.call_from_thread(self.app.set_status, "")
 
@@ -555,8 +580,7 @@ class TextualAgentUI(AgentUI):
             self._emit("…", STYLE_TOOL_OUTPUT)
 
     def approve_privileged_binary(self, binary):
-        if not self.app.is_run_active(self.run_id):
-            return False
+        self._ensure_active()
         event = threading.Event()
         request = ApprovalRequest(self.run_id, binary, event)
         self.app.call_from_thread(self.app.start_approval_prompt, request)
@@ -564,8 +588,7 @@ class TextualAgentUI(AgentUI):
         return bool(request.answer)
 
     def approve_python_code(self, code):
-        if not self.app.is_run_active(self.run_id):
-            return False
+        self._ensure_active()
         event = threading.Event()
         request = ApprovalRequest(self.run_id, "", event, code=code)
         self.app.call_from_thread(self.app.start_python_approval_prompt, request)
@@ -721,6 +744,9 @@ class CtermApp(App[int]):
         self._busy = False
         self._active_run_id = 0
         self._approval_request: ApprovalRequest | None = None
+        self._active_cancel_event: threading.Event | None = None
+        self._chat_worker = None
+        self._chat_thread_id: int | None = None
         self._spinner_message = ""
         self._spinner_frame_index = 0
         self._spinner_timer: Timer | None = None
@@ -765,8 +791,10 @@ class CtermApp(App[int]):
         query_bar.display = True
         self.query_one("#transcript", Transcript).clear()
         self._active_run_id += 1
+        self._active_cancel_event = threading.Event()
+        self._chat_thread_id = None
         self._busy = True
-        self.run_chat(text, self._active_run_id)
+        self._chat_worker = self.run_chat(text, self._active_run_id)
 
     def append_line(self, text: str, style: str = STYLE_TEXT, end: str = "\n") -> None:
         transcript = self.query_one("#transcript", Transcript)
@@ -891,8 +919,21 @@ class CtermApp(App[int]):
     def is_run_active(self, run_id: int) -> bool:
         return self._busy and self._active_run_id == run_id
 
+    def _cancel_active_run(self, *, force_thread: bool = True) -> None:
+        if self._active_cancel_event is not None:
+            self._active_cancel_event.set()
+        worker = self._chat_worker
+        if worker is not None and hasattr(worker, "cancel"):
+            try:
+                worker.cancel()
+            except Exception:
+                pass
+        if force_thread:
+            _raise_in_thread(self._chat_thread_id, RunCancelled)
+
     def action_interrupt(self) -> None:
         if self._busy:
+            self._cancel_active_run()
             if self._approval_request is not None:
                 self._approval_request.answer = False
                 self._approval_request.event.set()
@@ -902,11 +943,18 @@ class CtermApp(App[int]):
             self.set_busy(False)
             self.append_line("Interrupted.", STYLE_WARNING)
         else:
+            self._cancel_active_run()
+            if self._chat_thread_id is not None:
+                timer = threading.Timer(0.5, lambda: os._exit(0))
+                timer.daemon = True
+                timer.start()
             self.exit(0)
 
     @work(exclusive=True, thread=True)
     def run_chat(self, message: str, run_id: int) -> None:
-        ui = TextualAgentUI(self, run_id)
+        self._chat_thread_id = threading.get_ident()
+        cancel_event = self._active_cancel_event or threading.Event()
+        ui = TextualAgentUI(self, run_id, cancel_event)
         try:
             result = self.chat_runner(message, ui)
             if not self.is_run_active(run_id):
@@ -915,10 +963,15 @@ class CtermApp(App[int]):
             self.call_from_thread(self.append_markdown, result.text, result.ok)
             if result.log_path:
                 self.call_from_thread(self.append_line, f"(log: {result.log_path})", STYLE_DIM)
+        except RunCancelled:
+            return
         except Exception as exc:
             if self.is_run_active(run_id):
                 self.call_from_thread(self.append_line, f"Error: {exc}", STYLE_ERROR)
         finally:
+            if self._active_run_id == run_id:
+                self._chat_thread_id = None
+                self._chat_worker = None
             if self.is_run_active(run_id):
                 self.call_from_thread(self.set_status, "")
                 self.call_from_thread(self.set_busy, False)

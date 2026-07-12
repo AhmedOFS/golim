@@ -349,7 +349,8 @@ class ToolAgent:
     def _select_skills(self, user_message):
         loader = SkillsLoader(debug=self.debug)
         skills = loader.load()
-        self.ui.message(f"Available Skills: {', '.join(s.name for s in skills) or 'none'}")
+        if skills:
+            self.ui.message(f"Available Skills: {', '.join(s.name for s in skills)}")
         self.ui.update_spinner("Selecting Skills")
         try:
             selected = loader.select(
