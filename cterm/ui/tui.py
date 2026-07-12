@@ -102,6 +102,9 @@ class Transcript(ScrollView, can_focus=False):
         # The current in-progress line(s), which a subsequent replace_last
         # write will discard and redraw. Empty when nothing is pending.
         self._pending_strips: list[Strip] = []
+        # Log of committed (renderable, strip_count) for re-rendering on resize.
+        self._renderable_log: list[tuple[RenderableType, int]] = []
+        self._pending_renderable: RenderableType | None = None
         # We only ever want vertical scrolling — content wraps to width by
         # design, so a horizontal scrollbar should never appear. This is
         # enforced via `overflow-x: hidden` in DEFAULT_CSS above (the
@@ -198,16 +201,21 @@ class Transcript(ScrollView, can_focus=False):
 
         if replace_last:
             self._pending_strips = new_strips
+            self._pending_renderable = renderable
             if commit:
                 self._lines.extend(self._pending_strips)
+                self._renderable_log.append((self._pending_renderable, len(self._pending_strips)))
                 self._pending_strips = []
+                self._pending_renderable = None
         else:
-            # A non-replacing write always finalizes whatever was pending
-            # first, then appends fresh, permanent content after it.
             if self._pending_strips:
                 self._lines.extend(self._pending_strips)
+                if self._pending_renderable is not None:
+                    self._renderable_log.append((self._pending_renderable, len(self._pending_strips)))
                 self._pending_strips = []
+                self._pending_renderable = None
             self._lines.extend(new_strips)
+            self._renderable_log.append((renderable, len(new_strips)))
 
         total_lines = len(self._lines) + len(self._pending_strips)
         # NOTE: virtual_size is a reactive, but its watcher only fires when
@@ -230,6 +238,8 @@ class Transcript(ScrollView, can_focus=False):
     def clear(self) -> None:
         self._lines = []
         self._pending_strips = []
+        self._renderable_log = []
+        self._pending_renderable = None
         self.virtual_size = Size(self._content_width(), 0)
         self.show_horizontal_scrollbar = False
         self.scroll_home(animate=False)
@@ -258,11 +268,14 @@ class Transcript(ScrollView, can_focus=False):
         return strip
 
     def on_resize(self) -> None:
-        # Note: existing lines were wrapped at their original write-time
-        # width and are not re-wrapped on resize (cropped/padded only).
-        # This mirrors the same known limitation stock RichLog has.
-        total_lines = len(self._lines) + len(self._pending_strips)
-        self.virtual_size = Size(self._content_width(), total_lines)
+        width = self._content_width()
+        new_lines = []
+        for renderable, _ in self._renderable_log:
+            new_lines.extend(self._render_to_strips(renderable, width))
+        self._lines = new_lines
+        self._pending_strips = []
+        self._pending_renderable = None
+        self.virtual_size = Size(width, len(self._lines))
         self.show_horizontal_scrollbar = False
         self.refresh()
 
