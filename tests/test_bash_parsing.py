@@ -10,7 +10,7 @@ from cterm.mcp.utils import bash_utils
 
 class BashParsingTests(unittest.TestCase):
     def setUp(self):
-        self.unrestricted_patch = patch("cterm.tools_mcp._is_bash_unrestricted", return_value=False)
+        self.unrestricted_patch = patch("cterm.mcp.tools_mcp._is_bash_unrestricted", return_value=False)
         self.unrestricted_patch.start()
 
     def tearDown(self):
@@ -127,7 +127,7 @@ class BashParsingTests(unittest.TestCase):
                 "returncode": 0,
             }, None
 
-        with patch("cterm.tools_mcp._is_bash_unrestricted", return_value=True), \
+        with patch("cterm.mcp.tools_mcp._is_bash_unrestricted", return_value=True), \
              patch("cterm.privilege.is_privileged_binary_allowed", return_value=True), \
              patch.object(bash_utils, "_stream_command_with_pty", fake_stream_command_with_pty):
             frames = list(bash("sudo apt install spotify", stream=True))

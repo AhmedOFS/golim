@@ -35,8 +35,8 @@ SAMPLE_PARALLEL_RESPONSE = json.dumps({
 
 class WebSearchToolTests(unittest.TestCase):
 
-    @patch("cterm.tools_mcp._read_cterm_config", return_value={})
-    @patch("cterm.tools_mcp.requests.post")
+    @patch("cterm.mcp.utils.web_utils._read_cterm_config", return_value={})
+    @patch("cterm.mcp.utils.web_utils.requests.post")
     def test_exa_happy_path(self, mock_post, mock_config):
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -59,8 +59,8 @@ class WebSearchToolTests(unittest.TestCase):
         self.assertEqual(payload["params"]["arguments"]["type"], "auto")
         self.assertEqual(payload["params"]["arguments"]["livecrawl"], "fallback")
 
-    @patch("cterm.tools_mcp._read_cterm_config")
-    @patch("cterm.tools_mcp.requests.post")
+    @patch("cterm.mcp.utils.web_utils._read_cterm_config")
+    @patch("cterm.mcp.utils.web_utils.requests.post")
     def test_exa_with_api_key(self, mock_post, mock_config):
         mock_config.return_value = {"exa_api_key": "test-key-123"}
         mock_response = MagicMock()
@@ -74,8 +74,8 @@ class WebSearchToolTests(unittest.TestCase):
         call_url = mock_post.call_args[0][0]
         self.assertIn("exaApiKey=test-key-123", call_url)
 
-    @patch("cterm.tools_mcp._read_cterm_config", return_value={})
-    @patch("cterm.tools_mcp.requests.post")
+    @patch("cterm.mcp.utils.web_utils._read_cterm_config", return_value={})
+    @patch("cterm.mcp.utils.web_utils.requests.post")
     def test_exa_with_custom_params(self, mock_post, mock_config):
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -90,8 +90,8 @@ class WebSearchToolTests(unittest.TestCase):
         self.assertEqual(args["type"], "fast")
         self.assertEqual(args["livecrawl"], "preferred")
 
-    @patch("cterm.tools_mcp._read_cterm_config", return_value={})
-    @patch("cterm.tools_mcp.requests.post")
+    @patch("cterm.mcp.utils.web_utils._read_cterm_config", return_value={})
+    @patch("cterm.mcp.utils.web_utils.requests.post")
     def test_clamps_num_results(self, mock_post, mock_config):
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -106,8 +106,8 @@ class WebSearchToolTests(unittest.TestCase):
         payload = mock_post.call_args[1]["json"]
         self.assertEqual(payload["params"]["arguments"]["numResults"], 1)
 
-    @patch("cterm.tools_mcp._read_cterm_config")
-    @patch("cterm.tools_mcp.requests.post")
+    @patch("cterm.mcp.utils.web_utils._read_cterm_config")
+    @patch("cterm.mcp.utils.web_utils.requests.post")
     def test_exa_failure_returns_no_results(self, mock_post, mock_config):
         mock_config.return_value = {}
         mock_response = MagicMock()
@@ -123,8 +123,8 @@ class WebSearchToolTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["text"], NO_RESULTS)
 
-    @patch("cterm.tools_mcp._read_cterm_config", return_value={})
-    @patch("cterm.tools_mcp.requests.post")
+    @patch("cterm.mcp.utils.web_utils._read_cterm_config", return_value={})
+    @patch("cterm.mcp.utils.web_utils.requests.post")
     def test_network_error_returns_no_results(self, mock_post, mock_config):
         mock_post.side_effect = (
             __import__("requests").exceptions.ConnectionError("connection failed")
@@ -135,8 +135,8 @@ class WebSearchToolTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["text"], NO_RESULTS)
 
-    @patch("cterm.tools_mcp._read_cterm_config")
-    @patch("cterm.tools_mcp.requests.post")
+    @patch("cterm.mcp.utils.web_utils._read_cterm_config")
+    @patch("cterm.mcp.utils.web_utils.requests.post")
     def test_parallel_provider(self, mock_post, mock_config):
         mock_config.return_value = {"websearch_provider": "parallel"}
         mock_response = MagicMock()
@@ -156,8 +156,8 @@ class WebSearchToolTests(unittest.TestCase):
         self.assertEqual(payload["params"]["name"], "web_search")
         self.assertEqual(payload["params"]["arguments"]["objective"], "test query")
 
-    @patch("cterm.tools_mcp._read_cterm_config")
-    @patch("cterm.tools_mcp.requests.post")
+    @patch("cterm.mcp.utils.web_utils._read_cterm_config")
+    @patch("cterm.mcp.utils.web_utils.requests.post")
     def test_parallel_with_api_key(self, mock_post, mock_config):
         mock_config.return_value = {
             "websearch_provider": "parallel",
@@ -173,8 +173,8 @@ class WebSearchToolTests(unittest.TestCase):
         headers = mock_post.call_args[1].get("headers", {})
         self.assertEqual(headers.get("Authorization"), "Bearer par-key-456")
 
-    @patch("cterm.tools_mcp._read_cterm_config", return_value={})
-    @patch("cterm.tools_mcp.requests.post")
+    @patch("cterm.mcp.utils.web_utils._read_cterm_config", return_value={})
+    @patch("cterm.mcp.utils.web_utils.requests.post")
     def test_parallel_failure_returns_no_results(self, mock_post, mock_config):
         mock_post.side_effect = (
             __import__("requests").exceptions.Timeout("timed out")
@@ -185,8 +185,8 @@ class WebSearchToolTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["text"], NO_RESULTS)
 
-    @patch("cterm.tools_mcp._read_cterm_config", return_value={})
-    @patch("cterm.tools_mcp.requests.post")
+    @patch("cterm.mcp.utils.web_utils._read_cterm_config", return_value={})
+    @patch("cterm.mcp.utils.web_utils.requests.post")
     def test_parallel_failure_explicit(self, mock_post, mock_config):
         mock_response = MagicMock()
         mock_response.status_code = 500
