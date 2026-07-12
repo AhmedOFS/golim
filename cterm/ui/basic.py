@@ -12,6 +12,7 @@ from cterm.privilege import prompt_to_add_privileged_binary
 class TerminalUI(AgentUI):
     def __init__(self):
         self._spinner = None
+        self._thinking_live = False
 
     def update_spinner(self, message):
         if self._spinner is None:
@@ -28,6 +29,27 @@ class TerminalUI(AgentUI):
     def message(self, text):
         sys.stderr.write(f"{text}\n")
         sys.stderr.flush()
+
+    def thinking_trace_delta(self, text):
+        if not text:
+            return
+        prefix = "THINKING: " if not self._thinking_live else ""
+        self._thinking_live = True
+        if self._spinner:
+            self._spinner.write_above(f"\033[90m{prefix}{text}\033[0m", end="")
+        else:
+            sys.stderr.write(f"\033[90m{prefix}{text}\033[0m")
+            sys.stderr.flush()
+
+    def thinking_trace_complete(self, text):
+        if not text:
+            return
+        if self._thinking_live:
+            sys.stderr.write("\n")
+        collapsed = " ".join(str(text).split())
+        sys.stderr.write(f"\033[90m▶ THINKING: {_clip_label(collapsed, 120)}\033[0m\n")
+        sys.stderr.flush()
+        self._thinking_live = False
 
     def tool_call(self, tool_name, args):
         if tool_name == "bash":

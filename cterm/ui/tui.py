@@ -27,6 +27,8 @@ from cterm.ui.history import History
 
 
 _ANSI_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+_OSC_RE = re.compile(r"\x1B\].*?(?:\x07|\x1B\\)")
+_CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 # Spinner animation frames (braille dots) used for the "Thinking..." indicator.
 _SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
@@ -58,6 +60,14 @@ def _resolve_carriage_returns(text: str) -> str:
     for raw_line in text.split("\n"):
         resolved_lines.append(raw_line.split("\r")[-1])
     return "\n".join(resolved_lines)
+
+
+def _sanitize_stream_text(text: str) -> str:
+    """Return the final visible text for a streamed terminal line."""
+    text = _OSC_RE.sub("", str(text))
+    text = _ANSI_RE.sub("", text)
+    text = _resolve_carriage_returns(text)
+    return _CONTROL_RE.sub("", text)
 
 
 @dataclass
@@ -102,9 +112,12 @@ class Transcript(ScrollView, can_focus=False):
         # The current in-progress line(s), which a subsequent replace_last
         # write will discard and redraw. Empty when nothing is pending.
         self._pending_strips: list[Strip] = []
-        # Log of committed (renderable, strip_count) for re-rendering on resize.
-        self._renderable_log: list[tuple[RenderableType, int]] = []
+        # Log of committed (renderable, strip_count, thinking_id) for re-rendering on resize.
+        self._renderable_log: list[tuple[RenderableType, int, int | None]] = []
         self._pending_renderable: RenderableType | None = None
+        self._thinking_entries: dict[int, dict[str, object]] = {}
+        self._next_thinking_id = 1
+        self._live_thinking_id: int | None = None
         # We only ever want vertical scrolling — content wraps to width by
         # design, so a horizontal scrollbar should never appear. This is
         # enforced via `overflow-x: hidden` in DEFAULT_CSS above (the
@@ -176,6 +189,45 @@ class Transcript(ScrollView, can_focus=False):
             return [Strip([])]
         return [Strip(list(segments)) for segments in rendered]
 
+    def _thinking_renderable(self, text: str, expanded: bool, width: int) -> Text:
+        arrow = "▼" if expanded else "▶"
+        prefix = f"{arrow} THINKING:"
+        if expanded:
+            return Text(f"{prefix} {text}", style=STYLE_DIM)
+        one_line = " ".join(text.split())
+        max_summary = max(width - len(prefix) - 1, 1)
+        if len(one_line) > max_summary:
+            one_line = one_line[: max(max_summary - 1, 1)] + "…"
+        return Text(f"{prefix} {one_line}", style=STYLE_DIM)
+
+    def _rebuild_committed_lines(self) -> None:
+        width = self._content_width()
+        new_lines = []
+        rebuilt_log = []
+        for entry in self._renderable_log:
+            thinking_id = entry[2] if len(entry) > 2 else None
+            renderable = entry[0]
+            if thinking_id is not None:
+                state = self._thinking_entries.get(thinking_id)
+                if state is None:
+                    continue
+                if state.get("live"):
+                    renderable = Text(f"THINKING: {state['text']}", style=STYLE_DIM)
+                else:
+                    renderable = self._thinking_renderable(
+                        str(state["text"]),
+                        bool(state["expanded"]),
+                        width,
+                    )
+            strips = self._render_to_strips(renderable, width)
+            new_lines.extend(strips)
+            rebuilt_log.append((renderable, len(strips), thinking_id))
+        self._lines = new_lines
+        self._renderable_log = rebuilt_log
+        self.virtual_size = Size(width, len(self._lines) + len(self._pending_strips))
+        self.show_horizontal_scrollbar = False
+        self.refresh()
+
     def write(
         self,
         renderable: RenderableType,
@@ -204,18 +256,18 @@ class Transcript(ScrollView, can_focus=False):
             self._pending_renderable = renderable
             if commit:
                 self._lines.extend(self._pending_strips)
-                self._renderable_log.append((self._pending_renderable, len(self._pending_strips)))
+                self._renderable_log.append((self._pending_renderable, len(self._pending_strips), None))
                 self._pending_strips = []
                 self._pending_renderable = None
         else:
             if self._pending_strips:
                 self._lines.extend(self._pending_strips)
                 if self._pending_renderable is not None:
-                    self._renderable_log.append((self._pending_renderable, len(self._pending_strips)))
+                    self._renderable_log.append((self._pending_renderable, len(self._pending_strips), None))
                 self._pending_strips = []
                 self._pending_renderable = None
             self._lines.extend(new_strips)
-            self._renderable_log.append((renderable, len(new_strips)))
+            self._renderable_log.append((renderable, len(new_strips), None))
 
         total_lines = len(self._lines) + len(self._pending_strips)
         # NOTE: virtual_size is a reactive, but its watcher only fires when
@@ -240,6 +292,9 @@ class Transcript(ScrollView, can_focus=False):
         self._pending_strips = []
         self._renderable_log = []
         self._pending_renderable = None
+        self._thinking_entries = {}
+        self._next_thinking_id = 1
+        self._live_thinking_id = None
         self.virtual_size = Size(self._content_width(), 0)
         self.show_horizontal_scrollbar = False
         self.scroll_home(animate=False)
@@ -268,16 +323,85 @@ class Transcript(ScrollView, can_focus=False):
         return strip
 
     def on_resize(self) -> None:
-        width = self._content_width()
-        new_lines = []
-        for renderable, _ in self._renderable_log:
-            new_lines.extend(self._render_to_strips(renderable, width))
-        self._lines = new_lines
         self._pending_strips = []
         self._pending_renderable = None
-        self.virtual_size = Size(width, len(self._lines))
+        self._rebuild_committed_lines()
+
+    def _commit_pending(self) -> None:
+        if not self._pending_strips:
+            return
+        self._lines.extend(self._pending_strips)
+        if self._pending_renderable is not None:
+            self._renderable_log.append((self._pending_renderable, len(self._pending_strips), None))
+        self._pending_strips = []
+        self._pending_renderable = None
+
+    def append_thinking_delta(self, text: str) -> None:
+        self._commit_pending()
+        if self._live_thinking_id is None:
+            thinking_id = self._next_thinking_id
+            self._next_thinking_id += 1
+            self._live_thinking_id = thinking_id
+            self._thinking_entries[thinking_id] = {
+                "text": text,
+                "expanded": False,
+                "live": True,
+            }
+            renderable = Text(f"THINKING: {text}", style=STYLE_DIM)
+            strips = self._render_to_strips(renderable, self._content_width())
+            self._lines.extend(strips)
+            self._renderable_log.append((renderable, len(strips), thinking_id))
+            self.virtual_size = Size(self._content_width(), len(self._lines))
+            self.show_horizontal_scrollbar = False
+            self.scroll_end(animate=False)
+            self.refresh()
+            return
+
+        state = self._thinking_entries.get(self._live_thinking_id)
+        if state is not None:
+            state["text"] = text
+            self._rebuild_committed_lines()
+            self.scroll_end(animate=False)
+
+    def append_thinking_trace(self, text: str) -> None:
+        if self._live_thinking_id is not None:
+            state = self._thinking_entries.get(self._live_thinking_id)
+            if state is not None:
+                state["text"] = text
+                state["expanded"] = False
+                state["live"] = False
+                self._live_thinking_id = None
+                self._rebuild_committed_lines()
+                self.scroll_end(animate=False)
+                return
+            self._live_thinking_id = None
+
+        thinking_id = self._next_thinking_id
+        self._next_thinking_id += 1
+        self._thinking_entries[thinking_id] = {"text": text, "expanded": False, "live": False}
+        renderable = self._thinking_renderable(text, False, self._content_width())
+        strips = self._render_to_strips(renderable, self._content_width())
+        self._commit_pending()
+        self._lines.extend(strips)
+        self._renderable_log.append((renderable, len(strips), thinking_id))
+        self.virtual_size = Size(self._content_width(), len(self._lines))
         self.show_horizontal_scrollbar = False
+        self.scroll_end(animate=False)
         self.refresh()
+
+    def on_click(self, event) -> None:
+        line_index = int(self.scroll_offset.y) + int(event.y)
+        cursor = 0
+        for _, strip_count, thinking_id in self._renderable_log:
+            if cursor <= line_index < cursor + strip_count:
+                if thinking_id is not None:
+                    state = self._thinking_entries.get(thinking_id)
+                    if state is not None:
+                        state["expanded"] = not bool(state["expanded"])
+                        self._rebuild_committed_lines()
+                        event.stop()
+                return
+            cursor += strip_count
 
 
 class TextualAgentUI(AgentUI):
@@ -287,6 +411,7 @@ class TextualAgentUI(AgentUI):
         self.app = app
         self.run_id = run_id
         self._spinner_message = ""
+        self._thinking_buffer = ""
         # Per-fd "current terminal line" state. \n commits the line
         # permanently; \r rewinds to the start of the still-open line so
         # subsequent text overwrites it in place — this is what makes
@@ -304,6 +429,9 @@ class TextualAgentUI(AgentUI):
 
     def _show_stream(self, fd: str, text: str, style: str) -> None:
         if not self.app.is_run_active(self.run_id):
+            return
+        text = _sanitize_stream_text(text)
+        if not text:
             return
         renderable = Text(text, style=style)
         self._last_stream[fd] = (renderable, style)
@@ -325,9 +453,26 @@ class TextualAgentUI(AgentUI):
             True,
             True,
         )
+        self._last_stream.pop(fd, None)
 
     def message(self, text):
         self._emit(_ANSI_RE.sub("", str(text)))
+
+    def thinking_trace_delta(self, text):
+        if not text or not self.app.is_run_active(self.run_id):
+            return
+        clean = _ANSI_RE.sub("", str(text))
+        self._thinking_buffer += clean
+        self.app.call_from_thread(self.app.append_thinking_delta, self._thinking_buffer)
+        self.app.call_from_thread(self.app.set_status, f"Thinking: {' '.join(self._thinking_buffer.split())[:80]}")
+
+    def thinking_trace_complete(self, text):
+        if not self.app.is_run_active(self.run_id):
+            return
+        full_text = str(text or self._thinking_buffer).strip()
+        self._thinking_buffer = ""
+        if full_text:
+            self.app.call_from_thread(self.app.append_thinking_trace, full_text)
 
     def update_spinner(self, message):
         if not self.app.is_run_active(self.run_id):
@@ -645,6 +790,14 @@ class CtermApp(App[int]):
         else:
             for line in text.splitlines() or [""]:
                 transcript.write(Text(line, style=STYLE_ERROR))
+
+    def append_thinking_trace(self, text: str) -> None:
+        transcript = self.query_one("#transcript", Transcript)
+        transcript.append_thinking_trace(text)
+
+    def append_thinking_delta(self, text: str) -> None:
+        transcript = self.query_one("#transcript", Transcript)
+        transcript.append_thinking_delta(text)
 
     # -- Spinner -----------------------------------------------------------
     def set_status(self, text: str) -> None:

@@ -235,6 +235,29 @@ class ToolAgent:
 
         logger.debug("agent_response=%r", content)
 
+    def _chat_with_optional_thinking(self, *args, **kwargs):
+        if not Config().stream_thinking_traces:
+            return chat_with_model_api(*args, **kwargs)
+
+        thinking_parts = []
+
+        def _on_thinking_delta(delta):
+            if not delta:
+                return
+            text = str(delta)
+            thinking_parts.append(text)
+            self.ui.thinking_trace_delta(text)
+
+        try:
+            return chat_with_model_api(*args, on_thinking_delta=_on_thinking_delta, **kwargs)
+        except TypeError as exc:
+            if "on_thinking_delta" not in str(exc):
+                raise
+            return chat_with_model_api(*args, **kwargs)
+        finally:
+            if thinking_parts:
+                self.ui.thinking_trace_complete("".join(thinking_parts))
+
     def _execute_tool(self, tool_name, args):
         is_shell = tool_name == "bash"
         is_exec = tool_name in ("exec_python", "exec")
@@ -426,11 +449,11 @@ class ToolAgent:
 
                 self.ui.update_spinner("Thinking")
                 try:
-                    response = chat_with_model_api(
+                    response = self._chat_with_optional_thinking(
                         self.model,
                         messages,
-                        ollama_tools,
-                        self.binary
+                        tools=ollama_tools,
+                        binary=self.binary,
                     )
                 finally:
                     self.ui.stop_spinner()
@@ -510,7 +533,7 @@ class ToolAgent:
             ]
             self.ui.update_spinner("Summarizing Task")
             try:
-                response = chat_with_model_api(
+                response = self._chat_with_optional_thinking(
                     self.model,
                     final_messages,
                     tools=None,

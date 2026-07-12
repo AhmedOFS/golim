@@ -520,6 +520,24 @@ def init_command(binary: str = "ollama") -> int:
             config.set(Config.BASH_UNRESTRICTED, False)
             print("✓ Unrestricted bash mode disabled")
 
+    current_thinking = config.stream_thinking_traces
+    prompt = (
+        f"Stream model thinking traces in the UI? [y/N]"
+        f"{' (currently enabled)' if current_thinking else ''}: "
+    )
+    try:
+        choice = input(prompt).strip().lower()
+    except (KeyboardInterrupt, EOFError):
+        choice = ""
+    if choice in ("y", "yes"):
+        if not current_thinking:
+            config.set(Config.STREAM_THINKING_TRACES, True)
+            print("✓ Thinking trace streaming enabled")
+    else:
+        if current_thinking:
+            config.set(Config.STREAM_THINKING_TRACES, False)
+            print("✓ Thinking trace streaming disabled")
+
     print("\nYou can now use cterm:")
     print('  cterm "Hello, how are you?"')
     return 0

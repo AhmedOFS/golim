@@ -9,6 +9,7 @@ class Config:
     SELECTED_MODEL = "selected_model"
     SMALL_MODEL = "small_model"
     BASH_UNRESTRICTED = "bash_unrestricted"
+    STREAM_THINKING_TRACES = "stream_thinking_traces"
     API_PROVIDER = "api_provider"
     OPENROUTER_API_KEY = "openrouter_api_key"
     OPENROUTER_MODEL = "openrouter_model"
@@ -70,6 +71,11 @@ class Config:
     def unrestricted_bash(self) -> bool:
         """Run bash commands through /bin/bash -c with full shell syntax."""
         return bool(self.get(self.BASH_UNRESTRICTED, False))
+
+    @property
+    def stream_thinking_traces(self) -> bool:
+        """Show model thinking/reasoning traces as they stream."""
+        return bool(self.get(self.STREAM_THINKING_TRACES, False))
 
     @property
     def api_provider(self) -> str:
