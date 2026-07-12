@@ -10,7 +10,7 @@ import threading
 from dataclasses import dataclass
 from typing import Callable
 from rich.theme import Theme
-from rich.console import Console, RenderableType
+from rich.console import Console, Group, RenderableType
 from rich.markdown import Markdown
 from rich.style import Style as RichStyle
 from rich.syntax import Syntax
@@ -46,6 +46,7 @@ STYLE_DIM = "#6f6f6f"           # secondary/path info, log path footer
 STYLE_TOOL_OUTPUT = "#C7A4A4"   # raw stdout/stderr streamed from running tools
 
 MAX_TOOL_OUTPUT_LINES = 2       # cap on the *static* post-completion output summary
+MAX_EXPANDED_OUTPUT_LINES = 20  # cap on the expanded/clicked-open output view
 
 
 def _resolve_carriage_returns(text: str) -> str:
@@ -70,6 +71,40 @@ def _sanitize_stream_text(text: str) -> str:
     text = _ANSI_RE.sub("", text)
     text = _resolve_carriage_returns(text)
     return _CONTROL_RE.sub("", text)
+
+
+def _format_nested(value, indent: int = 2) -> list[str]:
+    """Recursively pretty-print a (possibly nested) result value as plain
+    indented lines instead of a Python/JSON-style repr blob.
+
+    e.g. {"cpu": {"cores": 8, "model": "..."}, "disks": ["sda", "sdb"]}
+    becomes:
+        cpu:
+          cores: 8
+          model: ...
+        disks:
+          - sda
+          - sdb
+    instead of a single line containing the dict's repr().
+    """
+    lines: list[str] = []
+    pad = " " * indent
+    if isinstance(value, dict):
+        for key, val in value.items():
+            if isinstance(val, (dict, list)) and val:
+                lines.append(f"{pad}{key}:")
+                lines.extend(_format_nested(val, indent + 2))
+            else:
+                lines.append(f"{pad}{key}: {val}")
+    elif isinstance(value, list):
+        for item in value:
+            if isinstance(item, (dict, list)) and item:
+                lines.extend(_format_nested(item, indent))
+            else:
+                lines.append(f"{pad}- {item}")
+    else:
+        lines.append(f"{pad}{value}")
+    return lines
 
 
 @dataclass
@@ -116,6 +151,15 @@ class Transcript(ScrollView, can_focus=False):
     one. Transcript keeps its own buffer of pre-rendered lines and exposes a
     ``replace_last``/``commit`` write mode so callers can update an
     in-progress line in place and only "lock it in" once it's finished.
+
+    It also supports generic *expandable* entries: a line (or block of
+    lines) that was written via ``write_expandable`` can be clicked to swap
+    between a collapsed "summary" renderable and an expanded "detail"
+    renderable. Thinking traces use this same click/toggle machinery, but
+    are visually distinguished with a ▶/▼ disclosure arrow; other
+    expandable entries (tool results, truncated output, etc.) are clickable
+    but render without that arrow and without any style/color change
+    between their collapsed and expanded states.
     """
 
     DEFAULT_CSS = """
@@ -131,11 +175,13 @@ class Transcript(ScrollView, can_focus=False):
         # The current in-progress line(s), which a subsequent replace_last
         # write will discard and redraw. Empty when nothing is pending.
         self._pending_strips: list[Strip] = []
-        # Log of committed (renderable, strip_count, thinking_id) for re-rendering on resize.
+        # Log of committed (renderable, strip_count, expandable_id) for re-rendering on resize.
         self._renderable_log: list[tuple[RenderableType, int, int | None]] = []
         self._pending_renderable: RenderableType | None = None
-        self._thinking_entries: dict[int, dict[str, object]] = {}
-        self._next_thinking_id = 1
+        # Shared id->state map for all clickable/expandable entries
+        # (thinking traces as well as generic tool-result entries).
+        self._expandable_entries: dict[int, dict[str, object]] = {}
+        self._next_expandable_id = 1
         self._live_thinking_id: int | None = None
         # We only ever want vertical scrolling — content wraps to width by
         # design, so a horizontal scrollbar should never appear. This is
@@ -224,23 +270,31 @@ class Transcript(ScrollView, can_focus=False):
         new_lines = []
         rebuilt_log = []
         for entry in self._renderable_log:
-            thinking_id = entry[2] if len(entry) > 2 else None
+            entry_id = entry[2] if len(entry) > 2 else None
             renderable = entry[0]
-            if thinking_id is not None:
-                state = self._thinking_entries.get(thinking_id)
+            if entry_id is not None:
+                state = self._expandable_entries.get(entry_id)
                 if state is None:
                     continue
-                if state.get("live"):
-                    renderable = Text(f"THINKING: {state['text']}", style=STYLE_DIM)
+                kind = state.get("kind", "thinking")
+                if kind == "thinking":
+                    # Thinking traces get the ▶/▼ disclosure arrow treatment.
+                    if state.get("live"):
+                        renderable = Text(f"THINKING: {state['text']}", style=STYLE_DIM)
+                    else:
+                        renderable = self._thinking_renderable(
+                            str(state["text"]),
+                            bool(state["expanded"]),
+                            width,
+                        )
                 else:
-                    renderable = self._thinking_renderable(
-                        str(state["text"]),
-                        bool(state["expanded"]),
-                        width,
-                    )
+                    # Generic expandable entries: no arrow, no color change —
+                    # just swap between the pre-built summary/detail
+                    # renderables the caller supplied.
+                    renderable = state["detail"] if state.get("expanded") else state["summary"]
             strips = self._render_to_strips(renderable, width)
             new_lines.extend(strips)
-            rebuilt_log.append((renderable, len(strips), thinking_id))
+            rebuilt_log.append((renderable, len(strips), entry_id))
         self._lines = new_lines
         self._renderable_log = rebuilt_log
         self.virtual_size = Size(width, len(self._lines) + len(self._pending_strips))
@@ -306,13 +360,56 @@ class Transcript(ScrollView, can_focus=False):
             self.scroll_end(animate=False)
         self.refresh()
 
+    def write_expandable(self, summary: RenderableType, detail: RenderableType) -> int:
+        """Write a collapsed ``summary`` renderable; clicking it swaps in
+        ``detail`` (and clicking again swaps back). Used for tool-result
+        entries (system info, finder matches, truncated bash output, etc.)
+        — unlike thinking traces, no disclosure arrow is added and no style
+        is applied or changed by this method; callers are responsible for
+        any styling baked into the renderables they pass in, and that
+        styling should stay the same across the collapsed/expanded swap.
+
+        Commits any still-pending (uncommitted, in-place-update) content
+        first, so a live spinner-style line doesn't get silently dropped.
+        """
+        self._commit_pending()
+        entry_id = self._next_expandable_id
+        self._next_expandable_id += 1
+        self._expandable_entries[entry_id] = {
+            "kind": "generic",
+            "summary": summary,
+            "detail": detail,
+            "expanded": False,
+        }
+        strips = self._render_to_strips(summary, self._content_width())
+        self._lines.extend(strips)
+        self._renderable_log.append((summary, len(strips), entry_id))
+        self.virtual_size = Size(self._content_width(), len(self._lines) + len(self._pending_strips))
+        self.show_horizontal_scrollbar = False
+        self.refresh()
+        return entry_id
+
+    def discard_pending(self) -> None:
+        """Drop any uncommitted in-place-update line without committing it
+        to the permanent transcript. Used when a live streamed "current
+        line" (e.g. the last line of running bash output) is about to be
+        replaced by a proper summary/expandable block instead, so the raw
+        last line doesn't linger as a leftover duplicate."""
+        if not self._pending_strips and self._pending_renderable is None:
+            return
+        self._pending_strips = []
+        self._pending_renderable = None
+        self.virtual_size = Size(self._content_width(), len(self._lines))
+        self.show_horizontal_scrollbar = False
+        self.refresh()
+
     def clear(self) -> None:
         self._lines = []
         self._pending_strips = []
         self._renderable_log = []
         self._pending_renderable = None
-        self._thinking_entries = {}
-        self._next_thinking_id = 1
+        self._expandable_entries = {}
+        self._next_expandable_id = 1
         self._live_thinking_id = None
         self.virtual_size = Size(self._content_width(), 0)
         self.show_horizontal_scrollbar = False
@@ -358,10 +455,11 @@ class Transcript(ScrollView, can_focus=False):
     def append_thinking_delta(self, text: str) -> None:
         self._commit_pending()
         if self._live_thinking_id is None:
-            thinking_id = self._next_thinking_id
-            self._next_thinking_id += 1
+            thinking_id = self._next_expandable_id
+            self._next_expandable_id += 1
             self._live_thinking_id = thinking_id
-            self._thinking_entries[thinking_id] = {
+            self._expandable_entries[thinking_id] = {
+                "kind": "thinking",
                 "text": text,
                 "expanded": False,
                 "live": True,
@@ -376,7 +474,7 @@ class Transcript(ScrollView, can_focus=False):
             self.refresh()
             return
 
-        state = self._thinking_entries.get(self._live_thinking_id)
+        state = self._expandable_entries.get(self._live_thinking_id)
         if state is not None:
             state["text"] = text
             self._rebuild_committed_lines()
@@ -384,7 +482,7 @@ class Transcript(ScrollView, can_focus=False):
 
     def append_thinking_trace(self, text: str) -> None:
         if self._live_thinking_id is not None:
-            state = self._thinking_entries.get(self._live_thinking_id)
+            state = self._expandable_entries.get(self._live_thinking_id)
             if state is not None:
                 state["text"] = text
                 state["expanded"] = False
@@ -395,9 +493,14 @@ class Transcript(ScrollView, can_focus=False):
                 return
             self._live_thinking_id = None
 
-        thinking_id = self._next_thinking_id
-        self._next_thinking_id += 1
-        self._thinking_entries[thinking_id] = {"text": text, "expanded": False, "live": False}
+        thinking_id = self._next_expandable_id
+        self._next_expandable_id += 1
+        self._expandable_entries[thinking_id] = {
+            "kind": "thinking",
+            "text": text,
+            "expanded": False,
+            "live": False,
+        }
         renderable = self._thinking_renderable(text, False, self._content_width())
         strips = self._render_to_strips(renderable, self._content_width())
         self._commit_pending()
@@ -411,10 +514,10 @@ class Transcript(ScrollView, can_focus=False):
     def on_click(self, event) -> None:
         line_index = int(self.scroll_offset.y) + int(event.y)
         cursor = 0
-        for _, strip_count, thinking_id in self._renderable_log:
+        for _, strip_count, entry_id in self._renderable_log:
             if cursor <= line_index < cursor + strip_count:
-                if thinking_id is not None:
-                    state = self._thinking_entries.get(thinking_id)
+                if entry_id is not None:
+                    state = self._expandable_entries.get(entry_id)
                     if state is not None:
                         state["expanded"] = not bool(state["expanded"])
                         self._rebuild_committed_lines()
@@ -437,6 +540,15 @@ class TextualAgentUI(AgentUI):
         # subsequent text overwrites it in place — this is what makes
         # progress bars / spinners render correctly instead of scrolling.
         self._last_stream: dict[str, tuple[Text, str]] = {}
+        # Full history of every streamed line per fd for the *currently
+        # running* tool call. This is only a fallback source for bash
+        # output now — the primary source is the result dict itself (see
+        # _emit_bash_result_output) since live per-line fd streaming isn't
+        # guaranteed to fire for every tool.
+        self._stream_buffers: dict[str, list[str]] = {}
+        # Name of the tool currently in flight, so handle_tool_output knows
+        # which result-formatting branch to use.
+        self._current_tool: str | None = None
 
     def is_cancelled(self) -> bool:
         return self.cancel_event.is_set() or not self.app.is_run_active(self.run_id)
@@ -452,12 +564,14 @@ class TextualAgentUI(AgentUI):
     # -- streaming tool output (stdout/stderr) ------------------------------
     def _reset_stream_state(self) -> None:
         self._last_stream.clear()
+        self._stream_buffers.clear()
 
     def _show_stream(self, fd: str, text: str, style: str) -> None:
         self._ensure_active()
         text = _sanitize_stream_text(text)
         if not text:
             return
+        self._stream_buffers.setdefault(fd, []).append(text)
         renderable = Text(text, style=style)
         self._last_stream[fd] = (renderable, style)
         self.app.call_from_thread(
@@ -513,12 +627,16 @@ class TextualAgentUI(AgentUI):
     def tool_call(self, tool_name, args):
         # A new tool invocation starts a fresh output stream.
         self._reset_stream_state()
+        self._current_tool = tool_name
         if tool_name == "bash":
             self._emit(f"$ {args.get('command', '')}", STYLE_TOOL)
         elif tool_name in ("exec_python", "exec"):
+            # Show the code up front (the same view later reused, unmodified,
+            # for the approval prompt — it is never re-rendered a second
+            # time) rather than a one-line summary.
             code = args.get("code") or args.get("script") or args.get("source") or ""
-            first_line = code.strip().split("\n")[0] if code else ""
-            self._emit(f"executing: {first_line}", STYLE_TOOL)
+            self._ensure_active()
+            self.app.call_from_thread(self.app.append_code, "» running script", code)
         elif tool_name == "finder":
             self._emit(
                 f"⦾ finding: {args.get('pattern', '')} in {args.get('path', '')}",
@@ -539,18 +657,109 @@ class TextualAgentUI(AgentUI):
 
     def handle_tool_output(self, fd=None, line="", end="\n", result=None):
         if result is not None:
+            if self._current_tool == "bash":
+                # Discard the live in-place "current line" — it's
+                # superseded by a capped/expandable block built from the
+                # full captured output in `result` itself, which is
+                # authoritative (unlike live fd streaming, which isn't
+                # guaranteed to have fired for every line).
+                self._last_stream.clear()
+                self._ensure_active()
+                self.app.call_from_thread(self.app.discard_pending_stream)
+                self._emit_bash_result_output(result)
+                formatted, style = self._format_tool_result(result)
+                if formatted:
+                    self._emit(formatted, style)
+                return
+
             # Command finished — flush any trailing partial line(s) first.
             for fd_name in ("stdout", "stderr"):
                 self._commit_stream(fd_name)
-            formatted, style = self._format_tool_result(result)
-            if formatted:
-                self._emit(formatted, style)
+            self._emit_tool_result(result)
             return
 
         if fd is None:
             return
 
         self._show_stream(fd, str(line), STYLE_TOOL_OUTPUT)
+
+    def _emit_bash_result_output(self, result) -> None:
+        """Build the capped/expandable output block for a finished bash
+        command. Reads directly from the result payload's own
+        stdout/stderr fields (the same shape used per-entry in
+        handle_shell_result_output) since that's the authoritative full
+        capture; falls back to whatever was live-streamed only if the
+        result itself doesn't carry that content."""
+        combined: list[str] = []
+        if isinstance(result, dict):
+            stdout = result.get("stdout")
+            if stdout:
+                combined.extend(_resolve_carriage_returns(str(stdout).rstrip("\n")).splitlines())
+            stderr = result.get("stderr")
+            if stderr:
+                combined.extend(_resolve_carriage_returns(str(stderr).rstrip("\n")).splitlines())
+
+        if not combined:
+            for fd_name in ("stdout", "stderr"):
+                combined.extend(self._stream_buffers.get(fd_name, []))
+
+        if not combined:
+            return
+        self._emit_capped_lines(combined)
+
+    def _emit_tool_result(self, result) -> None:
+        """Route a finished tool's result to the right formatter.
+
+        system_info and finder results become clickable (collapsed summary
+        that expands to the full data) on success; everything else falls
+        back to the original plain-line ✓/✗ summary.
+        """
+        self._ensure_active()
+        if (
+            self._current_tool == "system_info"
+            and isinstance(result, dict)
+            and result.get("ok") is True
+        ):
+            self._emit_system_info_result(result)
+            return
+        if (
+            self._current_tool == "finder"
+            and isinstance(result, dict)
+            and result.get("ok") is True
+            and "matches" in result
+        ):
+            self._emit_finder_result(result)
+            return
+        formatted, style = self._format_tool_result(result)
+        if formatted:
+            self._emit(formatted, style)
+
+    def _emit_system_info_result(self, result: dict) -> None:
+        data = {k: v for k, v in result.items() if k != "ok"}
+        summary = Text("✓ Done", style=STYLE_SUCCESS)
+        detail_lines = [Text("✓ Done", style=STYLE_SUCCESS)]
+        # Recursively pretty-print nested values instead of dumping their
+        # Python/JSON repr on one line.
+        for key, value in data.items():
+            if isinstance(value, (dict, list)) and value:
+                detail_lines.append(Text(f"  {key}:", style=STYLE_SUCCESS))
+                for line in _format_nested(value, indent=4):
+                    detail_lines.append(Text(line, style=STYLE_SUCCESS))
+            else:
+                detail_lines.append(Text(f"  {key}: {value}", style=STYLE_SUCCESS))
+        self.app.call_from_thread(
+            self.app.append_expandable_result, summary, Group(*detail_lines)
+        )
+
+    def _emit_finder_result(self, result: dict) -> None:
+        count = result.get("total", 0)
+        summary = Text(f"✓ {count} matches", style=STYLE_SUCCESS)
+        detail_lines = [Text(f"✓ {count} matches", style=STYLE_SUCCESS)]
+        for match in result.get("matches", []):
+            detail_lines.append(Text(f"  {match}", style=STYLE_SUCCESS))
+        self.app.call_from_thread(
+            self.app.append_expandable_result, summary, Group(*detail_lines)
+        )
 
     def handle_shell_result_output(self, result):
         if not isinstance(result, dict):
@@ -571,13 +780,32 @@ class TextualAgentUI(AgentUI):
                 self._emit_capped(_resolve_carriage_returns(str(stderr).rstrip("\n")))
 
     def _emit_capped(self, text: str) -> None:
-        """Used only for the static, post-completion output summary — capped
-        to MAX_TOOL_OUTPUT_LINES since it's a snapshot, not a live tail."""
         lines = text.splitlines() or [text]
-        for line in lines[:MAX_TOOL_OUTPUT_LINES]:
-            self._emit(line, STYLE_TOOL_OUTPUT)
-        if len(lines) > MAX_TOOL_OUTPUT_LINES:
-            self._emit("…", STYLE_TOOL_OUTPUT)
+        self._emit_capped_lines(lines)
+
+    def _emit_capped_lines(self, lines: list[str]) -> None:
+        """Static, post-completion output summary — capped to
+        MAX_TOOL_OUTPUT_LINES. If the output was actually truncated, the
+        summary becomes clickable and expands to show up to
+        MAX_EXPANDED_OUTPUT_LINES lines, with no arrow and no style change
+        between the collapsed and expanded views."""
+        if len(lines) <= MAX_TOOL_OUTPUT_LINES:
+            for line in lines:
+                self._emit(line, STYLE_TOOL_OUTPUT)
+            return
+
+        self._ensure_active()
+        summary_lines = [Text(line, style=STYLE_TOOL_OUTPUT) for line in lines[:MAX_TOOL_OUTPUT_LINES]]
+        summary_lines.append(Text("…", style=STYLE_TOOL_OUTPUT))
+
+        expanded = lines[:MAX_EXPANDED_OUTPUT_LINES]
+        detail_lines = [Text(line, style=STYLE_TOOL_OUTPUT) for line in expanded]
+        if len(lines) > MAX_EXPANDED_OUTPUT_LINES:
+            detail_lines.append(Text("…", style=STYLE_TOOL_OUTPUT))
+
+        self.app.call_from_thread(
+            self.app.append_expandable_result, Group(*summary_lines), Group(*detail_lines)
+        )
 
     def approve_privileged_binary(self, binary):
         self._ensure_active()
@@ -810,6 +1038,29 @@ class CtermApp(App[int]):
         transcript = self.query_one("#transcript", Transcript)
         transcript.write(renderable, replace_last=replace_last, commit=commit)
 
+    def discard_pending_stream(self) -> None:
+        """Drop the live in-progress streamed line without committing it —
+        used right before showing a proper capped/expandable output block
+        for a finished bash command, so the raw last line doesn't linger
+        alongside the summary."""
+        transcript = self.query_one("#transcript", Transcript)
+        transcript.discard_pending()
+
+    def append_expandable_result(self, summary: RenderableType, detail: RenderableType) -> None:
+        """Write a clickable tool-result line: collapsed by default, swaps
+        to the full detail view on click (and back on a second click)."""
+        transcript = self.query_one("#transcript", Transcript)
+        transcript.write_expandable(summary, detail)
+
+    def append_code(self, title: str, code: str, language: str = "python") -> None:
+        """Show a tool-invocation title followed by the code itself,
+        rendered with the same syntax view used for approval prompts. This
+        is the only place the code is rendered — the approval prompt (if
+        one is needed) does not re-display it."""
+        transcript = self.query_one("#transcript", Transcript)
+        transcript.write(Text(title, style=STYLE_TOOL))
+        transcript.write(Syntax(code or "", language, theme="monokai", line_numbers=True))
+
     def append_markdown(self, text: str, ok: bool = True) -> None:
         """Render the final answer as Markdown so tables/emphasis show correctly."""
         transcript = self.query_one("#transcript", Transcript)
@@ -842,10 +1093,11 @@ class CtermApp(App[int]):
             return
         self._approval_request = request
         self.set_status("")
-        syntax = Syntax(request.code or "", "python", theme="monokai", line_numbers=True)
-        self.append_line("Python code requires approval:", STYLE_WARNING)
-        transcript = self.query_one("#transcript", Transcript)
-        transcript.write(syntax)
+        # NOTE: the code itself is intentionally NOT re-rendered here — it
+        # was already shown in full by append_code() when the tool call
+        # started (title "» running script"). Only the approval question is
+        # shown, referring back to that code above.
+        self.append_line("The script above requires approval to run.", STYLE_WARNING)
         self.append_line("Execute this Python code? [Y/N]", STYLE_WARNING)
         prompt = self.query_one("#prompt", Input)
         prompt.disabled = False
