@@ -9,12 +9,50 @@ import asyncio
 import os
 import socket
 import select as _select
+import shlex
+import sys
 from pathlib import Path
 
 from cterm.ui.basic import TerminalUI
 from cterm.config import Config
 
 logger = logging.getLogger(__name__)
+
+
+_PYTHON_BINARIES = {"python", "python3"}
+
+
+def _is_python_binary(tok: str) -> bool:
+    name = os.path.basename(tok)
+    return name in _PYTHON_BINARIES or name.startswith("python3.")
+
+
+def _detect_python_in_bash(command: str) -> str | None:
+    """Check if a bash command runs Python code and return the code to approve.
+
+    Returns the Python source for ``-c`` invocations, the full command for
+    script/module invocations, or ``None`` if this is not a Python execution.
+    """
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return None
+
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok in ("&&", "||", "|", ";", "&"):
+            i += 1
+            continue
+        if _is_python_binary(tok):
+            if i + 2 < len(tokens) and tokens[i + 1] == "-c":
+                return tokens[i + 2]
+            return command
+        # Skip past this command segment to the next separator
+        while i < len(tokens) and tokens[i] not in ("&&", "||", "|", ";", "&"):
+            i += 1
+
+    return None
 
 from cterm.agent_ui import AgentUI
 from cterm.llm_utils.chat_api import chat_with_model_api
@@ -231,6 +269,19 @@ class ToolAgent:
                     self.ui.handle_tool_output(result=tool_result)
                 self._debug_tool_result(tool_name, args, tool_result)
                 return tool_result
+
+        if is_shell and not Config().unrestricted_bash:
+            command = args.get("command", "")
+            py_code = _detect_python_in_bash(command)
+            if py_code is not None:
+                if not self.ui.approve_python_code(py_code):
+                    tool_result = {
+                        "ok": False,
+                        "error": "Python code execution not approved by user",
+                    }
+                    self.ui.handle_tool_output(result=tool_result)
+                    self._debug_tool_result(tool_name, args, tool_result)
+                    return tool_result
 
         self.ui.update_spinner(label)
 
