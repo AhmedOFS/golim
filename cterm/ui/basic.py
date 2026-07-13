@@ -36,9 +36,9 @@ class TerminalUI(AgentUI):
         prefix = "THINKING: " if not self._thinking_live else ""
         self._thinking_live = True
         if self._spinner:
-            self._spinner.write_above(f"\033[90m{prefix}{text}\033[0m", end="")
+            self._spinner.write_above(f"\033[38;5;248m{prefix}{text}\033[0m", end="")
         else:
-            sys.stderr.write(f"\033[90m{prefix}{text}\033[0m")
+            sys.stderr.write(f"\033[38;5;248m{prefix}{text}\033[0m")
             sys.stderr.flush()
 
     def thinking_trace_complete(self, text):
@@ -47,9 +47,10 @@ class TerminalUI(AgentUI):
         if self._thinking_live:
             sys.stderr.write("\n")
         collapsed = " ".join(str(text).split())
-        sys.stderr.write(f"\033[90m▶ THINKING: {_clip_label(collapsed, 120)}\033[0m\n")
+        sys.stderr.write(f"\033[38;5;248m▶ THINKING: {_clip_label(collapsed, 120)}\033[0m\n")
         sys.stderr.flush()
         self._thinking_live = False
+
 
     def tool_call(self, tool_name, args):
         if tool_name == "bash":
@@ -69,7 +70,8 @@ class TerminalUI(AgentUI):
             formatted = self._format_tool_result(result)
             if formatted:
                 sys.stderr.write(f"{formatted}\n")
-                sys.stderr.flush()
+            sys.stderr.write("\n")
+            sys.stderr.flush()
         elif fd is not None and self._spinner:
             output = f"\033[33m{line}\033[0m" if fd == "stderr" else line
             self._spinner.write_above(output, end=end)
@@ -103,10 +105,10 @@ class TerminalUI(AgentUI):
             self._spinner = None
 
         sys.stderr.write("\n\033[1mPython code requires approval:\033[0m\n")
-        sys.stderr.write("\033[90m" + "-" * 40 + "\033[0m\n")
+        sys.stderr.write("\033[38;5;248m" + "-" * 40 + "\033[0m\n")
         for line in code.split("\n"):
             sys.stderr.write(f"\033[33m{line}\033[0m\n")
-        sys.stderr.write("\033[90m" + "-" * 40 + "\033[0m\n")
+        sys.stderr.write("\033[38;5;248m" + "-" * 40 + "\033[0m\n")
 
         prompt = "Execute this Python code? [Y/N] "
         try:

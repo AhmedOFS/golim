@@ -43,7 +43,7 @@ STYLE_TOOL = "bold #f3f3f3"     # "$ command" / "◎ finding" lines
 STYLE_SUCCESS = "#7d8a99"       # dim "✓ Done" / "✓ N matches" lines
 STYLE_ERROR = "#e06c75"         # "✗ ..." failures
 STYLE_WARNING = "#c2b280"       # stderr / shell warnings (e.g. cp overwrite notice)
-STYLE_DIM = "#6f6f6f"           # secondary/path info, log path footer
+STYLE_DIM = "#9e9e9e"           # secondary/path info, log path footer
 STYLE_TOOL_OUTPUT = "#C7A4A4"   # raw stdout/stderr streamed from running tools
 
 MAX_TOOL_OUTPUT_LINES = 2       # cap on the *static* post-completion output summary
@@ -653,6 +653,7 @@ class TextualAgentUI(AgentUI):
             self._log_text_section("thinking_trace", full_text)
             self.app.call_from_thread(self.app.append_thinking_trace, full_text)
 
+
     def update_spinner(self, message):
         self._ensure_active()
         self._spinner_message = str(message)
@@ -712,12 +713,14 @@ class TextualAgentUI(AgentUI):
                 formatted, style = self._format_tool_result(result)
                 if formatted and not (isinstance(result, dict) and result.get("ok") is True):
                     self._emit(formatted, style)
+                self.app.call_from_thread(self.app.append_line, "")
                 return
 
             # Command finished — flush any trailing partial line(s) first.
             for fd_name in ("stdout", "stderr"):
                 self._commit_stream(fd_name)
             self._emit_tool_result(result)
+            self.app.call_from_thread(self.app.append_line, "")
             return
 
         if fd is None:
