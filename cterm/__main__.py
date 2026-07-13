@@ -679,6 +679,8 @@ def tui_command(binary: str = "ollama", debug: bool = False) -> int:
     def _runner(message, ui):
         error, model, small_model = _resolve_chat_settings(binary)
         log_file, log_path = _create_tui_log()
+        if hasattr(ui, "set_log_file"):
+            ui.set_log_file(log_file)
         try:
             log_file.write(f"prompt: {message}\n")
             if error:

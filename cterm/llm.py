@@ -81,6 +81,7 @@ class ToolAgent:
         self.mcp_client = None
         self.tools = []
         self.ui = ui or TerminalUI()
+        self._last_thinking_trace = ""
 
     def __enter__(self):
         socket_path = get_socket_path()
@@ -235,9 +236,70 @@ class ToolAgent:
 
         logger.debug("agent_response=%r", content)
 
+    def _assistant_message_for_history(self, message):
+        """Return an assistant message suitable for the next model call.
+
+        Provider responses may contain thinking/reasoning fields that are
+        useful context but are not valid chat message fields for every
+        provider. Fold the latest trace into content instead.
+        """
+        history_message = dict(message)
+        for key in (
+            "thinking",
+            "reasoning",
+            "reasoning_content",
+            "reasoning_text",
+            "reasoning_details",
+        ):
+            history_message.pop(key, None)
+
+        content = history_message.get("content") or ""
+        trace = str(self._last_thinking_trace or "").strip()
+        if trace:
+            parts = []
+            if str(content).strip():
+                parts.append(f"[assistant content]\n{content}")
+            parts.append(f"[assistant thinking trace]\n{trace}")
+            history_message["content"] = "\n\n".join(parts)
+        else:
+            history_message["content"] = content
+        return history_message
+
+    def _remove_thinking_traces_from_history(self, messages):
+        for message in messages:
+            if not isinstance(message, dict) or message.get("role") != "assistant":
+                continue
+            for key in (
+                "thinking",
+                "reasoning",
+                "reasoning_content",
+                "reasoning_text",
+                "reasoning_details",
+            ):
+                message.pop(key, None)
+            message["content"] = self._strip_history_thinking_trace(message.get("content") or "")
+
+    def _strip_history_thinking_trace(self, content):
+        text = str(content or "")
+        content_marker = "[assistant content]\n"
+        trace_marker = "\n\n[assistant thinking trace]\n"
+        trace_only_marker = "[assistant thinking trace]\n"
+
+        if text.startswith(content_marker) and trace_marker in text:
+            return text[len(content_marker): text.index(trace_marker)]
+        if text.startswith(trace_only_marker):
+            return ""
+        if trace_marker in text:
+            return text[: text.index(trace_marker)]
+        return text
+
     def _chat_with_optional_thinking(self, *args, **kwargs):
+        self._last_thinking_trace = ""
         if not Config().stream_thinking_traces:
-            return chat_with_model_api(*args, **kwargs)
+            response = chat_with_model_api(*args, **kwargs)
+            message = response.get("message", {}) if isinstance(response, dict) else {}
+            self._last_thinking_trace = self._extract_message_thinking(message)
+            return response
 
         thinking_parts = []
 
@@ -249,14 +311,42 @@ class ToolAgent:
             self.ui.thinking_trace_delta(text)
 
         try:
-            return chat_with_model_api(*args, on_thinking_delta=_on_thinking_delta, **kwargs)
+            response = chat_with_model_api(*args, on_thinking_delta=_on_thinking_delta, **kwargs)
         except TypeError as exc:
             if "on_thinking_delta" not in str(exc):
                 raise
-            return chat_with_model_api(*args, **kwargs)
+            response = chat_with_model_api(*args, **kwargs)
         finally:
             if thinking_parts:
-                self.ui.thinking_trace_complete("".join(thinking_parts))
+                self._last_thinking_trace = "".join(thinking_parts)
+                self.ui.thinking_trace_complete(self._last_thinking_trace)
+
+        if not self._last_thinking_trace and isinstance(response, dict):
+            message = response.get("message", {})
+            if isinstance(message, dict):
+                self._last_thinking_trace = self._extract_message_thinking(message)
+        return response
+
+    def _extract_message_thinking(self, message):
+        if not isinstance(message, dict):
+            return ""
+        for key in ("thinking", "reasoning", "reasoning_content", "reasoning_text"):
+            value = message.get(key)
+            if isinstance(value, str) and value:
+                return value
+        details = message.get("reasoning_details")
+        if isinstance(details, list):
+            parts = []
+            for item in details:
+                if not isinstance(item, dict):
+                    continue
+                for key in ("delta", "text", "content", "reasoning"):
+                    value = item.get(key)
+                    if isinstance(value, str) and value:
+                        parts.append(value)
+                        break
+            return "".join(parts)
+        return ""
 
     def _execute_tool(self, tool_name, args):
         is_shell = tool_name == "bash"
@@ -340,8 +430,11 @@ class ToolAgent:
                     if not is_shell and isinstance(tool_result, dict):
                         self.ui.handle_tool_output(result=tool_result)
 
-        if is_shell and not shell_stream_seen:
-            self.ui.handle_shell_result_output(tool_result)
+        if is_shell:
+            if shell_stream_seen:
+                self.ui.handle_tool_output(result=tool_result)
+            else:
+                self.ui.handle_shell_result_output(tool_result)
 
         self._debug_tool_result(tool_name, args, tool_result)
         return tool_result
@@ -493,7 +586,8 @@ class ToolAgent:
                         status=status,
                     )
 
-                    messages.append(message)
+                    self._remove_thinking_traces_from_history(messages)
+                    messages.append(self._assistant_message_for_history(message))
                     messages.append({
                         "role": "tool",
                         "tool_name": tool_name,

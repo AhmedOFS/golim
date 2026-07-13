@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import patch
 from io import StringIO
 
+from cterm.config import Config
 from cterm.llm import ToolAgent
 
 
@@ -108,6 +109,106 @@ class OrchestrationTests(unittest.TestCase):
         self.assertEqual(second_call[-2]["role"], "assistant")
         self.assertIn("tool_calls", second_call[-2])
         self.assertEqual(second_call[-1]["role"], "tool")
+
+    def test_agent_includes_last_thinking_trace_and_content_in_context(self):
+        chat_calls = []
+
+        def fake_chat(model, messages, tools=None, binary="ollama", response_format=None, on_thinking_delta=None):
+            chat_calls.append([message.copy() for message in messages])
+            if len(chat_calls) == 1:
+                on_thinking_delta("looked ")
+                on_thinking_delta("at plan")
+                return {
+                    "message": {
+                        "role": "assistant",
+                        "content": "I will inspect the file.",
+                        "thinking": "provider-specific trace",
+                        "tool_calls": [{
+                            "function": {
+                                "name": "bash",
+                                "arguments": {"command": "printf ok"},
+                            }
+                        }]
+                    }
+                }
+            return {"message": {"role": "assistant", "content": "Done."}}
+
+        agent = ToolAgent("main")
+        agent.tools = []
+        agent.MAX_AGENT_ITERATIONS = 5
+
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.dict(os.environ, {"XDG_CONFIG_HOME": tmp}), \
+             patch.object(agent, "_select_skills", return_value=([], "")), \
+             patch.object(agent, "_execute_tool", return_value={"ok": True, "results": []}), \
+             patch("cterm.llm.chat_with_model_api", side_effect=fake_chat):
+            Config().set(Config.STREAM_THINKING_TRACES, True)
+            result = agent._run_action_agent("Do work.")
+
+        self.assertEqual(result, "Done.")
+        self.assertEqual(len(chat_calls), 2)
+        assistant_history = chat_calls[1][-2]
+        self.assertEqual(assistant_history["role"], "assistant")
+        self.assertIn("tool_calls", assistant_history)
+        self.assertNotIn("thinking", assistant_history)
+        self.assertIn("[assistant content]\nI will inspect the file.", assistant_history["content"])
+        self.assertIn("[assistant thinking trace]\nlooked at plan", assistant_history["content"])
+
+    def test_agent_keeps_only_last_thinking_trace_in_context(self):
+        chat_calls = []
+
+        def fake_chat(model, messages, tools=None, binary="ollama", response_format=None, on_thinking_delta=None):
+            chat_calls.append([message.copy() for message in messages])
+            if len(chat_calls) == 1:
+                on_thinking_delta("first trace")
+                return {
+                    "message": {
+                        "role": "assistant",
+                        "content": "first content",
+                        "tool_calls": [{
+                            "function": {
+                                "name": "bash",
+                                "arguments": {"command": "printf first"},
+                            }
+                        }]
+                    }
+                }
+            if len(chat_calls) == 2:
+                on_thinking_delta("second trace")
+                return {
+                    "message": {
+                        "role": "assistant",
+                        "content": "second content",
+                        "tool_calls": [{
+                            "function": {
+                                "name": "bash",
+                                "arguments": {"command": "printf second"},
+                            }
+                        }]
+                    }
+                }
+            return {"message": {"role": "assistant", "content": "Done."}}
+
+        agent = ToolAgent("main")
+        agent.tools = []
+        agent.MAX_AGENT_ITERATIONS = 5
+
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.dict(os.environ, {"XDG_CONFIG_HOME": tmp}), \
+             patch.object(agent, "_select_skills", return_value=([], "")), \
+             patch.object(agent, "_execute_tool", return_value={"ok": True, "results": []}), \
+             patch("cterm.llm.chat_with_model_api", side_effect=fake_chat):
+            Config().set(Config.STREAM_THINKING_TRACES, True)
+            result = agent._run_action_agent("Do work.")
+
+        self.assertEqual(result, "Done.")
+        self.assertEqual(len(chat_calls), 3)
+        third_call_text = "\n\n".join(str(message.get("content", "")) for message in chat_calls[2])
+        self.assertIn("first content", third_call_text)
+        self.assertNotIn("first trace", third_call_text)
+        self.assertIn("second content", third_call_text)
+        self.assertIn("second trace", third_call_text)
+        self.assertEqual(third_call_text.count("[assistant thinking trace]"), 1)
 
     def test_execution_summary_includes_bash_output_file(self):
         agent = ToolAgent("main")

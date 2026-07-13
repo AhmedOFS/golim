@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import ctypes
+import json
 import os
 import re
 import threading
@@ -223,6 +224,13 @@ class Transcript(ScrollView, can_focus=False):
 
     # Must match `scrollbar-size-vertical` in DEFAULT_CSS.
     _SCROLLBAR_WIDTH = 1
+
+    @property
+    def _thinking_entries(self) -> dict[int, dict[str, object]]:
+        """Backward-compatible alias for older tests that inspected the
+        thinking-only entry store before generic expandable entries shared it.
+        """
+        return self._expandable_entries
 
     def _content_width(self) -> int:
         """The width to wrap/pad content to.
@@ -549,6 +557,36 @@ class TextualAgentUI(AgentUI):
         # Name of the tool currently in flight, so handle_tool_output knows
         # which result-formatting branch to use.
         self._current_tool: str | None = None
+        self._log_file = None
+
+    def set_log_file(self, log_file) -> None:
+        self._log_file = log_file
+
+    def _write_log(self, text: str) -> None:
+        if self._log_file is None:
+            return
+        try:
+            self._log_file.write(text)
+            if not text.endswith("\n"):
+                self._log_file.write("\n")
+            self._log_file.flush()
+        except Exception:
+            pass
+
+    def _log_json_section(self, title: str, payload) -> None:
+        try:
+            body = json.dumps(payload, ensure_ascii=False, indent=2, default=str)
+        except TypeError:
+            body = repr(payload)
+        self._write_log(f"\n## {title}\n{body}\n")
+
+    def _log_text_section(self, title: str, text: str) -> None:
+        self._write_log(f"\n## {title}\n{text}\n")
+
+    def _log_stream_line(self, tool_name: str, fd: str, line: str, end: str) -> None:
+        clean = _sanitize_stream_text(str(line))
+        suffix = end if end in ("\n", "") else "\n"
+        self._write_log(f"[{tool_name} {fd}] {clean}{suffix}")
 
     def is_cancelled(self) -> bool:
         return self.cancel_event.is_set() or not self.app.is_run_active(self.run_id)
@@ -612,6 +650,7 @@ class TextualAgentUI(AgentUI):
         full_text = str(text or self._thinking_buffer).strip()
         self._thinking_buffer = ""
         if full_text:
+            self._log_text_section("thinking_trace", full_text)
             self.app.call_from_thread(self.app.append_thinking_trace, full_text)
 
     def update_spinner(self, message):
@@ -628,6 +667,7 @@ class TextualAgentUI(AgentUI):
         # A new tool invocation starts a fresh output stream.
         self._reset_stream_state()
         self._current_tool = tool_name
+        self._log_json_section(f"tool_call {tool_name}", args or {})
         if tool_name == "bash":
             self._emit(f"$ {args.get('command', '')}", STYLE_TOOL)
         elif tool_name in ("exec_python", "exec"):
@@ -657,6 +697,8 @@ class TextualAgentUI(AgentUI):
 
     def handle_tool_output(self, fd=None, line="", end="\n", result=None):
         if result is not None:
+            if self._current_tool:
+                self._log_json_section(f"tool_result {self._current_tool}", result)
             if self._current_tool == "bash":
                 # Discard the live in-place "current line" — it's
                 # superseded by a capped/expandable block built from the
@@ -668,7 +710,7 @@ class TextualAgentUI(AgentUI):
                 self.app.call_from_thread(self.app.discard_pending_stream)
                 self._emit_bash_result_output(result)
                 formatted, style = self._format_tool_result(result)
-                if formatted:
+                if formatted and not (isinstance(result, dict) and result.get("ok") is True):
                     self._emit(formatted, style)
                 return
 
@@ -681,6 +723,8 @@ class TextualAgentUI(AgentUI):
         if fd is None:
             return
 
+        if self._current_tool:
+            self._log_stream_line(self._current_tool, fd, str(line), end)
         self._show_stream(fd, str(line), STYLE_TOOL_OUTPUT)
 
     def _emit_bash_result_output(self, result) -> None:
@@ -692,12 +736,24 @@ class TextualAgentUI(AgentUI):
         result itself doesn't carry that content."""
         combined: list[str] = []
         if isinstance(result, dict):
-            stdout = result.get("stdout")
-            if stdout:
-                combined.extend(_resolve_carriage_returns(str(stdout).rstrip("\n")).splitlines())
-            stderr = result.get("stderr")
-            if stderr:
-                combined.extend(_resolve_carriage_returns(str(stderr).rstrip("\n")).splitlines())
+            entries = result.get("results")
+            if isinstance(entries, list):
+                for entry in entries:
+                    if not isinstance(entry, dict):
+                        continue
+                    stdout = entry.get("stdout")
+                    if stdout:
+                        combined.extend(_resolve_carriage_returns(str(stdout).rstrip("\n")).splitlines())
+                    stderr = entry.get("stderr")
+                    if stderr:
+                        combined.extend(_resolve_carriage_returns(str(stderr).rstrip("\n")).splitlines())
+            else:
+                stdout = result.get("stdout")
+                if stdout:
+                    combined.extend(_resolve_carriage_returns(str(stdout).rstrip("\n")).splitlines())
+                stderr = result.get("stderr")
+                if stderr:
+                    combined.extend(_resolve_carriage_returns(str(stderr).rstrip("\n")).splitlines())
 
         if not combined:
             for fd_name in ("stdout", "stderr"):
@@ -764,6 +820,8 @@ class TextualAgentUI(AgentUI):
     def handle_shell_result_output(self, result):
         if not isinstance(result, dict):
             return
+        if self._current_tool:
+            self._log_json_section(f"tool_result {self._current_tool}", result)
 
         # Flush any not-yet-committed live partial lines first.
         for fd_name in ("stdout", "stderr"):
@@ -788,24 +846,37 @@ class TextualAgentUI(AgentUI):
         MAX_TOOL_OUTPUT_LINES. If the output was actually truncated, the
         summary becomes clickable and expands to show up to
         MAX_EXPANDED_OUTPUT_LINES lines, with no arrow and no style change
-        between the collapsed and expanded views."""
+        between the collapsed and expanded views. For long output, keep the
+        final lines visible in the collapsed state so streamed installers
+        still show their completion message once the live stream is replaced.
+        """
         if len(lines) <= MAX_TOOL_OUTPUT_LINES:
             for line in lines:
                 self._emit(line, STYLE_TOOL_OUTPUT)
             return
 
         self._ensure_active()
-        summary_lines = [Text(line, style=STYLE_TOOL_OUTPUT) for line in lines[:MAX_TOOL_OUTPUT_LINES]]
-        summary_lines.append(Text("…", style=STYLE_TOOL_OUTPUT))
+        summary_lines = [Text("…", style=STYLE_TOOL_OUTPUT)]
+        summary_lines.extend(
+            Text(line, style=STYLE_TOOL_OUTPUT) for line in lines[-MAX_TOOL_OUTPUT_LINES:]
+        )
 
-        expanded = lines[:MAX_EXPANDED_OUTPUT_LINES]
+        expanded = self._summarize_long_output(lines, MAX_EXPANDED_OUTPUT_LINES)
         detail_lines = [Text(line, style=STYLE_TOOL_OUTPUT) for line in expanded]
-        if len(lines) > MAX_EXPANDED_OUTPUT_LINES:
-            detail_lines.append(Text("…", style=STYLE_TOOL_OUTPUT))
 
         self.app.call_from_thread(
             self.app.append_expandable_result, Group(*summary_lines), Group(*detail_lines)
         )
+
+    def _summarize_long_output(self, lines: list[str], limit: int) -> list[str]:
+        if len(lines) <= limit:
+            return list(lines)
+        if limit <= 1:
+            return ["…"]
+
+        tail_count = max(1, limit // 2)
+        head_count = max(0, limit - tail_count - 1)
+        return lines[:head_count] + ["…"] + lines[-tail_count:]
 
     def approve_privileged_binary(self, binary):
         self._ensure_active()

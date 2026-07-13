@@ -16,10 +16,21 @@ class FakeMCPClient:
         return self.results.pop(0)
 
 
+class StreamingFakeMCPClient(FakeMCPClient):
+    async def call_tool(self, tool_name, args, stream_output=False, on_stream=None):
+        self.calls.append((tool_name, dict(args), stream_output))
+        if stream_output and on_stream:
+            on_stream("stdout", "live line", "\n")
+        return self.results.pop(0)
+
+
 class FakeUI:
     def __init__(self, approved=True):
         self.approved = approved
         self.approval_prompts = []
+        self.tool_results = []
+        self.shell_results = []
+        self.streams = []
 
     def update_spinner(self, message):
         pass
@@ -34,10 +45,13 @@ class FakeUI:
         pass
 
     def handle_tool_output(self, fd=None, line="", end="\n", result=None):
-        pass
+        if result is not None:
+            self.tool_results.append(result)
+        elif fd is not None:
+            self.streams.append((fd, line, end))
 
     def handle_shell_result_output(self, result):
-        pass
+        self.shell_results.append(result)
 
     def approve_privileged_binary(self, binary):
         self.approval_prompts.append(binary)
@@ -102,6 +116,28 @@ class ToolApprovalTests(unittest.TestCase):
 
         self.assertTrue(result["ok"], result)
         self.assertIn("spotify 1.2.92 installed", stderr.getvalue())
+
+    def test_streaming_bash_forwards_final_result_to_ui(self):
+        final_result = {
+            "ok": True,
+            "output_truncated": True,
+            "results": [{
+                "command": "seq 1 60",
+                "stdout": "\n".join(str(i) for i in range(1, 51)) + "\n",
+                "stderr": "",
+                "returncode": 0,
+            }],
+        }
+        client = StreamingFakeMCPClient([final_result])
+        ui = FakeUI()
+        agent = self._agent_with_client(client, ui=ui)
+
+        result = agent._execute_tool("bash", {"command": "seq 1 60"})
+
+        self.assertIs(result, final_result)
+        self.assertEqual(ui.streams, [("stdout", "live line", "\n")])
+        self.assertEqual(ui.tool_results, [final_result])
+        self.assertEqual(ui.shell_results, [])
 
     def test_tool_agent_denial_does_not_retry(self):
         client = FakeMCPClient([
