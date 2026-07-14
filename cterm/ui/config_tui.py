@@ -1,0 +1,758 @@
+"""Textual configuration wizard for ``cterm -init``.
+
+This mirrors the original interactive flow in ``cterm.config.basic``, but
+presents each step as a single-prompt "page" in a simple linear (with
+branches) sequence: one page shows one list or one text input, Enter
+advances to the next page, and every page — including error/dead-end pages
+— offers a Back option (the Esc key, or the "← Back" entry appended to every
+list) that returns to the previous page with your prior answers preserved.
+
+Visually the wizard stays deliberately plain: choice pages render as an
+unboxed list (just a dim highlight on the current row), while the
+occasional free-text step (API keys, URLs, model names) is set apart as a
+small bordered input form. There's no color-coded status dashboard — just
+plain text, a dim tone for secondary/trail lines, and red reserved for
+actual errors.
+
+The branching/stateful logic (provider selection, Ollama server start/retry
+loop, model listing, optional small-model selection, unrestricted-bash and
+thinking-trace toggles) is expressed as a small state machine (see
+``STATE_HANDLERS`` / ``run_config``) that runs in a background worker thread
+and talks to the UI through event-based prompt requests — the same
+handshake pattern already used for privileged-binary approval prompts in
+``cterm/ui/tui.py``.
+"""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import threading
+import time
+from dataclasses import dataclass, field
+from typing import Any, Callable
+
+from rich.text import Text
+from textual import work
+from textual.app import App, ComposeResult
+from textual.containers import Vertical
+from textual.widgets import Input, OptionList, RichLog, Static
+from textual.widgets.option_list import Option
+
+from cterm.config import Config
+from cterm.config.utils import (
+    detect_ollama,
+    get_models,
+    _ollama_server_running,
+)
+
+
+# Minimal palette: plain text, a bold variant for section headers, a dim
+# tone for secondary/status lines, and red reserved for real errors only.
+STYLE_TEXT = "#f3f3f3"
+STYLE_HEADER = "bold #f3f3f3"
+STYLE_DIM = "#9e9e9e"
+STYLE_ERROR = "#e06c75"
+
+STYLE_SUCCESS = "#7d8a99"
+STYLE_WARNING = "#c2b280"
+STYLE_ACCENT = "bold #f3f3f3"
+
+BACK_LABEL = "← Back"
+
+
+@dataclass
+class SelectRequest:
+    """A single-choice prompt rendered as an OptionList."""
+    title: str
+    options: list[str]
+    default_index: int = 0
+    hint: str = "↑/↓ to move • Enter to select"
+    event: threading.Event = field(default_factory=threading.Event)
+    answer: int | None = None
+    went_back: bool = False
+
+
+@dataclass
+class InputRequest:
+    """A free-text prompt rendered as an Input."""
+    title: str
+    default: str = ""
+    placeholder: str = ""
+    hint: str = "Type, then Enter"
+    event: threading.Event = field(default_factory=threading.Event)
+    answer: str | None = None
+    went_back: bool = False
+
+
+@dataclass
+class MessageRequest:
+    """A non-interactive status line acknowledged by Enter."""
+    title: str
+    hint: str = "Enter to continue"
+    event: threading.Event = field(default_factory=threading.Event)
+    went_back: bool = False
+
+
+class ConfigPromptHandle:
+    """Thread-safe handle the worker uses to drive the UI.
+
+    Every method blocks the calling (worker) thread until the UI has
+    collected the user's response, mirroring the blocking semantics of the
+    original ``input()``-based flow. ``select`` and ``input`` raise
+    ``_GoBack`` when the user asks to return to the previous page (via the
+    "← Back" list entry or the Esc key), which the wizard loop in
+    ``run_config`` catches to rewind to the prior state."""
+
+    def __init__(self, app: "ConfigApp"):
+        self.app = app
+
+    def _check_alive(self) -> None:
+        if self.app._cancelled:
+            raise _ConfigCancelled()
+
+    def select(self, title: str, options: list[str], default_index: int = 0, hint: str = "") -> int:
+        self._check_alive()
+        default_index = max(0, min(default_index, len(options) - 1)) if options else 0
+        display_options = list(options) + [BACK_LABEL]
+        req = SelectRequest(
+            title,
+            display_options,
+            default_index,
+            hint=hint or "↑/↓ move • Enter select • Esc back",
+        )
+        self.app.call_from_thread(self.app._show_select, req)
+        req.event.wait()
+        self._check_alive()
+        if req.went_back:
+            raise _GoBack()
+        return int(req.answer) if req.answer is not None else 0
+
+    def input(self, title: str, default: str = "", placeholder: str = "", hint: str = "") -> str:
+        self._check_alive()
+        req = InputRequest(
+            title, default, placeholder, hint=hint or "Enter to continue • Esc back"
+        )
+        self.app.call_from_thread(self.app._show_input, req)
+        req.event.wait()
+        self._check_alive()
+        if req.went_back:
+            raise _GoBack()
+        return req.answer if req.answer is not None else ""
+
+    def confirm(self, title: str, default_yes: bool = False, hint: str = "") -> bool:
+        idx = self.select(title, ["No", "Yes"], 1 if default_yes else 0, hint=hint or "↑/↓ move • Enter select • Esc back")
+        return idx == 1
+
+    def message(self, title: str, hint: str = "Enter to continue") -> None:
+        self._check_alive()
+        req = MessageRequest(title, hint=hint)
+        self.app.call_from_thread(self.app._show_message, req)
+        req.event.wait()
+        self._check_alive()
+        if req.went_back:
+            raise _GoBack()
+
+    def log(self, text: str, style: str = STYLE_TEXT) -> None:
+        self._check_alive()
+        self.app.call_from_thread(self.app._append_log, text, style)
+
+
+class _ConfigCancelled(Exception):
+    """Raised in the worker when the user fully quits the wizard (Ctrl+C)."""
+
+
+class _GoBack(Exception):
+    """Raised in the worker when the user asks to return to the previous page."""
+
+
+# ---------------------------------------------------------------------------
+# Driver: each state below renders exactly one page (one select or one
+# input) and returns the name of the next state. ``run_config`` drives the
+# sequence and, whenever a state raises ``_GoBack``, rewinds to whichever
+# state was actually shown immediately before it — so Back always lands on
+# the page you actually came from, branches and all.
+# ---------------------------------------------------------------------------
+
+
+def _try_start_server(ui: ConfigPromptHandle, binary: str) -> bool:
+    ui.log("Starting Ollama server...", STYLE_WARNING)
+    try:
+        subprocess.run(
+            ["systemctl", "start", "ollama.service"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except subprocess.CalledProcessError as e:
+        ui.log(f"  systemctl said: {e.stderr.strip()}", STYLE_ERROR)
+        return False
+    except FileNotFoundError:
+        ui.log("  systemctl not found — cannot manage the ollama service.", STYLE_ERROR)
+        return False
+
+    for _ in range(15):
+        time.sleep(1)
+        if _ollama_server_running(binary):
+            break
+    else:
+        return False
+
+    ui.log("✓ Ollama server started", STYLE_SUCCESS)
+    return True
+
+
+def _state_provider(config: Config, ui: ConfigPromptHandle, binary: str) -> str:
+    options = [
+        "Ollama (local, default)",
+        "OpenRouter (cloud, requires API key)",
+        "llama.cpp (local, llama.cpp server)",
+    ]
+    default = 0 if config.api_provider == "ollama" else 1 if config.api_provider == "openrouter" else 2
+    ui.log("API Provider selection", STYLE_ACCENT)
+    idx = ui.select("Select API provider", options, default)
+    if idx == 1:
+        return "OPENROUTER_KEY_CHOICE" if config.openrouter_api_key else "OPENROUTER_KEY_INPUT"
+    if idx == 2:
+        return "LLAMACPP_URL"
+    return "OLLAMA_INSTALL_CHECK"
+
+
+# -- OpenRouter branch --------------------------------------------------
+
+
+def _state_openrouter_key_choice(config: Config, ui: ConfigPromptHandle, binary: str) -> str:
+    api_key = config.openrouter_api_key
+    masked = api_key[:8] + "..." if len(api_key) > 8 else "***"
+    ui.log(f"✓ OpenRouter API key: {masked}", STYLE_SUCCESS)
+    idx = ui.select("Change API key?", ["Keep existing key", "Enter a new key"], 0)
+    if idx == 1:
+        return "OPENROUTER_KEY_INPUT"
+    return "OPENROUTER_MODEL"
+
+
+def _state_openrouter_key_input(config: Config, ui: ConfigPromptHandle, binary: str) -> str:
+    while True:
+        api_key = ui.input("Enter your OpenRouter API key", placeholder="sk-or-...")
+        if not api_key:
+            ui.log("Error: API key is required", STYLE_ERROR)
+            continue
+        config.set(Config.OPENROUTER_API_KEY, api_key)
+        ui.log("✓ API key saved", STYLE_SUCCESS)
+        return "OPENROUTER_MODEL"
+
+
+def _state_openrouter_model(config: Config, ui: ConfigPromptHandle, binary: str) -> str:
+    saved_model = config.openrouter_model
+    ui.log("OpenRouter model (e.g. anthropic/claude-3.5-sonnet,", STYLE_DIM)
+    ui.log("  openai/gpt-4o, google/gemini-2.0-flash-001)", STYLE_DIM)
+    ui.log("  See https://openrouter.ai/models for the full list.", STYLE_DIM)
+    model = ui.input(
+        "Enter model name",
+        default=saved_model or "",
+        placeholder=saved_model or "anthropic/claude-3.5-sonnet",
+    )
+    if not model:
+        model = saved_model or "anthropic/claude-3.5-sonnet"
+    config.set(Config.OPENROUTER_MODEL, model)
+    ui.log(f"✓ Model: {model}", STYLE_SUCCESS)
+    return "OPENROUTER_SMALL_MODEL"
+
+
+def _state_openrouter_small_model(config: Config, ui: ConfigPromptHandle, binary: str) -> str:
+    small = config.openrouter_small_model
+    ui.log("Optional small model for lightweight tasks (skills selection,", STYLE_DIM)
+    ui.log("  verification). Enter to skip or 'none' to clear.", STYLE_DIM)
+    small_choice = ui.input("Small model", default=small or "", placeholder=small or "none")
+    if small_choice and small_choice.lower() not in ("none", "clear", "skip"):
+        config.set(Config.OPENROUTER_SMALL_MODEL, small_choice)
+        config.set(Config.SMALL_MODEL, small_choice)
+        ui.log(f"✓ Small model: {small_choice}", STYLE_SUCCESS)
+    elif small_choice and small_choice.lower() in ("none", "clear"):
+        config.unset(Config.OPENROUTER_SMALL_MODEL)
+        config.unset(Config.SMALL_MODEL)
+        ui.log("✓ Small model cleared", STYLE_SUCCESS)
+    elif small:
+        ui.log(f"✓ Small model: {small}", STYLE_SUCCESS)
+
+    config.set(Config.API_PROVIDER, "openrouter")
+    ui.log("✓ OpenRouter configured with provider: openrouter", STYLE_SUCCESS)
+    return "COMMON_BASH"
+
+
+# -- Ollama branch --------------------------------------------------------
+
+
+def _state_ollama_install_check(config: Config, ui: ConfigPromptHandle, binary: str) -> str:
+    installed, version = detect_ollama(binary)
+    if not installed:
+        ui.log(f"Error: {binary} is not installed", STYLE_ERROR)
+        ui.log("Please install Ollama from https://ollama.ai", STYLE_ERROR)
+        ui.select("Ollama not found", ["Exit"], 0)
+        return "EXIT"
+
+    ui.log(f"✓ {binary} is installed: {version or 'version unknown'}", STYLE_SUCCESS)
+    if version:
+        config.set("ollama_version", version)
+
+    ollama_host = os.environ.get("OLLAMA_HOST", "")
+    if ollama_host:
+        host = ollama_host.rstrip("/")
+        if not host.startswith("http://") and not host.startswith("https://"):
+            host = f"http://{host}"
+        config.set(Config.OLLAMA_SERVER_URL, host)
+        ui.log(f"✓ Using OLLAMA_HOST: {host}", STYLE_SUCCESS)
+    else:
+        config.set(Config.OLLAMA_SERVER_URL, "http://localhost:11434")
+
+    return "OLLAMA_CONNECT"
+
+
+def _state_ollama_connect(config: Config, ui: ConfigPromptHandle, binary: str) -> str:
+    if _ollama_server_running(binary):
+        return "OLLAMA_MODEL"
+    if _try_start_server(ui, binary):
+        return "OLLAMA_MODEL"
+    ui.log("Could not connect to the Ollama server.", STYLE_WARNING)
+    return "OLLAMA_URL_INPUT"
+
+
+def _state_ollama_url_input(config: Config, ui: ConfigPromptHandle, binary: str) -> str:
+    current = getattr(config, "ollama_server_url", "") or ""
+    custom_url = ui.input("Ollama URL", default=current, placeholder="http://localhost:11434")
+    if not custom_url:
+        custom_url = "http://localhost:11434"
+    if not custom_url.startswith("http://") and not custom_url.startswith("https://"):
+        custom_url = f"http://{custom_url}"
+    config.set(Config.OLLAMA_SERVER_URL, custom_url.rstrip("/"))
+    # Loop back through the connect check with the new URL.
+    return "OLLAMA_CONNECT"
+
+
+def _state_ollama_model(config: Config, ui: ConfigPromptHandle, binary: str) -> str:
+    models = get_models(binary)
+    if not models:
+        ui.log("No models found. Please install a model first:", STYLE_ERROR)
+        ui.log(f"  {binary} pull llama2", STYLE_ERROR)
+        ui.select("No models available", ["Exit"], 0)
+        return "EXIT"
+
+    saved = config.selected_model
+    default = models.index(saved) if saved and saved in models else 0
+    ui.log("Available models:", STYLE_ACCENT)
+    idx = ui.select("Select model", models, default)
+    selected = models[idx] if 0 <= idx < len(models) else None
+    if not selected:
+        ui.log("No model selected", STYLE_ERROR)
+        return "OLLAMA_MODEL"
+
+    config.set(Config.SELECTED_MODEL, selected)
+    config.set(Config.API_PROVIDER, "ollama")
+    ui.log(f"✓ Selected model: {selected}", STYLE_SUCCESS)
+    return "OLLAMA_SMALL_MODEL"
+
+
+def _state_ollama_small_model(config: Config, ui: ConfigPromptHandle, binary: str) -> str:
+    models = get_models(binary) or []
+    saved_small = config.small_model
+    options = list(models) + ["(none / clear)"]
+    default_small = (
+        options.index(saved_small) if saved_small and saved_small in options else len(options) - 1
+    )
+    ui.log("Optional small model for lightweight tasks.", STYLE_DIM)
+    sidx = ui.select("Select small model", options, default_small)
+    if sidx == len(options) - 1:
+        config.unset(Config.SMALL_MODEL)
+        ui.log("✓ No small model configured", STYLE_SUCCESS)
+    else:
+        small_model = options[sidx]
+        config.set(Config.SMALL_MODEL, small_model)
+        ui.log(f"✓ Selected small model: {small_model}", STYLE_SUCCESS)
+    return "COMMON_BASH"
+
+
+# -- llama.cpp branch -------------------------------------------------------
+
+
+def _state_llamacpp_url(config: Config, ui: ConfigPromptHandle, binary: str) -> str:
+    saved_url = config.llamacpp_server_url
+    url = ui.input("llama.cpp server URL", default=saved_url, placeholder=saved_url)
+    if not url:
+        url = saved_url
+    config.set(Config.LLAMACPP_SERVER_URL, url)
+    return "LLAMACPP_MODEL"
+
+
+def _state_llamacpp_model(config: Config, ui: ConfigPromptHandle, binary: str) -> str:
+    saved_model = config.llamacpp_model
+    model = ui.input("Enter model name", default=saved_model or "", placeholder=saved_model or "default")
+    if not model:
+        model = saved_model or "default"
+    config.set(Config.LLAMACPP_MODEL, model)
+    ui.log(f"✓ Model: {model}", STYLE_SUCCESS)
+    return "LLAMACPP_SMALL_MODEL"
+
+
+def _state_llamacpp_small_model(config: Config, ui: ConfigPromptHandle, binary: str) -> str:
+    small = config.llamacpp_small_model
+    ui.log("Optional small model for lightweight tasks (skills selection,", STYLE_DIM)
+    ui.log("  verification). Enter to skip or 'none' to clear.", STYLE_DIM)
+    small_choice = ui.input("Small model", default=small or "", placeholder=small or "none")
+    if small_choice and small_choice.lower() not in ("none", "clear", "skip"):
+        config.set(Config.LLAMACPP_SMALL_MODEL, small_choice)
+        config.set(Config.SMALL_MODEL, small_choice)
+        ui.log(f"✓ Small model: {small_choice}", STYLE_SUCCESS)
+    elif small_choice and small_choice.lower() in ("none", "clear"):
+        config.unset(Config.LLAMACPP_SMALL_MODEL)
+        config.unset(Config.SMALL_MODEL)
+        ui.log("✓ Small model cleared", STYLE_SUCCESS)
+    elif small:
+        ui.log(f"✓ Small model: {small}", STYLE_SUCCESS)
+
+    config.set(Config.API_PROVIDER, "llamacpp")
+    ui.log("✓ llama.cpp configured with provider: llamacpp", STYLE_SUCCESS)
+    return "COMMON_BASH"
+
+
+# -- Common tail ------------------------------------------------------------
+
+
+def _state_common_bash(config: Config, ui: ConfigPromptHandle, binary: str) -> str:
+    current_unrestricted = config.unrestricted_bash
+    enable = ui.confirm(
+        f"Enable unrestricted bash mode?{' (currently enabled)' if current_unrestricted else ''}",
+        default_yes=current_unrestricted,
+    )
+    if enable and not current_unrestricted:
+        config.set(Config.BASH_UNRESTRICTED, True)
+        ui.log("✓ Unrestricted bash mode enabled", STYLE_SUCCESS)
+    elif not enable and current_unrestricted:
+        config.set(Config.BASH_UNRESTRICTED, False)
+        ui.log("✓ Unrestricted bash mode disabled", STYLE_SUCCESS)
+    return "COMMON_THINKING"
+
+
+def _state_common_thinking(config: Config, ui: ConfigPromptHandle, binary: str) -> str:
+    current_thinking = config.stream_thinking_traces
+    enable = ui.confirm(
+        f"Stream model thinking traces in the UI?{' (currently enabled)' if current_thinking else ''}",
+        default_yes=current_thinking,
+    )
+    if enable and not current_thinking:
+        config.set(Config.STREAM_THINKING_TRACES, True)
+        ui.log("✓ Thinking trace streaming enabled", STYLE_SUCCESS)
+    elif not enable and current_thinking:
+        config.set(Config.STREAM_THINKING_TRACES, False)
+        ui.log("✓ Thinking trace streaming disabled", STYLE_SUCCESS)
+    return "DONE"
+
+
+STATE_HANDLERS: dict[str, Callable[[Config, ConfigPromptHandle, str], str]] = {
+    "PROVIDER": _state_provider,
+    "OPENROUTER_KEY_CHOICE": _state_openrouter_key_choice,
+    "OPENROUTER_KEY_INPUT": _state_openrouter_key_input,
+    "OPENROUTER_MODEL": _state_openrouter_model,
+    "OPENROUTER_SMALL_MODEL": _state_openrouter_small_model,
+    "OLLAMA_INSTALL_CHECK": _state_ollama_install_check,
+    "OLLAMA_CONNECT": _state_ollama_connect,
+    "OLLAMA_URL_INPUT": _state_ollama_url_input,
+    "OLLAMA_MODEL": _state_ollama_model,
+    "OLLAMA_SMALL_MODEL": _state_ollama_small_model,
+    "LLAMACPP_URL": _state_llamacpp_url,
+    "LLAMACPP_MODEL": _state_llamacpp_model,
+    "LLAMACPP_SMALL_MODEL": _state_llamacpp_small_model,
+    "COMMON_BASH": _state_common_bash,
+    "COMMON_THINKING": _state_common_thinking,
+}
+
+
+def run_config(config: Config, binary: str, ui: ConfigPromptHandle) -> int:
+    """Drive the wizard as a sequence of single-prompt pages.
+
+    Every page can raise ``_GoBack`` (via the shared prompt handle), in
+    which case we rewind to whichever page was actually shown right before
+    it. Going back from the very first page cancels the wizard, matching
+    what happens when the user cancels the very first prompt today."""
+    config.set(Config.API_PROVIDER, "ollama")
+
+    history: list[str] = []
+    state = "PROVIDER"
+
+    while state not in ("DONE", "EXIT"):
+        handler = STATE_HANDLERS.get(state)
+        if handler is None:
+            return 1
+        try:
+            next_state = handler(config, ui, binary)
+        except _GoBack:
+            if history:
+                state = history.pop()
+                continue
+            return 1
+        history.append(state)
+        state = next_state
+
+    if state == "EXIT":
+        return 1
+
+    ui.log("", STYLE_TEXT)
+    ui.log("You can now use cterm:", STYLE_TEXT)
+    ui.log('  cterm "Hello, how are you?"', STYLE_TEXT)
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Textual app
+# ---------------------------------------------------------------------------
+
+
+class ConfigApp(App[int]):
+    """Single-prompt-per-page configuration wizard with Back navigation."""
+
+    CSS = """
+    Screen {
+        background: #1e1e1e;
+        color: #f3f3f3;
+    }
+
+    #outer {
+        height: 100%;
+        width: 100%;
+        padding: 2 4;
+    }
+
+    #title {
+        height: 1;
+        color: #f3f3f3;
+        text-style: bold;
+        margin-bottom: 1;
+    }
+
+    #transcript {
+        height: 1fr;
+        max-height: 8;
+        width: 100%;
+        background: transparent;
+        color: #9e9e9e;
+        scrollbar-size-vertical: 1;
+        scrollbar-gutter: stable;
+        scrollbar-background: transparent;
+        scrollbar-color: #f3f3f3;
+        margin-bottom: 1;
+    }
+
+    #prompt_label {
+        height: auto;
+        min-height: 1;
+        color: #f3f3f3;
+        text-style: bold;
+        margin-bottom: 1;
+    }
+
+    #option_list {
+        height: auto;
+        max-height: 12;
+        width: 100%;
+        background: transparent;
+        border: none;
+        padding: 0;
+        margin-top: 0;
+    }
+
+    #option_list > .option-list--option-highlighted {
+        background: #f3f3f3 12%;
+        text-style: bold;
+    }
+
+    #text_input {
+        height: 3;
+        width: 56;
+        background: transparent;
+        border: round #7d8a99;
+        padding: 0 1;
+        margin-top: 0;
+    }
+
+    #text_input:focus {
+        border: round #f3f3f3;
+    }
+
+    #hint {
+        height: 1;
+        color: #9e9e9e;
+        margin-top: 1;
+    }
+
+    .hidden {
+        display: none;
+    }
+    """
+
+    BINDINGS = [
+        ("ctrl+c", "cancel", "Quit"),
+        ("escape", "back", "Back"),
+    ]
+
+    def __init__(self, binary: str = "ollama"):
+        super().__init__()
+        self.binary = binary
+        self._request: SelectRequest | InputRequest | MessageRequest | None = None
+        self._cancelled = False
+        self._result = 1
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="outer"):
+            yield Static("cterm configuration", id="title")
+            yield RichLog(id="transcript", markup=False, auto_scroll=True, wrap=True)
+            yield Static("", id="prompt_label")
+            yield OptionList(id="option_list", classes="hidden")
+            yield Input(id="text_input", classes="hidden")
+            yield Static("↑/↓ move • Enter select • Esc back", id="hint")
+
+    def on_mount(self) -> None:
+        # self._append_log("cterm configuration", STYLE_DIM)
+        self._append_log("", STYLE_TEXT)
+        self.run_wizard()
+
+    @work(exclusive=True, thread=True)
+    def run_wizard(self) -> None:
+        config = Config()
+        ui = ConfigPromptHandle(self)
+        try:
+            self._result = run_config(config, self.binary, ui)
+        except _ConfigCancelled:
+            self._result = 1
+        except Exception as exc:
+            try:
+                self.call_from_thread(self._append_log, f"Error: {exc}", STYLE_ERROR)
+            except Exception:
+                pass
+            self._result = 1
+        finally:
+            self.call_from_thread(self._finish)
+
+    # -- prompt rendering ---------------------------------------------------
+
+    def _show_select(self, req: SelectRequest) -> None:
+        self._request = req
+        self.query_one("#prompt_label", Static).update(req.title)
+        ol = self.query_one("#option_list", OptionList)
+        ol.clear_options()
+        ol.add_options(Option(opt) for opt in req.options)
+        ol.classes = ""
+        self.query_one("#text_input", Input).classes = "hidden"
+        self.query_one("#hint", Static).update(req.hint)
+        idx = max(0, min(req.default_index, len(req.options) - 1))
+        ol.highlighted = idx
+        ol.focus()
+
+    def _show_input(self, req: InputRequest) -> None:
+        self._request = req
+        self.query_one("#prompt_label", Static).update(req.title)
+        ti = self.query_one("#text_input", Input)
+        ti.classes = ""
+        ti.value = req.default
+        ti.placeholder = req.placeholder
+        self.query_one("#option_list", OptionList).classes = "hidden"
+        self.query_one("#hint", Static).update(req.hint)
+        ti.focus()
+
+    def _show_message(self, req: MessageRequest) -> None:
+        self._request = req
+        self.query_one("#prompt_label", Static).update(req.title)
+        self.query_one("#option_list", OptionList).classes = "hidden"
+        self.query_one("#text_input", Input).classes = "hidden"
+        self.query_one("#hint", Static).update(req.hint)
+        # Message is acknowledged by Enter on the OptionList's only option.
+        ol = self.query_one("#option_list", OptionList)
+        ol.classes = ""
+        ol.clear_options()
+        ol.add_options(Option("Continue"))
+        ol.highlighted = 0
+        ol.focus()
+
+    # -- widget events ------------------------------------------------------
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        req = self._request
+        if req is None:
+            return
+        if isinstance(req, SelectRequest):
+            idx = event.option_index
+            if idx == len(req.options) - 1:
+                # The appended "← Back" entry.
+                req.went_back = True
+                self._append_log(f"{req.title}: {BACK_LABEL}", STYLE_DIM)
+            else:
+                req.answer = idx
+                label = req.options[idx] if 0 <= idx < len(req.options) else ""
+                self._append_log(f"{req.title}: {label}", STYLE_DIM)
+        elif isinstance(req, MessageRequest):
+            self._append_log(req.title, STYLE_DIM)
+        else:
+            return
+        self._request = None
+        req.event.set()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        req = self._request
+        if req is None or not isinstance(req, InputRequest):
+            return
+        value = event.value.strip()
+        req.answer = value
+        shown = value if value else "(default)"
+        self._append_log(f"{req.title}: {shown}", STYLE_DIM)
+        self._request = None
+        event.input.value = ""
+        req.event.set()
+
+    # -- log / teardown -----------------------------------------------------
+
+    def _append_log(self, text: str, style: str = STYLE_TEXT) -> None:
+        transcript = self.query_one("#transcript", RichLog)
+        transcript.write(Text(text or "", style=style))
+
+    def _finish(self) -> None:
+        self._request = None
+        self.query_one("#option_list", OptionList).classes = "hidden"
+        self.query_one("#text_input", Input).classes = "hidden"
+        self.query_one("#prompt_label", Static).update("")
+        self.query_one("#hint", Static).update("Done.")
+        self.exit(self._result)
+
+    def action_back(self) -> None:
+        """Esc: ask the currently pending prompt to rewind to the previous page."""
+        req = self._request
+        if req is None:
+            return
+        req.went_back = True
+        self._request = None
+        req.event.set()
+
+    def action_cancel(self) -> None:
+        """Ctrl+C: quit the wizard entirely, regardless of history."""
+        if self._cancelled:
+            return
+        self._cancelled = True
+        req = self._request
+        if req is not None:
+            self._request = None
+            req.event.set()
+        self._result = 1
+        self.exit(1)
+
+
+def init_command_tui(binary: str = "ollama") -> int:
+    """Launch the Textual configuration wizard.
+
+    Falls back to the plain ``cterm.config.basic.init_command`` flow when
+    Textual is unavailable, so ``cterm --init`` keeps working in minimal
+    environments.
+    """
+    try:
+        result = ConfigApp(binary=binary).run()
+        return int(result or 0)
+    except ImportError:
+        from cterm.config.basic import init_command
+        return init_command(binary)
