@@ -27,12 +27,32 @@ def _is_python_binary(tok: str) -> bool:
     return name in _PYTHON_BINARIES or name.startswith("python3.")
 
 
+def _extract_heredoc_python(command: str) -> str | None:
+    """Extract Python source from a ``python3 << DELIM`` heredoc."""
+    import re
+
+    m = re.search(
+        r'\bpython(?:3(?:\.\d+)?)?\s+<<\s+([\'"]?)(\w+)\1\s*\n(.+?)\n\s*\2',
+        command,
+        re.DOTALL,
+    )
+    if m:
+        return m.group(3).strip()
+    return None
+
+
 def _detect_python_in_bash(command: str) -> str | None:
     """Check if a bash command runs Python code and return the code to approve.
 
-    Returns the Python source for ``-c`` invocations, the full command for
-    script/module invocations, or ``None`` if this is not a Python execution.
+    Returns the Python source for ``-c`` invocations, heredoc content for
+    ``<<`` invocations, the full command for script/module invocations,
+    or ``None`` if this is not a Python execution.
     """
+    # Check for heredoc pattern first (preserves formatting and newlines)
+    py_code = _extract_heredoc_python(command)
+    if py_code is not None:
+        return py_code
+
     try:
         tokens = shlex.split(command)
     except ValueError:
@@ -383,18 +403,17 @@ class ToolAgent:
                 self._debug_tool_result(tool_name, args, tool_result)
                 return tool_result
 
-        if is_shell and not Config().unrestricted_bash:
+        if is_shell:
             command = args.get("command", "")
             py_code = _detect_python_in_bash(command)
-            if py_code is not None:
-                if not self.ui.approve_python_code(py_code):
-                    tool_result = {
-                        "ok": False,
-                        "error": "Python code execution not approved by user",
-                    }
-                    self.ui.handle_tool_output(result=tool_result)
-                    self._debug_tool_result(tool_name, args, tool_result)
-                    return tool_result
+            if py_code is not None and not self.ui.approve_python_code(py_code):
+                tool_result = {
+                    "ok": False,
+                    "error": "Python code execution not approved by user",
+                }
+                self.ui.handle_tool_output(result=tool_result)
+                self._debug_tool_result(tool_name, args, tool_result)
+                return tool_result
 
         self.ui.update_spinner(label)
 
@@ -502,6 +521,7 @@ class ToolAgent:
             "specific file cannot be located or imports are required to "
             "answer the question. Use exact file paths from tool results; "
             "do not invent or rename paths in the final answer. "
+            "be careful with destructive operations"
             "Work only on the assigned action. When the action is complete, "
             "respond with a concise plain text summary of what was done"
         )

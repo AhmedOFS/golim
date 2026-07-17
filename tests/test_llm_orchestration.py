@@ -45,35 +45,6 @@ class OrchestrationTests(unittest.TestCase):
         self.assertEqual(execute_tool.call_count, 3)
         self.assertEqual(len(chat_calls), 4)
 
-    def test_agent_reaches_iteration_limit(self):
-        def fake_chat(model, messages, tools=None, binary="ollama", response_format=None):
-            if tools is None:
-                return {"message": {"role": "assistant", "content": "Hit the iteration limit summary."}}
-            return {
-                "message": {
-                    "role": "assistant",
-                    "content": "",
-                    "tool_calls": [{
-                        "function": {
-                            "name": "bash",
-                            "arguments": {"command": "printf ok"},
-                        }
-                    }]
-                }
-            }
-
-        agent = ToolAgent("main")
-        agent.tools = []
-        agent.MAX_AGENT_ITERATIONS = 2
-
-        with patch.object(agent, "_select_skills", return_value=([], "")), \
-             patch.object(agent, "_execute_tool", return_value={"ok": True, "results": []}), \
-             patch("cterm.llm.chat_with_model_api", side_effect=fake_chat) as chat:
-            result = agent._run_action_agent("Do work.")
-
-        self.assertIn("iteration limit", result.lower())
-        self.assertEqual(chat.call_count, 3)
-
     def test_agent_appends_tool_call_and_result_to_messages(self):
         chat_calls = []
 

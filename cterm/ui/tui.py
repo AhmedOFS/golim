@@ -557,6 +557,7 @@ class TextualAgentUI(AgentUI):
         # Name of the tool currently in flight, so handle_tool_output knows
         # which result-formatting branch to use.
         self._current_tool: str | None = None
+        self._code_shown_for_approval = False
         self._log_file = None
 
     def set_log_file(self, log_file) -> None:
@@ -668,6 +669,7 @@ class TextualAgentUI(AgentUI):
         # A new tool invocation starts a fresh output stream.
         self._reset_stream_state()
         self._current_tool = tool_name
+        self._code_shown_for_approval = False
         self._log_json_section(f"tool_call {tool_name}", args or {})
         if tool_name == "bash":
             self._emit(f"$ {args.get('command', '')}", STYLE_TOOL)
@@ -678,6 +680,7 @@ class TextualAgentUI(AgentUI):
             code = args.get("code") or args.get("script") or args.get("source") or ""
             self._ensure_active()
             self.app.call_from_thread(self.app.append_code, "» running script", code)
+            self._code_shown_for_approval = True
         elif tool_name == "finder":
             self._emit(
                 f"⦾ finding: {args.get('pattern', '')} in {args.get('path', '')}",
@@ -891,6 +894,8 @@ class TextualAgentUI(AgentUI):
 
     def approve_python_code(self, code):
         self._ensure_active()
+        if not self._code_shown_for_approval:
+            self.app.call_from_thread(self.app.append_code, "» python in bash", code)
         event = threading.Event()
         request = ApprovalRequest(self.run_id, "", event, code=code)
         self.app.call_from_thread(self.app.start_python_approval_prompt, request)
