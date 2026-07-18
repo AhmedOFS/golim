@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 import socket
 import sys
-
 import select as _select
 
 class FastMCPClient:
@@ -82,98 +81,37 @@ class FastMCPClient:
         finally:
             sock.close()
 
-    _PARAMS_MAP = {
-        'list_files': {'type':'object','properties':{'path':{'type':'string','description':'Directory path to list'}},'required':['path']},
-        'read_file':  {
-            'type': 'object',
-            'properties': {
-                'path': {'type': 'string', 'description': 'File path to read'},
-                'page': {'type': 'integer', 'description': '1-based page number; each page returns up to 50 lines'},
-            },
-            'required': ['path'],
-        },
-        'bash':  {
-            'type': 'object',
-            'properties': {
-                'command': {'type': 'string', 'description': 'Shell command to execute'},
-                'stream': {'type': 'boolean', 'description': 'Stream stdout/stderr incrementally'},
-            },
-            'required': ['command'],
-        },
-        'exec':  {
-            'type': 'object',
-            'properties': {
-                'code': {'type': 'string', 'description': 'Python source code to run'},
-                'timeout': {'type': 'integer', 'description': 'Maximum run time in seconds, capped at 120'},
-                'cwd': {'type': 'string', 'description': 'Optional working directory'},
-                'stdin': {'type': 'string', 'description': 'Optional stdin text'},
-            },
-            'required': ['code'],
-        },
-        'finder': {
-            'type': 'object',
-            'properties': {
-                'path': {'type': 'string', 'description': 'Root directory to search'},
-                'pattern': {'type': 'string', 'description': 'Required filename glob, for example "*.pdf" or "*CV*"'},
-                'include': {
-                    'type': 'array',
-                    'items': {'type': 'string'},
-                    'description': 'Optional extra filename globs',
-                },
-                'exclude': {
-                    'type': 'array',
-                    'items': {'type': 'string'},
-                    'description': 'Optional path globs to skip',
-                },
-                'max_depth': {'type': 'integer', 'description': 'Maximum recursion depth'},
-                'type_filter': {'type': 'string', 'enum': ['file', 'dir']},
-                'max_results': {'type': 'integer', 'description': 'Maximum number of results'},
-            },
-            'required': ['path', 'pattern'],
-        },
-        'websearch': {
-            'type': 'object',
-            'properties': {
-                'query': {'type': 'string', 'description': 'Web search query'},
-                'num_results': {'type': 'integer', 'description': 'Number of search results to return (1-20)'},
-                'livecrawl': {'type': 'string', 'enum': ['fallback', 'preferred'], 'description': 'Live crawl mode'},
-                'type': {'type': 'string', 'enum': ['auto', 'fast', 'deep'], 'description': 'Search type'},
-                'context_max_characters': {'type': 'integer', 'description': 'Maximum characters for context string'},
-            },
-            'required': ['query'],
-        },
-        'system_info': {
-            'type': 'object',
-            'properties': {},
-            'required': [],
-        },
-        'write_file': {
-            'type': 'object',
-            'properties': {
-                'path': {'type': 'string', 'description': 'Destination file path'},
-                'content': {'type': 'string', 'description': 'Text content to write'},
-                'mode': {'type': 'string', 'enum': ['overwrite', 'append'], 'description': 'Write mode'},
-            },
-            'required': ['path', 'content'],
-        },
-    }
-
     def _make_tool(self, name, description='', parameters=None):
         return type('Tool', (), {'name': name, 'description': description,
                                  'inputSchema': parameters or {},
-                                 'parameters': self._PARAMS_MAP.get(name, parameters or {})})()
+                                 'parameters': parameters or {}})()
 
     async def list_tools(self):
-        try:
-            response = self._send_request("tools/list")
-            result = response.get("result", {})
-            tools_data = result.get("tools") if isinstance(result, dict) else (result if isinstance(result, list) else None) or response.get("tools")
-            if not tools_data:
-                raise ValueError("No tools in response")
-            return [self._make_tool(t.get('name'), t.get('description',''), t.get('inputSchema',{})) for t in tools_data]
-        except Exception:
-            return [self._make_tool(name, f'Tool: {name}', params)
-                    for name, params in self._PARAMS_MAP.items()]
+        response = self._send_request("tools/list")
+        if "error" in response:
+            error = response["error"]
+            message = error.get("message", "Unknown error") if isinstance(error, dict) else str(error)
+            raise RuntimeError(f"tools/list failed: {message}")
+
+        result = response.get("result", {})
+        if isinstance(result, dict):
+            tools_data = result.get("tools")
+        elif isinstance(result, list):
+            tools_data = result
+        else:
+            tools_data = response.get("tools")
+
+        if not tools_data:
+            raise ValueError("No tools in response")
+
+        return [
+            self._make_tool(
+                t.get('name'),
+                t.get('description', ''),
+                t.get('inputSchema', {}),
+            )
+            for t in tools_data
+        ]
 
     async def call_tool(self, tool_name, args, stream_output=False, on_stream=None):
         try:

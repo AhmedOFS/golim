@@ -5,15 +5,6 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-
-DEFAULT_PRIVILEGED_BINARIES = (
-    "/usr/bin/apt",
-    "/usr/bin/apt-get",
-    "/usr/bin/tee",
-    "/usr/bin/snap",
-)
-
-
 def get_config_dir() -> Path:
     cfg_home = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
     return Path(cfg_home) / "cterm"
@@ -60,17 +51,3 @@ def add_privileged_binary(binary: str, path: Path | None = None) -> None:
     )
     tmp.replace(whitelist_path)
 
-
-def prompt_to_add_privileged_binary(binary: str) -> bool:
-    prompt = f"Allow sudo access for {binary}? [Y/N] "
-    try:
-        with open("/dev/tty", "r+", encoding="utf-8") as tty:
-            tty.write(prompt)
-            tty.flush()
-            answer = tty.readline()
-    except OSError:
-        try:
-            answer = input(prompt)
-        except (EOFError, KeyboardInterrupt):
-            return False
-    return answer.strip().lower() in {"y", "yes"}

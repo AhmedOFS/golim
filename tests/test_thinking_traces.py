@@ -4,7 +4,7 @@ from importlib.util import find_spec
 from unittest.mock import patch
 
 from cterm.config import Config
-from cterm.llm import ToolAgent
+from cterm.core.agent import ToolAgent
 
 
 class FakeUI:
@@ -57,7 +57,7 @@ class ThinkingTraceTests(unittest.TestCase):
 
     @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
     def test_tui_thinking_renderable_starts_with_icon_and_label(self):
-        from cterm.ui.tui import Transcript
+        from cterm.ui.tui.tui import Transcript
 
         transcript = Transcript()
 
@@ -69,7 +69,7 @@ class ThinkingTraceTests(unittest.TestCase):
 
     @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
     def test_tui_live_thinking_updates_then_collapses_same_entry(self):
-        from cterm.ui.tui import Transcript
+        from cterm.ui.tui.tui import Transcript
 
         transcript = Transcript()
         transcript.append_thinking_delta("first")

@@ -16,8 +16,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from cterm.cterm_server import get_socket_path
-from cterm.llm_utils.mcp_client import FastMCPClient
+from cterm.mcp.server import get_socket_path
+from cterm.core.mcp_client import FastMCPClient
 
 
 COMMAND = "sudo snap install spotify"

@@ -6,7 +6,6 @@ and shuts down after a period of inactivity.
 """
 import logging
 import os
-import sys
 import time
 import threading
 import asyncio
@@ -15,17 +14,9 @@ import json
 from pathlib import Path
 import pwd
 
-logger = logging.getLogger(__name__)
+from cterm.mcp.tools import mcp
 
-# Import the MCP server and tools
-try:
-    from cterm.mcp.tools_mcp import mcp
-except ImportError:
-    try:
-        from .mcp.tools_mcp import mcp
-    except ImportError:
-        logger.error("Could not import tools_mcp. Ensure tools_mcp.py is in the same directory.")
-        sys.exit(1)
+logger = logging.getLogger(__name__)
 
 # 20 minutes of inactivity
 INACTIVITY_TIMEOUT_SECONDS = 1200

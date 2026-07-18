@@ -3,8 +3,8 @@ import os
 import subprocess
 import time
 
-from .config import Config
-from .utils import (
+from ...config.config import Config
+from ...config.utils import (
     detect_ollama,
     get_models,
     _ollama_server_running,

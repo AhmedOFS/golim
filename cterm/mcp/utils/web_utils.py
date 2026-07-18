@@ -2,13 +2,7 @@ import os
 
 import requests
 
-try:
-    from cterm.mcp.utils.mcp_utils import _read_cterm_config
-except ImportError:
-    try:
-        from .mcp_utils import _read_cterm_config
-    except ImportError:
-        from mcp.utils.mcp_utils import _read_cterm_config
+from .mcp_utils import _read_cterm_config
 
 
 EXA_MCP_URL = "https://mcp.exa.ai/mcp"

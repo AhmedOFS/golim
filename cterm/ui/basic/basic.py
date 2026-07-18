@@ -3,16 +3,39 @@
 import sys
 from typing import Any, Protocol
 
-from cterm.agent_ui import AgentUI
-from cterm.llm_utils.utils import Spinner, _clip_label
-from cterm.privilege import prompt_to_add_privileged_binary
-
-
+from cterm.core.agent_ui import AgentUI
+from cterm.config import Config
+from cterm.core.runtime import Runtime
+from cterm.core.utils import _clip_label
+from cterm.ui.basic.spinner import Spinner
 
 class TerminalUI(AgentUI):
-    def __init__(self):
+    def __init__(
+        self,
+        *,
+        config: Config | None = None,
+        model: str | None = None,
+        binary: str = "ollama",
+        small_model: str | None = None,
+        debug: bool = False,
+    ):
+        self._config = config or Config()
+        self._model = model
+        self._binary = binary
+        self._small_model = small_model
+        self._debug = debug
         self._spinner = None
         self._thinking_live = False
+
+    def run(self, message: str) -> str:
+        with Runtime(
+            config=self._config,
+            model=self._model,
+            binary=self._binary,
+            small_model=self._small_model,
+            debug=self._debug,
+        ) as runtime:
+            return runtime.run(message)
 
     def update_spinner(self, message):
         if self._spinner is None:
@@ -97,7 +120,33 @@ class TerminalUI(AgentUI):
         sys.stderr.flush()
 
     def approve_privileged_binary(self, binary):
-        return prompt_to_add_privileged_binary(binary)
+    
+        prompt = f"Allow sudo access for {binary}? [Y/N] "
+        try:
+            with open("/dev/tty", "r+", encoding="utf-8") as tty:
+                tty.write(prompt)
+                tty.flush()
+                answer = tty.readline()
+        except OSError:
+            try:
+                answer = input(prompt)
+            except (EOFError, KeyboardInterrupt):
+                return False
+        return answer.strip().lower() in {"y", "yes"}
+    
+    def _show_python(self, code):
+        sys.stderr.write("\033[38;5;248m" + "-" * 40 + "\033[0m\n")
+        for line in code.split("\n"):
+            sys.stderr.write(f"\033[33m{line}\033[0m\n")
+        sys.stderr.write("\033[38;5;248m" + "-" * 40 + "\033[0m\n")
+
+    def show_python_code(self, code):
+        if self._spinner:
+            self._spinner.stop()
+            self._spinner = None
+        sys.stderr.write("\n\033[1mPython code in bash command:\033[0m\n")
+        self._show_python(code)
+        sys.stderr.flush()
 
     def approve_python_code(self, code):
         if self._spinner:
@@ -105,10 +154,7 @@ class TerminalUI(AgentUI):
             self._spinner = None
 
         sys.stderr.write("\n\033[1mPython code requires approval:\033[0m\n")
-        sys.stderr.write("\033[38;5;248m" + "-" * 40 + "\033[0m\n")
-        for line in code.split("\n"):
-            sys.stderr.write(f"\033[33m{line}\033[0m\n")
-        sys.stderr.write("\033[38;5;248m" + "-" * 40 + "\033[0m\n")
+        self._show_python(code)
 
         prompt = "Execute this Python code? [Y/N] "
         try:

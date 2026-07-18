@@ -1,7 +1,11 @@
-
-from asyncio import Protocol
-
+from contextvars import ContextVar
 from typing import Any, Protocol
+
+
+active_agent_ui: ContextVar["AgentUI | None"] = ContextVar(
+    "active_agent_ui",
+    default=None,
+)
 
 class AgentUI(Protocol):
     """Common UI contract consumed by ToolAgent."""
@@ -40,4 +44,7 @@ class AgentUI(Protocol):
         ...
 
     def approve_python_code(self, code: str) -> bool:
+        ...
+
+    def show_python_code(self, code: str) -> None:
         ...

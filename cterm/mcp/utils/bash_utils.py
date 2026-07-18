@@ -12,18 +12,9 @@ import subprocess
 import time
 from dataclasses import dataclass
 
-try:
-    from cterm.mcp.utils.mcp_utils import _read_cterm_config
-except ImportError:
-    try:
-        from .mcp_utils import _read_cterm_config
-    except ImportError:
-        from mcp.utils.mcp_utils import _read_cterm_config
+from .privilege import add_privileged_binary, is_privileged_binary_allowed
 
-try:
-    from privilege import add_privileged_binary, is_privileged_binary_allowed
-except ImportError:
-    from ...privilege import add_privileged_binary, is_privileged_binary_allowed
+from .mcp_utils import _read_cterm_config
 
 
 OUTPUT_LINE_LIMIT = 50

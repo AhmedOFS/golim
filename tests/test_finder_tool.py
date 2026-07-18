@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from cterm.mcp.tools_mcp import finder
+from cterm.mcp.tools import finder
 
 
 class FinderToolTests(unittest.TestCase):

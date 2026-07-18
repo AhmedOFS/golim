@@ -2,83 +2,16 @@
 """cterm - Main entry point"""
 import argparse
 import datetime
-import logging
 import re
 import shutil
-import subprocess
 import sys
-import time
 from pathlib import Path
-import os
 from . import __version__
 from .config import Config
-from .ui.config_tui import init_command_tui
 from .logger import setup_root_logger
-from .llm import  chat_with_tools 
-
-# NOTE: The actual location must be correct for your project structure (e.g., .cterm_server)
-# Assuming a file named cterm_server.py in the same package:
-def get_socket_path() -> Path:
-    """Returns the UDS path based on the current user (Mock implementation)."""
-    # This must match the implementation in cterm_server.py
-    import os
-    return Path(f"/tmp/cterm_mcp_{os.getlogin()}.sock")
-
-## Server Management Helper
-# This function encapsulates the logic to ensure the background server is running.
-
-def ensure_server_running(service_name: str = "cterm-mcp.service", timeout: float = 10.0) -> bool:
-    """
-    Checks if the systemd user service is active. If not, starts it and
-    waits for the UDS file to appear before returning.
-
-    :param service_name: The name of the systemd user service.
-    :param timeout: Maximum time to wait for the server to start (UDS to appear).
-    :return: True if the server is running or successfully started, False otherwise.
-    """
-    socket_path = get_socket_path()
-    start_time = time.time()
-    
-    # Check 1: Is the UDS socket already present? (Server is likely already running)
-    if socket_path.exists():
-        logging.info("Server UDS found. Assuming server is active.")
-        return True
-
-    # Check 2: Service is not running, so start it.
-    logging.info(f"Server UDS not found at {socket_path}. Attempting to start user service '{service_name}'...")
-    
-    try:
-        # Use systemctl --user to manage the user service
-        subprocess.run(
-            ["systemctl", "--user", "start", service_name],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        logging.info(f"Attempting to start {service_name}")
-    except subprocess.CalledProcessError as e:
-        logging.error(f"Failed to start service '{service_name}' (systemctl error):\n{e.stderr.strip()}")
-        return False
-    except FileNotFoundError:
-        logging.error("The 'systemctl' command was not found. Cannot manage the user service.")
-        return False
-    except subprocess.TimeoutExpired:
-        logging.warning("Timeout while trying to execute 'systemctl --user start'.")
-        
-    # Check 3: Wait for the UDS file to appear
-    logging.info(f"Waiting for UDS file to appear at {socket_path}...")
-    while time.time() - start_time < timeout:
-        if socket_path.exists():
-            logging.info("Server is up (UDS file found).")
-            # Give the server a small moment to fully initialize its listener socket
-            time.sleep(0.1) 
-            return True
-        time.sleep(0.2) # Polling interval
-
-    logging.error(f"Timeout: Server failed to start and create UDS at {socket_path} within {timeout}s.")
-    return False
-
+from .core.agent_ui import active_agent_ui
+from .core.runtime import Runtime
+from .ui.basic.basic import TerminalUI
 
 def _setup_session_log():
     log_dir = Path.home() / "cterm" / "logs"
@@ -107,47 +40,19 @@ def _setup_session_log():
 
 def chat_command(message: str, binary: str = "ollama", debug: bool = False) -> int:
     """Send a message to the configured model."""
-    config = Config()
-    model = config.selected_model
-    small_model = config.small_model
-    provider = config.api_provider
-
-
-
-    if provider == "ollama":
-        if not shutil.which(binary):
-            print(f"Error: {binary} is not installed")
-            return 1
-        else:
-              model = config.selected_model
-              small_model = config.small_model
-    elif provider == "openrouter":
-        if not config.openrouter_api_key:
-            print("Error: OpenRouter API key not configured")
-            print("Run 'cterm -i' to set it up")
-            return 1
-        else:
-              model = config.openrouter_model
-              small_model = config.openrouter_small_model
-    elif provider == "llamacpp":
-        if not config.llamacpp_server_url:
-            print("Error: llama.cpp server URL not configured")
-            print("Run 'cterm -i' to set it up")
-            return 1
-        else:
-              model = config.llamacpp_model
-              small_model = config.llamacpp_small_model
-    if not model:
-        print("Error: No model configured")
-        print("Run 'cterm -i' to initialize")
-        return 1
-    # Ensure the UDS server daemon is running for tool execution
-    if not ensure_server_running():
+    error, model, small_model = _resolve_chat_settings(binary)
+    if error:
+        print(error)
         return 1
 
     log_file, log_path, real_stderr = _setup_session_log()
     try:
-        response = chat_with_tools(model, message, binary, small_model=small_model, debug=debug)
+        ui = TerminalUI(model=model, binary=binary, small_model=small_model, debug=debug)
+        token = active_agent_ui.set(ui)
+        try:
+            response = ui.run(message)
+        finally:
+            active_agent_ui.reset(token)
         log_file.write(f"\nresponse: {response}\n")
         log_file.flush()
         print(response)
@@ -202,7 +107,7 @@ def _create_tui_log():
 
 def tui_command(binary: str = "ollama", debug: bool = False) -> int:
     """Open the default Textual interface."""
-    from .ui.tui import ChatResult, CtermApp
+    from .ui.tui.tui import CtermApp
 
     config = Config()
     provider = config.api_provider
@@ -213,41 +118,31 @@ def tui_command(binary: str = "ollama", debug: bool = False) -> int:
     else:
         model_label = config.selected_model or "Ollama"
 
-    def _runner(message, ui):
-        error, model, small_model = _resolve_chat_settings(binary)
-        log_file, log_path = _create_tui_log()
-        if hasattr(ui, "set_log_file"):
-            ui.set_log_file(log_file)
-        try:
-            log_file.write(f"prompt: {message}\n")
-            if error:
-                log_file.write(f"error: {error}\n")
-                return ChatResult(False, error, str(log_path))
-            if not ensure_server_running():
-                error_text = "Error: cterm tool server could not be started"
-                log_file.write(f"error: {error_text}\n")
-                return ChatResult(False, error_text, str(log_path))
-
-            response = chat_with_tools(
-                model,
-                message,
-                binary,
-                small_model=small_model,
-                debug=debug,
-                ui=ui,
-            )
-            log_file.write(f"\nresponse: {response}\n")
-            return ChatResult(True, response, str(log_path))
-        finally:
-            log_file.flush()
-            log_file.close()
+    error, model, small_model = _resolve_chat_settings(binary)
 
     try:
-        result = CtermApp(_runner, model_label, debug=debug).run()
+        result = CtermApp(
+            model_label,
+            config=config,
+            model=model,
+            binary=binary,
+            small_model=small_model,
+            debug=debug,
+            runtime_error=error,
+            log_factory=_create_tui_log,
+        ).run()
         return int(result or 0)
     except ImportError as exc:
         print(f"Error: Textual is required for the default UI: {exc}")
         return 1
+
+
+def run_command(message: str, binary: str = "ollama", debug: bool = False) -> int:
+    return chat_command(message, binary, debug=debug)
+
+
+def run_tui_command(binary: str = "ollama", debug: bool = False) -> int:
+    return tui_command(binary, debug=debug)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -296,6 +191,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     
     if args.init:
+        from .ui.tui.config_tui import init_command_tui
+
         return init_command_tui(args.binary)
     
     # Chat mode

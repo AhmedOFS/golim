@@ -2,7 +2,7 @@ import asyncio
 import unittest
 from unittest.mock import patch
 
-from cterm.llm_utils.mcp_client import FastMCPClient
+from cterm.core.mcp_client import FastMCPClient
 
 
 class FakeClient(FastMCPClient):
@@ -14,6 +14,16 @@ class FakeClient(FastMCPClient):
     def _call_tool_once(self, tool_name, call_args, stream_output=False, on_stream=None):
         self.calls.append((tool_name, dict(call_args), stream_output))
         return self.responses.pop(0)
+
+
+class FakeListClient(FastMCPClient):
+    def __init__(self, response):
+        super().__init__("/tmp")
+        self.response = response
+
+    def _send_request(self, method, params=None):
+        self.method = method
+        return self.response
 
 
 class MCPClientTests(unittest.TestCase):
@@ -52,28 +62,73 @@ class MCPClientTests(unittest.TestCase):
             {"command": "sudo systemctl status", "allow_privileged": True},
         )
 
-    def test_finder_schema_requires_pattern(self):
+    def test_make_tool_uses_supplied_schema(self):
         client = FastMCPClient("/tmp")
-        tool = client._make_tool("finder", "Tool: finder", {})
+        schema = {
+            "type": "object",
+            "properties": {"pattern": {"type": "string"}},
+            "required": ["pattern"],
+        }
 
-        self.assertEqual(tool.parameters["required"], ["path", "pattern"])
+        tool = client._make_tool("finder", "Tool: finder", schema)
+
+        self.assertEqual(tool.parameters, schema)
+        self.assertEqual(tool.inputSchema, schema)
         self.assertIn("pattern", tool.parameters["properties"])
 
-    def test_exec_schema_requires_code(self):
+    def test_make_tool_does_not_invent_schema_for_empty_input_schema(self):
         client = FastMCPClient("/tmp")
         tool = client._make_tool("exec", "Tool: exec", {})
 
-        self.assertEqual(tool.parameters["required"], ["code"])
-        self.assertIn("code", tool.parameters["properties"])
-        self.assertIn("timeout", tool.parameters["properties"])
+        self.assertEqual(tool.parameters, {})
+        self.assertEqual(tool.inputSchema, {})
 
-    def test_read_file_schema_accepts_page(self):
-        client = FastMCPClient("/tmp")
-        tool = client._make_tool("read_file", "Tool: read_file", {})
+    def test_list_tools_uses_server_input_schema(self):
+        server_schema = {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "pattern": {"type": "string"},
+                "system_inclusive": {"type": "boolean"},
+            },
+            "required": ["path"],
+        }
+        client = FakeListClient({
+            "result": {
+                "tools": [{
+                    "name": "finder",
+                    "description": "live finder",
+                    "inputSchema": server_schema,
+                }],
+            },
+        })
 
-        self.assertEqual(tool.parameters["required"], ["path"])
-        self.assertIn("path", tool.parameters["properties"])
-        self.assertIn("page", tool.parameters["properties"])
+        tools = asyncio.run(client.list_tools())
+
+        self.assertEqual(client.method, "tools/list")
+        self.assertEqual(tools[0].parameters, server_schema)
+        self.assertEqual(tools[0].inputSchema, server_schema)
+
+    def test_list_tools_keeps_empty_server_schema_empty(self):
+        client = FakeListClient({
+            "result": {
+                "tools": [{
+                    "name": "finder",
+                    "description": "empty finder",
+                    "inputSchema": {},
+                }],
+            },
+        })
+
+        tools = asyncio.run(client.list_tools())
+
+        self.assertEqual(tools[0].parameters, {})
+
+    def test_list_tools_raises_when_response_has_no_tools(self):
+        client = FakeListClient({"result": {"tools": []}})
+
+        with self.assertRaises(ValueError):
+            asyncio.run(client.list_tools())
 
 
 if __name__ == "__main__":

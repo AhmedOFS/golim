@@ -4,75 +4,25 @@ import os
 import subprocess
 import sys
 
-
-
-try:
-    from cterm.mcp.utils.mcp_utils import _read_cterm_config
-    from cterm.mcp.utils.web_utils import (
-        EXA_MCP_URL,
-        MAX_NUM_RESULTS,
-        NO_RESULTS,
-        PARALLEL_MCP_URL,
-        _parse_mcp_response,
-        _websearch_mcp_call,
-        _websearch_provider,
-        _exa_api_key,
-        _parallel_api_key
-    )
-    from cterm.mcp.utils.bash_utils import (
-        OUTPUT_LINE_LIMIT,
-        _is_bash_unrestricted,
-        _requires_pty_streaming,
-        _run_restricted,
-        _run_unrestricted,
-        _stream_restricted,
-        _stream_unrestricted,
-    )
-except ImportError:
-    try:
-        from .utils.mcp_utils import _read_cterm_config
-        from .utils.web_utils import (
-            EXA_MCP_URL,
-            MAX_NUM_RESULTS,
-            NO_RESULTS,
-            PARALLEL_MCP_URL,
-            _parse_mcp_response,
-            _websearch_mcp_call,
-            _websearch_provider,
-            _exa_api_key,
-            _parallel_api_key
-        )
-        from .utils.bash_utils import (
-            OUTPUT_LINE_LIMIT,
-            _is_bash_unrestricted,
-            _requires_pty_streaming,
-            _run_restricted,
-            _run_unrestricted,
-            _stream_restricted,
-            _stream_unrestricted,
-        )
-    except ImportError:
-        from mcp.utils.mcp_utils import _read_cterm_config
-        from mcp.utils.web_utils import (
-            EXA_MCP_URL,
-            MAX_NUM_RESULTS,
-            NO_RESULTS,
-            PARALLEL_MCP_URL,
-            _parse_mcp_response,
-            _websearch_mcp_call,
-            _websearch_provider,
-            _exa_api_key,
-            _parallel_api_key
-        )
-        from mcp.utils.bash_utils import (
-            OUTPUT_LINE_LIMIT,
-            _is_bash_unrestricted,
-            _requires_pty_streaming,
-            _run_restricted,
-            _run_unrestricted,
-            _stream_restricted,
-            _stream_unrestricted,
-        )
+from .utils.bash_utils import (
+    OUTPUT_LINE_LIMIT,
+    _is_bash_unrestricted,
+    _requires_pty_streaming,
+    _run_restricted,
+    _run_unrestricted,
+    _stream_restricted,
+    _stream_unrestricted,
+)
+from .utils.web_utils import (
+    EXA_MCP_URL,
+    MAX_NUM_RESULTS,
+    NO_RESULTS,
+    PARALLEL_MCP_URL,
+    _exa_api_key,
+    _parallel_api_key,
+    _websearch_mcp_call,
+    _websearch_provider,
+)
 
 _should_stream_with_pty = _requires_pty_streaming
 
@@ -91,12 +41,6 @@ def tool(func):
     """Decorator to mark a function as an MCP tool"""
     func.__mcp_tool__ = True
     return func
-
-# ---------------------------------------------------------------------------
-# Config helper
-# ---------------------------------------------------------------------------
-
-
 
 # --- Tool Definitions ---
 @tool

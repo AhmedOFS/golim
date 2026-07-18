@@ -754,5 +754,5 @@ def init_command_tui(binary: str = "ollama") -> int:
         result = ConfigApp(binary=binary).run()
         return int(result or 0)
     except ImportError:
-        from cterm.config.basic import init_command
+        from cterm.ui.basic.basic_config import init_command
         return init_command(binary)

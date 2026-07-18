@@ -1,7 +1,8 @@
 import json
 import unittest
 
-from cterm.llm_utils import chat_api
+from cterm.api import ollama as chat_api_ollama
+from cterm.api import utils as chat_api_utils
 
 
 class FakeStreamResponse:
@@ -35,7 +36,7 @@ class ChatApiStreamingTests(unittest.TestCase):
             json.dumps({"done": True}),
         ])
 
-        result = chat_api._normalize_ollama_stream_response(response, deltas.append)
+        result = chat_api_ollama._normalize_ollama_stream_response(response, deltas.append)
 
         self.assertEqual(deltas, ["checking ", "files"])
         self.assertEqual(result["message"]["content"], "")
@@ -54,7 +55,7 @@ class ChatApiStreamingTests(unittest.TestCase):
             "data: [DONE]",
         ])
 
-        result = chat_api._normalize_openai_stream_response(response, deltas.append)
+        result = chat_api_utils.normalize_openai_stream_response(response, deltas.append)
 
         self.assertEqual(deltas, ["plan ", "step"])
         self.assertEqual(result["message"]["role"], "assistant")

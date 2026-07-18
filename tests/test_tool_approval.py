@@ -3,7 +3,7 @@ from contextlib import redirect_stderr
 from io import StringIO
 from unittest.mock import patch
 
-from cterm.llm import ToolAgent
+from cterm.core.agent import ToolAgent
 
 
 class FakeMCPClient:

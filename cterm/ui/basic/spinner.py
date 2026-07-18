@@ -1,11 +1,6 @@
-
-import asyncio
-import os
-from pathlib import Path
 import sys
 import threading
 import time
-
 
 class Spinner:
     FRAMES = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"]
@@ -70,25 +65,3 @@ class Spinner:
                 sys.stderr.write(text + "\n")
             self._draw_locked()
             sys.stderr.flush()
-
-import concurrent.futures
-
-def _run_async(coro):
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        future = pool.submit(asyncio.run, coro)
-        return future.result()
-
-
-def _indent(text, prefix="      "):
-    return "\n".join(prefix + line for line in text.splitlines())
-
-
-def _clip_label(text, max_chars=80):
-    line = text.splitlines()[0] if text else (text or "")
-    if len(line) <= max_chars:
-        return line
-    return line[:max_chars] + "..."
-
-
-def get_socket_path() -> Path:
-    return Path(f"/tmp/cterm_mcp_{os.getlogin()}.sock")

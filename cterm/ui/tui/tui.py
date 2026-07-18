@@ -25,8 +25,10 @@ from textual.strip import Strip
 from textual.timer import Timer
 from textual.widgets import Input, Static
 
-from cterm.agent_ui import AgentUI
-from cterm.ui.history import History
+from cterm.core.agent_ui import AgentUI, active_agent_ui
+from cterm.config import Config
+from cterm.core.runtime import Runtime
+from cterm.ui.tui.history import History
 
 
 _ANSI_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
@@ -892,6 +894,10 @@ class TextualAgentUI(AgentUI):
         event.wait()
         return bool(request.answer)
 
+    def show_python_code(self, code):
+        self._ensure_active()
+        self.app.call_from_thread(self.app.append_code, "» python in bash", code)
+
     def approve_python_code(self, code):
         self._ensure_active()
         if not self._code_shown_for_approval:
@@ -1039,15 +1045,26 @@ class CtermApp(App[int]):
 
     def __init__(
         self,
-        chat_runner: Callable[[str, TextualAgentUI], ChatResult],
         model_label: str,
         *,
+        config: Config | None = None,
+        model: str | None = None,
+        binary: str = "ollama",
+        small_model: str | None = None,
         debug: bool = False,
+        runtime_error: str | None = None,
+        log_factory: Callable[[], tuple[object, object]] | None = None,
     ):
         super().__init__()
-        self.chat_runner = chat_runner
-        self.model_label = model_label
+        self._config = config or Config()
+        self._model = model
+        self._binary = binary
+        self._small_model = small_model
         self.cterm_debug = debug
+        self._runtime_error = runtime_error
+        self.log_factory = log_factory
+        self._runtime: Runtime | None = None
+        self.model_label = model_label
         self._busy = False
         self._active_run_id = 0
         self._approval_request: ApprovalRequest | None = None
@@ -1058,6 +1075,20 @@ class CtermApp(App[int]):
         self._spinner_frame_index = 0
         self._spinner_timer: Timer | None = None
         self._history = History()
+
+    def _get_runtime(self) -> Runtime | None:
+        if self._model is None:
+            return None
+        if self._runtime is not None:
+            self._runtime.close()
+        self._runtime = Runtime(
+            config=self._config,
+            model=self._model,
+            binary=self._binary,
+            small_model=self._small_model,
+            debug=self.cterm_debug,
+        )
+        return self._runtime
 
     def compose(self) -> ComposeResult:
         with Vertical(id="outer"):
@@ -1076,6 +1107,10 @@ class CtermApp(App[int]):
     def on_mount(self) -> None:
         self.query_one("#query_bar", Static).display = False
         self.query_one("#prompt", Input).focus()
+
+    def on_unmount(self) -> None:
+        if self._runtime is not None:
+            self._runtime.terminate()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         text = event.value.strip()
@@ -1251,28 +1286,27 @@ class CtermApp(App[int]):
         return self._busy and self._active_run_id == run_id
 
     def _cancel_active_run(self, *, force_thread: bool = True) -> None:
-        if self._active_cancel_event is not None:
-            self._active_cancel_event.set()
-        worker = self._chat_worker
-        if worker is not None and hasattr(worker, "cancel"):
-            try:
-                worker.cancel()
-            except Exception:
-                pass
+        if self._runtime is not None:
+            self._runtime.interrupt()
         if force_thread:
+            if self._active_cancel_event is not None:
+                self._active_cancel_event.set()
+            worker = self._chat_worker
+            if worker is not None and hasattr(worker, "cancel"):
+                try:
+                    worker.cancel()
+                except Exception:
+                    pass
             _raise_in_thread(self._chat_thread_id, RunCancelled)
 
     def action_interrupt(self) -> None:
         if self._busy:
-            self._cancel_active_run()
+            self._cancel_active_run(force_thread=False)
             if self._approval_request is not None:
                 self._approval_request.answer = False
                 self._approval_request.event.set()
                 self._approval_request = None
-            self._active_run_id += 1
-            self.set_status("")
-            self.set_busy(False)
-            self.append_line("Interrupted.", STYLE_WARNING)
+            self.set_status("Interrupting")
         else:
             self._cancel_active_run()
             if self._chat_thread_id is not None:
@@ -1286,12 +1320,41 @@ class CtermApp(App[int]):
         self._chat_thread_id = threading.get_ident()
         cancel_event = self._active_cancel_event or threading.Event()
         ui = TextualAgentUI(self, run_id, cancel_event)
+        log_file = None
+        log_path = None
         try:
-            result = self.chat_runner(message, ui)
+            if self.log_factory is not None:
+                log_file, log_path = self.log_factory()
+                ui.set_log_file(log_file)
+                log_file.write(f"prompt: {message}\n")
+
+            if self._runtime_error:
+                if log_file is not None:
+                    log_file.write(f"error: {self._runtime_error}\n")
+                result = ChatResult(False, self._runtime_error, str(log_path) if log_path else None)
+            else:
+                token = active_agent_ui.set(ui)
+                try:
+                    runtime = self._get_runtime()
+                    if runtime is None:
+                        error = "Error: runtime is not available"
+                        if log_file is not None:
+                            log_file.write(f"error: {error}\n")
+                        result = ChatResult(False, error, str(log_path) if log_path else None)
+                    else:
+                        response = runtime.run(message)
+                        if log_file is not None:
+                            log_file.write(f"\nresponse: {response}\n")
+                        result = ChatResult(True, response, str(log_path) if log_path else None)
+                finally:
+                    active_agent_ui.reset(token)
             if not self.is_run_active(run_id):
                 return
             self.call_from_thread(self.append_line, "")
-            self.call_from_thread(self.append_markdown, result.text, result.ok)
+            if result.text == "Interrupted.":
+                self.call_from_thread(self.append_line, result.text, STYLE_WARNING)
+            else:
+                self.call_from_thread(self.append_markdown, result.text, result.ok)
             if result.log_path:
                 self.call_from_thread(self.append_line, f"(log: {result.log_path})", STYLE_DIM)
         except RunCancelled:
@@ -1300,6 +1363,9 @@ class CtermApp(App[int]):
             if self.is_run_active(run_id):
                 self.call_from_thread(self.append_line, f"Error: {exc}", STYLE_ERROR)
         finally:
+            if log_file is not None:
+                log_file.flush()
+                log_file.close()
             if self._active_run_id == run_id:
                 self._chat_thread_id = None
                 self._chat_worker = None

@@ -7,7 +7,7 @@ from unittest.mock import patch
 from io import StringIO
 
 from cterm.config import Config
-from cterm.llm import ToolAgent
+from cterm.core.agent import ToolAgent
 
 
 class OrchestrationTests(unittest.TestCase):
@@ -35,13 +35,11 @@ class OrchestrationTests(unittest.TestCase):
         agent.tools = []
         agent.MAX_AGENT_ITERATIONS = 5
 
-        with patch.object(agent, "_select_skills", return_value=([], "")) as select_skills, \
-             patch.object(agent, "_execute_tool", return_value={"ok": True, "results": []}) as execute_tool, \
+        with patch.object(agent, "_execute_tool", return_value={"ok": True, "results": []}) as execute_tool, \
              patch("cterm.llm.chat_with_model_api", side_effect=fake_chat):
-            result = agent._run_action_agent("Do work.")
+            result = agent._run_action_agent("Do work.", selected_skills=[])
 
         self.assertEqual(result, "Final answer after three tool iterations.")
-        select_skills.assert_called_once_with("Do work.")
         self.assertEqual(execute_tool.call_count, 3)
         self.assertEqual(len(chat_calls), 4)
 
@@ -69,10 +67,9 @@ class OrchestrationTests(unittest.TestCase):
         agent.tools = []
         agent.MAX_AGENT_ITERATIONS = 5
 
-        with patch.object(agent, "_select_skills", return_value=([], "")), \
-             patch.object(agent, "_execute_tool", return_value={"ok": True, "results": []}), \
+        with patch.object(agent, "_execute_tool", return_value={"ok": True, "results": []}), \
              patch("cterm.llm.chat_with_model_api", side_effect=fake_chat):
-            result = agent._run_action_agent("Do work.")
+            result = agent._run_action_agent("Do work.", selected_skills=[])
 
         self.assertEqual(result, "Done.")
         self.assertEqual(len(chat_calls), 2)
@@ -110,11 +107,10 @@ class OrchestrationTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp, \
              patch.dict(os.environ, {"XDG_CONFIG_HOME": tmp}), \
-             patch.object(agent, "_select_skills", return_value=([], "")), \
              patch.object(agent, "_execute_tool", return_value={"ok": True, "results": []}), \
              patch("cterm.llm.chat_with_model_api", side_effect=fake_chat):
             Config().set(Config.STREAM_THINKING_TRACES, True)
-            result = agent._run_action_agent("Do work.")
+            result = agent._run_action_agent("Do work.", selected_skills=[])
 
         self.assertEqual(result, "Done.")
         self.assertEqual(len(chat_calls), 2)
@@ -166,11 +162,10 @@ class OrchestrationTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp, \
              patch.dict(os.environ, {"XDG_CONFIG_HOME": tmp}), \
-             patch.object(agent, "_select_skills", return_value=([], "")), \
              patch.object(agent, "_execute_tool", return_value={"ok": True, "results": []}), \
              patch("cterm.llm.chat_with_model_api", side_effect=fake_chat):
             Config().set(Config.STREAM_THINKING_TRACES, True)
-            result = agent._run_action_agent("Do work.")
+            result = agent._run_action_agent("Do work.", selected_skills=[])
 
         self.assertEqual(result, "Done.")
         self.assertEqual(len(chat_calls), 3)

@@ -3,7 +3,7 @@ import unittest
 from unittest.mock import patch, MagicMock
 from pathlib import Path
 
-from cterm.mcp.tools_mcp import websearch
+from cterm.mcp.tools import websearch
 
 
 SAMPLE_EXA_RESPONSE = json.dumps({
@@ -118,7 +118,7 @@ class WebSearchToolTests(unittest.TestCase):
         )
         mock_post.return_value = mock_response
 
-        from cterm.mcp.tools_mcp import NO_RESULTS
+        from cterm.mcp.tools import NO_RESULTS
         result = websearch("test")
         self.assertTrue(result["ok"])
         self.assertEqual(result["text"], NO_RESULTS)
@@ -130,7 +130,7 @@ class WebSearchToolTests(unittest.TestCase):
             __import__("requests").exceptions.ConnectionError("connection failed")
         )
 
-        from cterm.mcp.tools_mcp import NO_RESULTS
+        from cterm.mcp.tools import NO_RESULTS
         result = websearch("test")
         self.assertTrue(result["ok"])
         self.assertEqual(result["text"], NO_RESULTS)
@@ -180,7 +180,7 @@ class WebSearchToolTests(unittest.TestCase):
             __import__("requests").exceptions.Timeout("timed out")
         )
 
-        from cterm.mcp.tools_mcp import NO_RESULTS
+        from cterm.mcp.tools import NO_RESULTS
         result = websearch("test")
         self.assertTrue(result["ok"])
         self.assertEqual(result["text"], NO_RESULTS)
@@ -196,7 +196,7 @@ class WebSearchToolTests(unittest.TestCase):
         )
         mock_post.return_value = mock_response
 
-        from cterm.mcp.tools_mcp import NO_RESULTS
+        from cterm.mcp.tools import NO_RESULTS
         result = websearch("test")
         self.assertTrue(result["ok"])
         self.assertEqual(result["text"], NO_RESULTS)
