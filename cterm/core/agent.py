@@ -145,8 +145,13 @@ class ToolAgent:
     def last_thinking_trace(self):
         return self._last_thinking_trace
 
-    def run(self, user_message, selected_skills=None):
-        return self._run_action_agent(user_message, selected_skills)
+    def run(self, user_message, selected_skills=None, initial_messages=None, initial_tool_history=None):
+        return self._run_action_agent(
+            user_message,
+            selected_skills,
+            initial_messages=initial_messages,
+            initial_tool_history=initial_tool_history,
+        )
 
     def _debug_tool_result(self, tool_name, args, result):
         if not self.debug:
@@ -529,7 +534,13 @@ class ToolAgent:
             "respond with a concise plain text summary of what was done"
         )
 
-    def _run_action_agent(self, user_message, selected_skills=None):
+    def _run_action_agent(
+        self,
+        user_message,
+        selected_skills=None,
+        initial_messages=None,
+        initial_tool_history=None,
+    ):
         try:
             self._reset_run_state()
             selected_skills = selected_skills or []
@@ -539,11 +550,20 @@ class ToolAgent:
             )
 
             system_prompt = self._agent_system_prompt()
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_message},
-            ]
-            tool_history = []
+            if initial_messages:
+                messages = [dict(message) for message in initial_messages]
+                if not messages or messages[0].get("role") != "system":
+                    messages.insert(0, {"role": "system", "content": system_prompt})
+                else:
+                    messages[0] = {"role": "system", "content": system_prompt}
+                self._remove_thinking_traces_from_history(messages)
+                messages.append({"role": "user", "content": user_message})
+            else:
+                messages = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_message},
+                ]
+            tool_history = [dict(item) for item in (initial_tool_history or [])]
             stopped_for_final_response = False
             message = {}
 

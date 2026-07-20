@@ -27,6 +27,18 @@ from .utils.web_utils import (
 _should_stream_with_pty = _requires_pty_streaming
 
 
+def _coerce_bash_timeout(timeout):
+    if timeout is None:
+        return None, None
+    try:
+        coerced = float(timeout)
+    except (TypeError, ValueError):
+        return None, {"ok": False, "error": "timeout must be a number of seconds or null"}
+    if coerced <= 0:
+        return None, {"ok": False, "error": "timeout must be greater than zero"}
+    return coerced, None
+
+
 
 
 # Simple wrapper class to hold tools (no FastMCP dependency needed for server)
@@ -349,6 +361,9 @@ def bash(command: str, stream: bool = False, allow_privileged: bool = False, tim
     In both modes, `stream=True` yields incremental output chunks followed by
     a final result dict.
     """
+    timeout, timeout_error = _coerce_bash_timeout(timeout)
+    if timeout_error:
+        return timeout_error
     if _is_bash_unrestricted():
         runner, streamer = _run_unrestricted, _stream_unrestricted
     else:

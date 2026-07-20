@@ -51,6 +51,10 @@ STYLE_TOOL_OUTPUT = "#C7A4A4"   # raw stdout/stderr streamed from running tools
 MAX_TOOL_OUTPUT_LINES = 2       # cap on the *static* post-completion output summary
 MAX_EXPANDED_OUTPUT_LINES = 20  # cap on the expanded/clicked-open output view
 
+INITIAL_PROMPT_PLACEHOLDER = "Type your Request..."
+RUNNING_PROMPT_PLACEHOLDER = "Use // to add a clarification..."
+DONE_PROMPT_PLACEHOLDER = "Type a new request, or use // to add a follow up..."
+
 
 def _resolve_carriage_returns(text: str) -> str:
     """Collapse \\r-driven in-place rewrites down to their final visual state.
@@ -1075,19 +1079,23 @@ class CtermApp(App[int]):
         self._spinner_frame_index = 0
         self._spinner_timer: Timer | None = None
         self._history = History()
+        self._pending_followup: tuple[str, bool] | None = None
+        self._pending_followup_lock = threading.Lock()
+        self._has_completed_query = False
 
-    def _get_runtime(self) -> Runtime | None:
+    def _get_runtime(self, ui: AgentUI | None = None) -> Runtime | None:
         if self._model is None:
             return None
-        if self._runtime is not None:
-            self._runtime.close()
-        self._runtime = Runtime(
-            config=self._config,
-            model=self._model,
-            binary=self._binary,
-            small_model=self._small_model,
-            debug=self.cterm_debug,
-        )
+        if self._runtime is None:
+            self._runtime = Runtime(
+                config=self._config,
+                model=self._model,
+                binary=self._binary,
+                small_model=self._small_model,
+                debug=self.cterm_debug,
+            )
+        if ui is not None:
+            self._runtime.ui = ui
         return self._runtime
 
     def compose(self) -> ComposeResult:
@@ -1099,13 +1107,14 @@ class CtermApp(App[int]):
                     yield Static("", id="status")
             with Horizontal(id="prompt_line"):
                 yield Static(">", id="prompt_marker")
-                yield Input(id="prompt", placeholder="Type your Request...")
+                yield Input(id="prompt", placeholder=INITIAL_PROMPT_PLACEHOLDER)
             with Horizontal(id="footer"):
                 yield Static(self.model_label, id="model")
                 yield Static("esc Interrupt • ↑/↓ History • Tab Inspect", id="keys")
 
     def on_mount(self) -> None:
         self.query_one("#query_bar", Static).display = False
+        self.update_prompt_placeholder()
         self.query_one("#prompt", Input).focus()
 
     def on_unmount(self) -> None:
@@ -1120,23 +1129,63 @@ class CtermApp(App[int]):
             return
         if not text:
             return
+        is_followup = Runtime.is_followup_message(text)
+        followup_text = Runtime.followup_text(text)
+        if is_followup and not followup_text:
+            self.bell()
+            event.input.value = ""
+            return
         if self._busy:
+            if is_followup:
+                self._history.add(text)
+                event.input.value = ""
+                self.append_followup_query(followup_text)
+                self.queue_followup(followup_text, clarification=True)
+                self.set_status("Clarifying")
+                return
             self.bell()
             return
         self._history.add(text)
         event.input.value = ""
-        # The active query is pinned above the transcript instead of being
-        # written into the scrolling log, so it stays visible while the
-        # transcript below it scrolls.
-        query_bar = self.query_one("#query_bar", Static)
-        query_bar.update(Text(f"> {text}", style="bold #f3f3f3"))
-        query_bar.display = True
-        self.query_one("#transcript", Transcript).clear()
+        run_as_followup = is_followup and self._runtime is not None and self._runtime.messages
+        if run_as_followup:
+            self.append_followup_query(followup_text)
+        else:
+            # The active query is pinned above the transcript instead of being
+            # written into the scrolling log, so it stays visible while the
+            # transcript below it scrolls.
+            query_bar = self.query_one("#query_bar", Static)
+            display_text = followup_text if is_followup else text
+            query_bar.update(Text(f"> {display_text}", style="bold #f3f3f3"))
+            query_bar.display = True
+            self.query_one("#transcript", Transcript).clear()
         self._active_run_id += 1
         self._active_cancel_event = threading.Event()
         self._chat_thread_id = None
         self._busy = True
-        self._chat_worker = self.run_chat(text, self._active_run_id)
+        self.update_prompt_placeholder()
+        self._chat_worker = self.run_chat(
+            followup_text if is_followup else text,
+            self._active_run_id,
+            followup=run_as_followup,
+            clarification=False,
+        )
+
+    def append_followup_query(self, text: str) -> None:
+        transcript = self.query_one("#transcript", Transcript)
+        transcript.write(Text(f"> {text}", style="bold #f3f3f3"))
+
+    def queue_followup(self, text: str, *, clarification: bool) -> None:
+        with self._pending_followup_lock:
+            self._pending_followup = (text, clarification)
+        if self._runtime is not None:
+            self._runtime.interrupt()
+
+    def pop_pending_followup(self) -> tuple[str, bool] | None:
+        with self._pending_followup_lock:
+            pending = self._pending_followup
+            self._pending_followup = None
+        return pending
 
     def append_line(self, text: str, style: str = STYLE_TEXT, end: str = "\n") -> None:
         transcript = self.query_one("#transcript", Transcript)
@@ -1241,7 +1290,9 @@ class CtermApp(App[int]):
         request.answer = text.strip().lower() in {"y", "yes"}
         self._approval_request = None
         prompt = self.query_one("#prompt", Input)
-        prompt.placeholder = ""
+        prompt.placeholder = RUNNING_PROMPT_PLACEHOLDER if self._busy else (
+            DONE_PROMPT_PLACEHOLDER if self._has_completed_query else INITIAL_PROMPT_PLACEHOLDER
+        )
         prompt.disabled = False
         request.event.set()
 
@@ -1266,11 +1317,20 @@ class CtermApp(App[int]):
     # -- Busy state ----------------------------------------------------------
     def set_busy(self, busy: bool) -> None:
         self._busy = busy
+        self.update_prompt_placeholder()
         prompt = self.query_one("#prompt", Input)
         if not busy:
             prompt.disabled = False
-            prompt.placeholder = ""
             prompt.focus()
+
+    def update_prompt_placeholder(self) -> None:
+        prompt = self.query_one("#prompt", Input)
+        if self._busy:
+            prompt.placeholder = RUNNING_PROMPT_PLACEHOLDER
+        elif self._has_completed_query:
+            prompt.placeholder = DONE_PROMPT_PLACEHOLDER
+        else:
+            prompt.placeholder = INITIAL_PROMPT_PLACEHOLDER
 
     def action_previous_history(self) -> None:
         prompt = self.query_one("#prompt", Input)
@@ -1316,7 +1376,14 @@ class CtermApp(App[int]):
             self.exit(0)
 
     @work(exclusive=True, thread=True)
-    def run_chat(self, message: str, run_id: int) -> None:
+    def run_chat(
+        self,
+        message: str,
+        run_id: int,
+        *,
+        followup: bool = False,
+        clarification: bool = False,
+    ) -> None:
         self._chat_thread_id = threading.get_ident()
         cancel_event = self._active_cancel_event or threading.Event()
         ui = TextualAgentUI(self, run_id, cancel_event)
@@ -1335,14 +1402,29 @@ class CtermApp(App[int]):
             else:
                 token = active_agent_ui.set(ui)
                 try:
-                    runtime = self._get_runtime()
+                    runtime = self._get_runtime(ui)
                     if runtime is None:
                         error = "Error: runtime is not available"
                         if log_file is not None:
                             log_file.write(f"error: {error}\n")
                         result = ChatResult(False, error, str(log_path) if log_path else None)
                     else:
-                        response = runtime.run(message)
+                        current_message = message
+                        current_followup = followup
+                        current_clarification = clarification
+                        while True:
+                            if current_followup:
+                                response = runtime.run_followup(
+                                    current_message,
+                                    clarification=current_clarification,
+                                )
+                            else:
+                                response = runtime.run(current_message)
+                            pending = self.pop_pending_followup() if self.is_run_active(run_id) else None
+                            if pending is None:
+                                break
+                            current_message, current_clarification = pending
+                            current_followup = True
                         if log_file is not None:
                             log_file.write(f"\nresponse: {response}\n")
                         result = ChatResult(True, response, str(log_path) if log_path else None)
@@ -1355,6 +1437,7 @@ class CtermApp(App[int]):
                 self.call_from_thread(self.append_line, result.text, STYLE_WARNING)
             else:
                 self.call_from_thread(self.append_markdown, result.text, result.ok)
+                self._has_completed_query = True
             if result.log_path:
                 self.call_from_thread(self.append_line, f"(log: {result.log_path})", STYLE_DIM)
         except RunCancelled:
@@ -1369,6 +1452,7 @@ class CtermApp(App[int]):
             if self._active_run_id == run_id:
                 self._chat_thread_id = None
                 self._chat_worker = None
-            if self.is_run_active(run_id):
+            if self._busy and self._active_run_id == run_id:
+                self._busy = False
                 self.call_from_thread(self.set_status, "")
                 self.call_from_thread(self.set_busy, False)

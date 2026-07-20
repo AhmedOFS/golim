@@ -31,7 +31,7 @@ class ThinkingTraceTests(unittest.TestCase):
                 on_thinking_delta("two")
                 return {"message": {"role": "assistant", "content": "ok"}}
 
-            with patch("cterm.llm.chat_with_model_api", side_effect=fake_chat):
+            with patch("cterm.core.agent.chat_with_model_api", side_effect=fake_chat):
                 result = agent._chat_with_optional_thinking("model", [])
 
         self.assertEqual(result["message"]["content"], "ok")
@@ -48,7 +48,7 @@ class ThinkingTraceTests(unittest.TestCase):
                 self.assertNotIn("on_thinking_delta", kwargs)
                 return {"message": {"role": "assistant", "content": "ok"}}
 
-            with patch("cterm.llm.chat_with_model_api", side_effect=fake_chat):
+            with patch("cterm.core.agent.chat_with_model_api", side_effect=fake_chat):
                 result = agent._chat_with_optional_thinking("model", [])
 
         self.assertEqual(result["message"]["content"], "ok")

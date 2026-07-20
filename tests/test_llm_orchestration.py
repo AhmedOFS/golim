@@ -36,7 +36,7 @@ class OrchestrationTests(unittest.TestCase):
         agent.MAX_AGENT_ITERATIONS = 5
 
         with patch.object(agent, "_execute_tool", return_value={"ok": True, "results": []}) as execute_tool, \
-             patch("cterm.llm.chat_with_model_api", side_effect=fake_chat):
+             patch("cterm.core.agent.chat_with_model_api", side_effect=fake_chat):
             result = agent._run_action_agent("Do work.", selected_skills=[])
 
         self.assertEqual(result, "Final answer after three tool iterations.")
@@ -68,7 +68,7 @@ class OrchestrationTests(unittest.TestCase):
         agent.MAX_AGENT_ITERATIONS = 5
 
         with patch.object(agent, "_execute_tool", return_value={"ok": True, "results": []}), \
-             patch("cterm.llm.chat_with_model_api", side_effect=fake_chat):
+             patch("cterm.core.agent.chat_with_model_api", side_effect=fake_chat):
             result = agent._run_action_agent("Do work.", selected_skills=[])
 
         self.assertEqual(result, "Done.")
@@ -77,6 +77,33 @@ class OrchestrationTests(unittest.TestCase):
         self.assertEqual(second_call[-2]["role"], "assistant")
         self.assertIn("tool_calls", second_call[-2])
         self.assertEqual(second_call[-1]["role"], "tool")
+
+    def test_agent_continues_from_initial_messages(self):
+        chat_calls = []
+        initial_messages = [
+            {"role": "system", "content": "old system"},
+            {"role": "user", "content": "Original task."},
+            {"role": "assistant", "content": "Original answer."},
+        ]
+
+        def fake_chat(model, messages, tools=None, binary="ollama", response_format=None):
+            chat_calls.append([message.copy() for message in messages])
+            return {"message": {"role": "assistant", "content": "Followup answer."}}
+
+        agent = ToolAgent("main")
+        agent.tools = []
+
+        with patch("cterm.core.agent.chat_with_model_api", side_effect=fake_chat):
+            result = agent._run_action_agent(
+                "followup: Expand on that.",
+                selected_skills=[],
+                initial_messages=initial_messages,
+                initial_tool_history=[],
+            )
+
+        self.assertEqual(result, "Followup answer.")
+        self.assertEqual(chat_calls[0][-2]["content"], "Original answer.")
+        self.assertEqual(chat_calls[0][-1], {"role": "user", "content": "followup: Expand on that."})
 
     def test_agent_includes_last_thinking_trace_and_content_in_context(self):
         chat_calls = []
@@ -108,7 +135,7 @@ class OrchestrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, \
              patch.dict(os.environ, {"XDG_CONFIG_HOME": tmp}), \
              patch.object(agent, "_execute_tool", return_value={"ok": True, "results": []}), \
-             patch("cterm.llm.chat_with_model_api", side_effect=fake_chat):
+             patch("cterm.core.agent.chat_with_model_api", side_effect=fake_chat):
             Config().set(Config.STREAM_THINKING_TRACES, True)
             result = agent._run_action_agent("Do work.", selected_skills=[])
 
@@ -163,7 +190,7 @@ class OrchestrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, \
              patch.dict(os.environ, {"XDG_CONFIG_HOME": tmp}), \
              patch.object(agent, "_execute_tool", return_value={"ok": True, "results": []}), \
-             patch("cterm.llm.chat_with_model_api", side_effect=fake_chat):
+             patch("cterm.core.agent.chat_with_model_api", side_effect=fake_chat):
             Config().set(Config.STREAM_THINKING_TRACES, True)
             result = agent._run_action_agent("Do work.", selected_skills=[])
 

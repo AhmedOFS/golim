@@ -127,7 +127,7 @@ class BashParsingTests(unittest.TestCase):
                 "returncode": 0,
             }, None
 
-        with patch("cterm.mcp.tools_mcp._is_bash_unrestricted", return_value=True), \
+        with patch("cterm.mcp.tools._is_bash_unrestricted", return_value=True), \
              patch.object(bash_utils, "is_privileged_binary_allowed", return_value=True), \
              patch.object(bash_utils, "_stream_command_with_pty", fake_stream_command_with_pty):
             frames = list(bash("sudo apt install spotify", stream=True))
@@ -143,6 +143,24 @@ class BashParsingTests(unittest.TestCase):
 
         self.assertTrue(frames[-1]["ok"], frames)
         self.assertEqual(frames[-1]["results"][0]["stdout"], "hello")
+
+    def test_accepts_string_timeout_for_non_streaming_command(self):
+        result = bash("printf hello", timeout="120")
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["results"][0]["stdout"], "hello")
+
+    def test_accepts_string_timeout_for_streaming_command(self):
+        frames = list(bash("printf hello", stream=True, timeout="120"))
+
+        self.assertTrue(frames[-1]["ok"], frames)
+        self.assertEqual(frames[-1]["results"][0]["stdout"], "hello")
+
+    def test_invalid_timeout_returns_clear_error(self):
+        result = bash("printf hello", timeout="soon")
+
+        self.assertFalse(result["ok"], result)
+        self.assertIn("timeout must be a number", result["error"])
 
     def test_expands_home_variable_without_shell(self):
         result = bash("test -d $HOME")

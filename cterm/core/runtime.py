@@ -49,6 +49,17 @@ class Runtime:
         self.execution_history = []
         self._interrupt_requested = threading.Event()
 
+    @staticmethod
+    def is_followup_message(user_message: str) -> bool:
+        return str(user_message).lstrip().startswith("//")
+
+    @staticmethod
+    def followup_text(user_message: str) -> str:
+        text = str(user_message).lstrip()
+        if text.startswith("//"):
+            return text[2:].strip()
+        return str(user_message).strip()
+
     def __enter__(self):
         self.initialize_tools()
         return self
@@ -161,6 +172,51 @@ class Runtime:
             }
             for t in raw_tools
         ]
+
+    def _context_messages_for_followup(self) -> list[dict]:
+        messages = [dict(message) for message in self.messages]
+        if messages and messages[-1].get("role") == "assistant" and messages[-1].get("content") == "Interrupted.":
+            messages.pop()
+        return messages
+
+    def run_followup(self, user_message: str, *, clarification: bool = False) -> str:
+        from cterm.core.agent import ToolAgent
+
+        text = self.followup_text(user_message)
+        if not text:
+            return self.result or ""
+        if not self.messages:
+            return self.run(text)
+
+        self._interrupt_requested.clear()
+        active_ui = self.ui
+        if active_ui is None:
+            raise RuntimeError("Runtime requires an active AgentUI context at initialization.")
+        self.initialize_tools()
+        selected_skills, _skills_prompt = self.select_skills(text, active_ui)
+
+        ollama_tools = self._build_ollama_tools(self.tools)
+        agent = ToolAgent(
+            self.model,
+            self.binary,
+            self.small_model,
+            debug=self.debug,
+            ui=active_ui,
+            mcp_client=self.mcp_client,
+            tools=ollama_tools,
+            should_interrupt=self.should_interrupt,
+        )
+        prefix = "clarification" if clarification else "followup"
+        self.result = agent.run(
+            f"{prefix}: {text}",
+            selected_skills=selected_skills,
+            initial_messages=self._context_messages_for_followup(),
+            initial_tool_history=self.execution_history,
+        )
+        self.last_thinking_trace = agent.last_thinking_trace
+        self.messages = list(agent.messages)
+        self.execution_history = list(agent.execution_history)
+        return self.result
 
     def run(self, user_message: str) -> str:
         from cterm.core.agent import ToolAgent

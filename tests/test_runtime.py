@@ -70,7 +70,7 @@ class RuntimeTests(unittest.TestCase):
             return {"message": {"role": "assistant", "content": "Done."}}
 
         with patch.object(runtime, "select_skills", return_value=([], "")), \
-             patch("cterm.llm.chat_with_model_api", side_effect=fake_chat):
+             patch("cterm.core.agent.chat_with_model_api", side_effect=fake_chat):
             result = runtime.run("Do work.")
 
         self.assertEqual(result, "Done.")
@@ -78,6 +78,59 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(runtime.result, "Done.")
         self.assertEqual(runtime.execution_history, [])
         self.assertEqual(runtime.messages[-1]["content"], "Done.")
+
+    def test_runtime_followup_reuses_previous_messages(self):
+        token = active_agent_ui.set(FakeUI())
+        try:
+            runtime = Runtime(model="main")
+        finally:
+            active_agent_ui.reset(token)
+        runtime.mcp_client = FakeMCPClient()
+        chat_calls = []
+
+        def fake_chat(model, messages, tools=None, binary="ollama", response_format=None):
+            chat_calls.append([message.copy() for message in messages])
+            if len(chat_calls) == 1:
+                return {"message": {"role": "assistant", "content": "First answer."}}
+            return {"message": {"role": "assistant", "content": "Second answer."}}
+
+        with patch.object(runtime, "select_skills", return_value=([], "")), \
+             patch("cterm.core.agent.chat_with_model_api", side_effect=fake_chat):
+            first = runtime.run("Do work.")
+            second = runtime.run_followup("// explain more")
+
+        self.assertEqual(first, "First answer.")
+        self.assertEqual(second, "Second answer.")
+        self.assertEqual(chat_calls[1][-3]["content"], "Do work.")
+        self.assertEqual(chat_calls[1][-2]["content"], "First answer.")
+        self.assertEqual(chat_calls[1][-1], {"role": "user", "content": "followup: explain more"})
+
+    def test_runtime_clarification_drops_interrupted_marker(self):
+        token = active_agent_ui.set(FakeUI())
+        try:
+            runtime = Runtime(model="main")
+        finally:
+            active_agent_ui.reset(token)
+        runtime.mcp_client = FakeMCPClient()
+        runtime.messages = [
+            {"role": "system", "content": "system"},
+            {"role": "user", "content": "Do work."},
+            {"role": "assistant", "content": "Interrupted."},
+        ]
+        chat_calls = []
+
+        def fake_chat(model, messages, tools=None, binary="ollama", response_format=None):
+            chat_calls.append([message.copy() for message in messages])
+            return {"message": {"role": "assistant", "content": "Clarified answer."}}
+
+        with patch.object(runtime, "select_skills", return_value=([], "")), \
+             patch("cterm.core.agent.chat_with_model_api", side_effect=fake_chat):
+            result = runtime.run_followup("use the smaller file", clarification=True)
+
+        self.assertEqual(result, "Clarified answer.")
+        contents = [message.get("content") for message in chat_calls[0]]
+        self.assertNotIn("Interrupted.", contents)
+        self.assertEqual(chat_calls[0][-1], {"role": "user", "content": "clarification: use the smaller file"})
 
     def test_runtime_interrupt_aborts_after_tool_iteration(self):
         token = active_agent_ui.set(FakeUI())
@@ -106,8 +159,8 @@ class RuntimeTests(unittest.TestCase):
             return {"ok": True}
 
         with patch.object(runtime, "select_skills", return_value=([], "")), \
-             patch("cterm.llm.chat_with_model_api", side_effect=fake_chat), \
-             patch("cterm.llm.ToolAgent._execute_tool", side_effect=interrupting_tool):
+             patch("cterm.core.agent.chat_with_model_api", side_effect=fake_chat), \
+             patch("cterm.core.agent.ToolAgent._execute_tool", side_effect=interrupting_tool):
             result = runtime.run("Stop after this.")
 
         self.assertEqual(result, "Interrupted.")
@@ -138,8 +191,8 @@ class RuntimeTests(unittest.TestCase):
             }
 
         with patch.object(runtime, "select_skills", return_value=([], "")), \
-             patch("cterm.llm.chat_with_model_api", side_effect=fake_chat), \
-             patch("cterm.llm.ToolAgent._execute_tool") as execute_tool:
+             patch("cterm.core.agent.chat_with_model_api", side_effect=fake_chat), \
+             patch("cterm.core.agent.ToolAgent._execute_tool") as execute_tool:
             result = runtime.run("Stop before tool.")
 
         self.assertEqual(result, "Interrupted.")
@@ -159,7 +212,7 @@ class RuntimeTests(unittest.TestCase):
             return {"message": {"role": "assistant", "content": "Done."}}
 
         with patch.object(runtime, "select_skills", return_value=([], "")), \
-             patch("cterm.llm.chat_with_model_api", side_effect=fake_chat):
+             patch("cterm.core.agent.chat_with_model_api", side_effect=fake_chat):
             runtime.run("First.")
             runtime.run("Second.")
 
@@ -181,7 +234,7 @@ class RuntimeTests(unittest.TestCase):
         token = active_agent_ui.set(second_ui)
         try:
             with patch.object(runtime, "select_skills", return_value=([], "")), \
-                 patch("cterm.llm.chat_with_model_api", side_effect=fake_chat):
+                 patch("cterm.core.agent.chat_with_model_api", side_effect=fake_chat):
                 runtime.run("Do work.")
         finally:
             active_agent_ui.reset(token)
@@ -202,8 +255,8 @@ class RuntimeTests(unittest.TestCase):
             DiscoveryClient(tools),
         ]
 
-        with patch("cterm.runtime.FastMCPClient", side_effect=clients), \
-             patch("cterm.runtime.time.sleep"):
+        with patch("cterm.core.runtime.FastMCPClient", side_effect=clients), \
+             patch("cterm.core.runtime.time.sleep"):
             runtime.initialize_tools()
 
         self.assertEqual(runtime.tools, tools)
@@ -216,9 +269,9 @@ class RuntimeTests(unittest.TestCase):
             DiscoveryClient(tools),
         ]
 
-        with patch("cterm.runtime.FastMCPClient", side_effect=clients), \
-             patch("cterm.runtime.subprocess.run") as run_service, \
-             patch("cterm.runtime.time.sleep"):
+        with patch("cterm.core.runtime.FastMCPClient", side_effect=clients), \
+             patch("cterm.core.runtime.subprocess.run") as run_service, \
+             patch("cterm.core.runtime.time.sleep"):
             runtime.initialize_tools()
 
         run_service.assert_called_once_with(
