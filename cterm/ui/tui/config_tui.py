@@ -474,8 +474,6 @@ def run_config(config: Config, binary: str, ui: ConfigPromptHandle) -> int:
     which case we rewind to whichever page was actually shown right before
     it. Going back from the very first page cancels the wizard, matching
     what happens when the user cancels the very first prompt today."""
-    config.set(Config.API_PROVIDER, "ollama")
-
     history: list[str] = []
     state = "PROVIDER"
 

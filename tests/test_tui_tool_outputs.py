@@ -23,6 +23,7 @@ class TextualToolOutputTests(unittest.TestCase):
                 self.expandables = []
                 self.codes = []
                 self.streams = []
+                self.thinking_traces = []
                 self.discarded_pending = False
 
             def is_run_active(self, run_id):
@@ -42,6 +43,9 @@ class TextualToolOutputTests(unittest.TestCase):
 
             def append_stream(self, renderable, replace_last, commit):
                 self.streams.append((renderable, replace_last, commit))
+
+            def append_thinking_trace(self, text):
+                self.thinking_traces.append(text)
 
             def discard_pending_stream(self):
                 self.discarded_pending = True
@@ -120,7 +124,7 @@ class TextualToolOutputTests(unittest.TestCase):
 
         summary, _ = app.expandables[-1]
         self.assertEqual(_plain(summary).splitlines(), ["…", "progress 90%", "example 1.0 installed"])
-        self.assertEqual(app.lines, [("$ sudo snap install example", "#f3f3f3")])
+        self.assertEqual(app.lines, [("$ sudo snap install example", "bold #f3f3f3"), ("", "#f3f3f3")])
         self.assertTrue(app.discarded_pending)
 
     def test_exec_tool_displays_code_with_running_script_title(self):

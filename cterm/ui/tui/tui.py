@@ -7,6 +7,7 @@ import ctypes
 import json
 import os
 import re
+import shutil
 import threading
 from dataclasses import dataclass
 from typing import Callable
@@ -23,11 +24,21 @@ from textual.geometry import Size
 from textual.scroll_view import ScrollView
 from textual.strip import Strip
 from textual.timer import Timer
-from textual.widgets import Input, Static
+from textual.widgets import Input, OptionList, RichLog, Static
+from textual.widgets.option_list import Option
 
 from cterm.core.agent_ui import AgentUI, active_agent_ui
 from cterm.config import Config
 from cterm.core.runtime import Runtime
+from cterm.ui.tui.config_tui import (
+    BACK_LABEL,
+    ConfigPromptHandle,
+    InputRequest,
+    MessageRequest,
+    SelectRequest,
+    _ConfigCancelled,
+    run_config,
+)
 from cterm.ui.tui.history import History
 
 
@@ -722,14 +733,14 @@ class TextualAgentUI(AgentUI):
                 formatted, style = self._format_tool_result(result)
                 if formatted and not (isinstance(result, dict) and result.get("ok") is True):
                     self._emit(formatted, style)
-                self.app.call_from_thread(self.app.append_line, "")
+                self.app.call_from_thread(self.app.append_line, "", STYLE_TEXT)
                 return
 
             # Command finished — flush any trailing partial line(s) first.
             for fd_name in ("stdout", "stderr"):
                 self._commit_stream(fd_name)
             self._emit_tool_result(result)
-            self.app.call_from_thread(self.app.append_line, "")
+            self.app.call_from_thread(self.app.append_line, "", STYLE_TEXT)
             return
 
         if fd is None:
@@ -1028,6 +1039,78 @@ class CtermApp(App[int]):
         color: #8a858b;
     }
 
+    #config_panel {
+        height: 1fr;
+        width: 100%;
+        padding: 1 2 0 2;
+    }
+
+    #config_title {
+        height: 1;
+        color: #f3f3f3;
+        text-style: bold;
+        margin-bottom: 1;
+    }
+
+    #config_transcript {
+        height: 1fr;
+        max-height: 8;
+        width: 100%;
+        background: transparent;
+        color: #9e9e9e;
+        scrollbar-size-vertical: 1;
+        scrollbar-gutter: stable;
+        scrollbar-background: transparent;
+        scrollbar-color: #f3f3f3;
+        margin-bottom: 1;
+    }
+
+    #config_prompt_label {
+        height: auto;
+        min-height: 1;
+        color: #f3f3f3;
+        text-style: bold;
+        margin-bottom: 1;
+    }
+
+    #config_option_list {
+        height: auto;
+        max-height: 12;
+        width: 100%;
+        background: transparent;
+        border: none;
+        padding: 0;
+        margin-top: 0;
+    }
+
+    #config_option_list > .option-list--option-highlighted {
+        background: #f3f3f3 12%;
+        text-style: bold;
+    }
+
+    #config_text_input {
+        height: 3;
+        width: 56;
+        background: transparent;
+        border: round #7d8a99;
+        padding: 0 1;
+        margin-top: 0;
+    }
+
+    #config_text_input:focus {
+        border: round #f3f3f3;
+    }
+
+    #config_hint {
+        height: 1;
+        color: #9e9e9e;
+        margin-top: 1;
+    }
+
+    .hidden {
+        display: none;
+    }
+
     #model {
         margin-left: 1;
         width: 1fr;
@@ -1045,6 +1128,7 @@ class CtermApp(App[int]):
         ("ctrl+q", "quit", "Quit"),
         ("up", "previous_history", "History Up"),
         ("down", "next_history", "History Down"),
+        ("tab", "open_config", "Config"),
     ]
 
     def __init__(
@@ -1082,6 +1166,12 @@ class CtermApp(App[int]):
         self._pending_followup: tuple[str, bool] | None = None
         self._pending_followup_lock = threading.Lock()
         self._has_completed_query = False
+        self._config_active = False
+        self._request: SelectRequest | InputRequest | MessageRequest | None = None
+        self._cancelled = False
+        self._config_result = 1
+        self._config_thread: threading.Thread | None = None
+        self._config_error: str | None = None
 
     def _get_runtime(self, ui: AgentUI | None = None) -> Runtime | None:
         if self._model is None:
@@ -1098,6 +1188,36 @@ class CtermApp(App[int]):
             self._runtime.ui = ui
         return self._runtime
 
+    def _resolve_current_settings(self) -> tuple[str | None, str | None, str | None, str]:
+        config = Config()
+        provider = config.api_provider
+        if provider == "openrouter":
+            label = config.openrouter_model or "OpenRouter"
+            if not config.openrouter_api_key:
+                return "Error: OpenRouter API key not configured\nRun 'cterm -i' to set it up", None, None, label
+            return None, config.openrouter_model, config.openrouter_small_model, label
+        if provider == "llamacpp":
+            label = config.llamacpp_model or "llama.cpp"
+            if not config.llamacpp_server_url:
+                return "Error: llama.cpp server URL not configured\nRun 'cterm -i' to set it up", None, None, label
+            return None, config.llamacpp_model, config.llamacpp_small_model, label
+
+        label = config.selected_model or "Ollama"
+        if not shutil.which(self._binary):
+            return f"Error: {self._binary} is not installed", None, None, label
+        if not config.selected_model:
+            return "Error: No model configured\nRun 'cterm -i' to initialize", None, None, label
+        return None, config.selected_model, config.small_model, label
+
+    def _reload_config_settings(self) -> None:
+        self._config = Config()
+        self._runtime_error, self._model, self._small_model, self.model_label = self._resolve_current_settings()
+        model_widget = self.query_one("#model", Static)
+        model_widget.update(self.model_label)
+        if self._runtime is not None:
+            self._runtime.terminate()
+            self._runtime = None
+
     def compose(self) -> ComposeResult:
         with Vertical(id="outer"):
             with Vertical(id="frame"):
@@ -1105,12 +1225,19 @@ class CtermApp(App[int]):
                 with Vertical(id="body"):
                     yield Transcript(id="transcript")
                     yield Static("", id="status")
+            with Vertical(id="config_panel", classes="hidden"):
+                yield Static("cterm configuration", id="config_title")
+                yield RichLog(id="config_transcript", markup=False, auto_scroll=True, wrap=True)
+                yield Static("", id="config_prompt_label")
+                yield OptionList(id="config_option_list", classes="hidden")
+                yield Input(id="config_text_input", classes="hidden")
+                yield Static("↑/↓ move • Enter select • Esc back", id="config_hint")
             with Horizontal(id="prompt_line"):
                 yield Static(">", id="prompt_marker")
                 yield Input(id="prompt", placeholder=INITIAL_PROMPT_PLACEHOLDER)
             with Horizontal(id="footer"):
                 yield Static(self.model_label, id="model")
-                yield Static("esc Interrupt • ↑/↓ History • Tab Inspect", id="keys")
+                yield Static("esc Interrupt • ↑/↓ History • Tab Config", id="keys")
 
     def on_mount(self) -> None:
         self.query_one("#query_bar", Static).display = False
@@ -1121,7 +1248,19 @@ class CtermApp(App[int]):
         if self._runtime is not None:
             self._runtime.terminate()
 
+    def on_key(self, event) -> None:
+        if event.key in {"tab", "ctrl+i"} and not self._config_active:
+            event.stop()
+            event.prevent_default()
+            self.action_open_config()
+
     def on_input_submitted(self, event: Input.Submitted) -> None:
+        if self._config_active and event.input.id == "config_text_input":
+            self._finish_config_input(event)
+            return
+        if self._config_active:
+            self.bell()
+            return
         text = event.value.strip()
         if self._approval_request is not None:
             self.finish_approval_prompt(text)
@@ -1170,6 +1309,167 @@ class CtermApp(App[int]):
             followup=run_as_followup,
             clarification=False,
         )
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        if not self._config_active or event.option_list.id != "config_option_list":
+            return
+        req = self._request
+        if req is None:
+            return
+        if isinstance(req, SelectRequest):
+            idx = event.option_index
+            if idx == len(req.options) - 1:
+                req.went_back = True
+                self._append_config_log(f"{req.title}: {BACK_LABEL}", STYLE_DIM)
+            else:
+                req.answer = idx
+                label = req.options[idx] if 0 <= idx < len(req.options) else ""
+                self._append_config_log(f"{req.title}: {label}", STYLE_DIM)
+        elif isinstance(req, MessageRequest):
+            self._append_config_log(req.title, STYLE_DIM)
+        else:
+            return
+        self._request = None
+        req.event.set()
+
+    def _finish_config_input(self, event: Input.Submitted) -> None:
+        req = self._request
+        if req is None or not isinstance(req, InputRequest):
+            return
+        value = event.value.strip()
+        req.answer = value
+        shown = value if value else "(default)"
+        self._append_config_log(f"{req.title}: {shown}", STYLE_DIM)
+        self._request = None
+        event.input.value = ""
+        req.event.set()
+
+    # -- Config mode --------------------------------------------------------
+    def action_open_config(self) -> None:
+        if self._config_active:
+            return
+        if self._busy or self._approval_request is not None:
+            self.bell()
+            return
+        self._show_config_panel()
+        self._config_thread = threading.Thread(target=self._run_config_wizard_thread, daemon=True)
+        self._config_thread.start()
+
+    def _show_config_panel(self) -> None:
+        self._config_active = True
+        self._cancelled = False
+        self._config_result = 1
+        self._config_error = None
+        self._request = None
+        self.set_status("")
+        self.query_one("#frame", Vertical).classes = "hidden"
+        self.query_one("#prompt_line", Horizontal).classes = "hidden"
+        self.query_one("#config_panel", Vertical).classes = ""
+        self.query_one("#config_transcript", RichLog).clear()
+        self._append_config_log("", STYLE_TEXT)
+        self.query_one("#config_prompt_label", Static).update("")
+        self.query_one("#config_hint", Static).update("↑/↓ move • Enter select • Esc back")
+
+    def _hide_config_panel(self) -> None:
+        self._config_active = False
+        self._request = None
+        self.query_one("#config_option_list", OptionList).classes = "hidden"
+        self.query_one("#config_text_input", Input).classes = "hidden"
+        self.query_one("#config_prompt_label", Static).update("")
+        self.query_one("#config_panel", Vertical).classes = "hidden"
+        self.query_one("#frame", Vertical).classes = ""
+        self.query_one("#prompt_line", Horizontal).classes = ""
+        self.update_prompt_placeholder()
+        self.query_one("#prompt", Input).focus()
+
+    def _run_config_wizard_thread(self) -> None:
+        config = Config()
+        ui = ConfigPromptHandle(self)
+        try:
+            self._config_result = run_config(config, self._binary, ui)
+        except _ConfigCancelled:
+            self._config_result = 1
+        except Exception as exc:
+            self._config_error = str(exc)
+            try:
+                self.call_from_thread(self._append_config_log, f"Error: {exc}", STYLE_ERROR)
+            except Exception:
+                pass
+            self._config_result = 1
+        finally:
+            self.call_from_thread(self._finish_config)
+
+    def _show_select(self, req: SelectRequest) -> None:
+        self._request = req
+        self.query_one("#config_prompt_label", Static).update(req.title)
+        option_list = self.query_one("#config_option_list", OptionList)
+        option_list.clear_options()
+        option_list.add_options(Option(opt) for opt in req.options)
+        option_list.classes = ""
+        self.query_one("#config_text_input", Input).classes = "hidden"
+        self.query_one("#config_hint", Static).update(req.hint)
+        idx = max(0, min(req.default_index, len(req.options) - 1))
+        option_list.highlighted = idx
+        option_list.focus()
+
+    def _show_input(self, req: InputRequest) -> None:
+        self._request = req
+        self.query_one("#config_prompt_label", Static).update(req.title)
+        text_input = self.query_one("#config_text_input", Input)
+        text_input.classes = ""
+        text_input.value = req.default
+        text_input.placeholder = req.placeholder
+        self.query_one("#config_option_list", OptionList).classes = "hidden"
+        self.query_one("#config_hint", Static).update(req.hint)
+        text_input.focus()
+
+    def _show_message(self, req: MessageRequest) -> None:
+        self._request = req
+        self.query_one("#config_prompt_label", Static).update(req.title)
+        self.query_one("#config_text_input", Input).classes = "hidden"
+        option_list = self.query_one("#config_option_list", OptionList)
+        option_list.classes = ""
+        option_list.clear_options()
+        option_list.add_options(Option("Continue"))
+        option_list.highlighted = 0
+        self.query_one("#config_hint", Static).update(req.hint)
+        option_list.focus()
+
+    def _append_config_log(self, text: str, style: str = STYLE_TEXT) -> None:
+        transcript = self.query_one("#config_transcript", RichLog)
+        transcript.write(Text(text or "", style=style))
+
+    def _append_log(self, text: str, style: str = STYLE_TEXT) -> None:
+        self._append_config_log(text, style)
+
+    def _finish_config(self) -> None:
+        result = self._config_result
+        self._hide_config_panel()
+        if result == 0:
+            self._reload_config_settings()
+            self.append_line("Configuration updated.", STYLE_SUCCESS)
+        elif self._config_error:
+            self.append_line(f"Configuration error: {self._config_error}", STYLE_ERROR)
+        elif self._cancelled:
+            self.append_line("Configuration cancelled.", STYLE_DIM)
+
+    def action_back(self) -> None:
+        req = self._request
+        if not self._config_active or req is None:
+            return
+        req.went_back = True
+        self._request = None
+        req.event.set()
+
+    def _cancel_config(self) -> None:
+        if not self._config_active or self._cancelled:
+            return
+        self._cancelled = True
+        req = self._request
+        if req is not None:
+            self._request = None
+            req.event.set()
+        self._config_result = 1
 
     def append_followup_query(self, text: str) -> None:
         transcript = self.query_one("#transcript", Transcript)
@@ -1333,11 +1633,15 @@ class CtermApp(App[int]):
             prompt.placeholder = INITIAL_PROMPT_PLACEHOLDER
 
     def action_previous_history(self) -> None:
+        if self._config_active:
+            return
         prompt = self.query_one("#prompt", Input)
         value = self._history.previous()
         prompt.value = value
 
     def action_next_history(self) -> None:
+        if self._config_active:
+            return
         prompt = self.query_one("#prompt", Input)
         value = self._history.next()
         prompt.value = value
@@ -1360,6 +1664,12 @@ class CtermApp(App[int]):
             _raise_in_thread(self._chat_thread_id, RunCancelled)
 
     def action_interrupt(self) -> None:
+        if self._config_active:
+            if self._request is not None:
+                self.action_back()
+            else:
+                self._cancel_config()
+            return
         if self._busy:
             self._cancel_active_run(force_thread=False)
             if self._approval_request is not None:
