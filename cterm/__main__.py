@@ -75,21 +75,21 @@ def _resolve_chat_settings(binary: str = "ollama") -> tuple[str | None, str | No
     small_model = config.small_model
     provider = config.api_provider
 
-    if provider == "ollama":
+    if provider == Config.OLLAMA:
         if not shutil.which(binary):
             return f"Error: {binary} is not installed", None, None
         model = config.selected_model
         small_model = config.small_model
-    elif provider == "openrouter":
+    elif provider in {Config.OPEN_ROUTER, "openrouter"}:
         if not config.openrouter_api_key:
             return "Error: OpenRouter API key not configured\nRun 'cterm -i' to set it up", None, None
-        model = config.openrouter_model
-        small_model = config.openrouter_small_model
-    elif provider == "llamacpp":
+        model = config.selected_model
+        small_model = config.small_model
+    elif provider in {Config.OPENAI_COMPATIBLE, "llamacpp"}:
         if not config.llamacpp_server_url:
             return "Error: llama.cpp server URL not configured\nRun 'cterm -i' to set it up", None, None
-        model = config.llamacpp_model
-        small_model = config.llamacpp_small_model
+        model = config.selected_model
+        small_model = config.small_model
 
     if not model:
         return "Error: No model configured\nRun 'cterm -i' to initialize", None, None
@@ -107,14 +107,14 @@ def _create_tui_log():
 
 def tui_command(binary: str = "ollama", debug: bool = False) -> int:
     """Open the default Textual interface."""
-    from .ui.tui.tui import CtermApp
+    from .ui.tui.app.tui import CtermApp
 
     config = Config()
     provider = config.api_provider
-    if provider == "openrouter":
-        model_label = config.openrouter_model or "OpenRouter"
-    elif provider == "llamacpp":
-        model_label = config.llamacpp_model or "llama.cpp"
+    if provider in {Config.OPEN_ROUTER, "openrouter"}:
+        model_label = config.selected_model or "OpenRouter"
+    elif provider in {Config.OPENAI_COMPATIBLE, "llamacpp"}:
+        model_label = config.selected_model or "OpenAI-compatible"
     else:
         model_label = config.selected_model or "Ollama"
 
@@ -191,7 +191,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     
     if args.init:
-        from .ui.tui.config_tui import init_command_tui
+        from .ui.tui.config.config_tui import init_command_tui
 
         return init_command_tui(args.binary)
     

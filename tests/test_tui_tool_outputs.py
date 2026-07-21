@@ -15,7 +15,7 @@ def _plain(renderable):
 @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
 class TextualToolOutputTests(unittest.TestCase):
     def make_ui(self):
-        from cterm.ui.tui.tui import TextualAgentUI
+        from cterm.ui.tui.app.agent_ui import TextualAgentUI
 
         class FakeApp:
             def __init__(self):

@@ -8,7 +8,7 @@ from cterm.api.utils import extract_thinking_delta
 logger = logging.getLogger(__name__)
 
 
-def chat(model, messages, tools=None, response_format=None, on_thinking_delta=None):
+def chat(model, messages, tools=None, response_format=None, on_thinking_delta=None, config=None):
     payload = {"model": model, "messages": messages, "stream": bool(on_thinking_delta)}
     if tools:
         payload["tools"] = tools
@@ -20,7 +20,8 @@ def chat(model, messages, tools=None, response_format=None, on_thinking_delta=No
 
     try:
         response = requests.post(
-            "http://localhost:11434/api/chat", json=payload, timeout=60, stream=bool(on_thinking_delta)
+            (config.ollama_server_url if config else "http://localhost:11434").rstrip("/") + "/api/chat",
+            json=payload, timeout=60, stream=bool(on_thinking_delta)
         )
         response.raise_for_status()
     except requests.exceptions.HTTPError as exc:

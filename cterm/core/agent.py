@@ -50,6 +50,7 @@ class ToolAgent:
         self.execution_history = []
         self.result = None
         self._should_interrupt = should_interrupt or (lambda: False)
+        self.MAX_AGENT_ITERATIONS = Config().max_iteration_limit
 
     def __enter__(self):
         return self
@@ -145,10 +146,11 @@ class ToolAgent:
     def last_thinking_trace(self):
         return self._last_thinking_trace
 
-    def run(self, user_message, selected_skills=None, initial_messages=None, initial_tool_history=None):
+    def run(self, user_message, selected_skills=None, skills_prompt="", initial_messages=None, initial_tool_history=None):
         return self._run_action_agent(
             user_message,
             selected_skills,
+            skills_prompt=skills_prompt,
             initial_messages=initial_messages,
             initial_tool_history=initial_tool_history,
         )
@@ -442,10 +444,11 @@ class ToolAgent:
 
         self._remove_thinking_traces_from_history(messages)
         messages.append(self._assistant_message_for_history(message))
+        tool_content = json.dumps(tool_result, ensure_ascii=False)
         messages.append({
             "role": "tool",
             "tool_name": tool_name,
-            "content": json.dumps(tool_result, ensure_ascii=False),
+            "content": _clip_text(tool_content, limit=15000),
         })
         self.messages = list(messages)
         self.execution_history = list(tool_history)
@@ -518,8 +521,8 @@ class ToolAgent:
         self.execution_history = list(tool_history)
         return self.result
 
-    def _agent_system_prompt(self):
-        return (
+    def _agent_system_prompt(self, skills_prompt=""):
+        base = (
             "Use the tools available to you to perform the tasks "
             "assigned to you on the user's system. "
             "Use the bash tool to execute commands, and use snap "
@@ -533,11 +536,15 @@ class ToolAgent:
             "Work only on the assigned action. When the action is complete, "
             "respond with a concise plain text summary of what was done"
         )
+        if skills_prompt:
+            base += "\n\n" + skills_prompt
+        return base
 
     def _run_action_agent(
         self,
         user_message,
         selected_skills=None,
+        skills_prompt="",
         initial_messages=None,
         initial_tool_history=None,
     ):
@@ -549,7 +556,7 @@ class ToolAgent:
                 skills=[s.name for s in selected_skills],
             )
 
-            system_prompt = self._agent_system_prompt()
+            system_prompt = self._agent_system_prompt(skills_prompt)
             if initial_messages:
                 messages = [dict(message) for message in initial_messages]
                 if not messages or messages[0].get("role") != "system":

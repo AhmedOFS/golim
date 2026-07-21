@@ -3,6 +3,11 @@ import shutil
 import subprocess
 import time
 
+import requests
+
+
+OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
+
 
 def run_cmd(binary: str, *args, timeout: float = 3.0) -> str | None:
     """Run a command and return stdout."""
@@ -66,6 +71,64 @@ def get_models(binary: str) -> list[str]:
         return models
 
     return []
+
+
+def get_openrouter_models(api_key: str | None) -> list[str]:
+    """Return the model identifiers advertised by OpenRouter.
+
+    OpenRouter orders this endpoint for its own catalogue.  Preserve that
+    ordering so the picker presents the provider's current top models first.
+    """
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    try:
+        response = requests.get(OPENROUTER_MODELS_URL, headers=headers, timeout=10.0)
+        response.raise_for_status()
+        payload = response.json()
+    except (requests.RequestException, ValueError):
+        return []
+
+    entries = payload.get("data", []) if isinstance(payload, dict) else []
+    models: list[str] = []
+    seen: set[str] = set()
+    for entry in entries:
+        model_id = entry.get("id") if isinstance(entry, dict) else None
+        if isinstance(model_id, str) and model_id and model_id not in seen:
+            models.append(model_id)
+            seen.add(model_id)
+    return models
+
+
+def get_openai_compatible_models(url: str, api_key: str | None) -> list[str]:
+    """Return models exposed by an OpenAI-compatible ``/v1/models`` endpoint."""
+    if not url:
+        return []
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    try:
+        response = requests.get(url.rstrip("/") + "/v1/models", headers=headers, timeout=10.0)
+        response.raise_for_status()
+        payload = response.json()
+    except (requests.RequestException, ValueError):
+        return []
+    entries = payload.get("data", []) if isinstance(payload, dict) else []
+    return [entry["id"] for entry in entries if isinstance(entry, dict) and isinstance(entry.get("id"), str)]
+
+
+def get_configured_model_choices(config, binary: str) -> tuple[list[str], dict[str, tuple[str, str]]]:
+    """Build the Tab-menu model list with recent entries before provider lists."""
+    from cterm.config import Config
+
+    providers: list[tuple[str, list[str]]] = []
+    if config.provider(Config.OLLAMA).get(Config.OLLAMA_SERVER_URL) is not None:
+        providers.append((Config.OLLAMA, get_models(binary)))
+    if config.openrouter_api_key:
+        providers.append((Config.OPEN_ROUTER, get_openrouter_models(config.openrouter_api_key)))
+    if config.provider(Config.OPENAI_COMPATIBLE).get(Config.LLAMACPP_SERVER_URL):
+        providers.append((Config.OPENAI_COMPATIBLE, get_openai_compatible_models(config.llamacpp_server_url, config.llamacpp_api_key)))
+    pairs = [(provider, model) for provider, models in providers for model in models]
+    recent = [(item["provider"], item["model"]) for item in config.recent_models()]
+    ordered = [pair for pair in recent if pair in pairs] + [pair for pair in pairs if pair not in recent]
+    labels = [f"{provider}: {model}" for provider, model in ordered]
+    return labels, dict(zip(labels, ordered))
 
 
 def _ollama_server_running(binary: str) -> bool:

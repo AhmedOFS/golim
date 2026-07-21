@@ -17,8 +17,8 @@ def chat_with_model_api(
     config = Config()
     provider = config.api_provider
 
-    if provider == "openrouter":
+    if provider in {"open_router", "openrouter"}:
         return openrouter.chat(model, messages, tools, response_format, config, on_thinking_delta)
-    if provider == "llamacpp":
+    if provider in {"openai_compatible", "llamacpp"}:
         return llamacpp.chat(model, messages, tools, response_format, config, on_thinking_delta)
-    return ollama.chat(model, messages, tools, response_format, on_thinking_delta)
+    return ollama.chat(model, messages, tools, response_format, on_thinking_delta, config)

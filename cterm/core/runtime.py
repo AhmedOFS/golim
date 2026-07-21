@@ -193,7 +193,7 @@ class Runtime:
         if active_ui is None:
             raise RuntimeError("Runtime requires an active AgentUI context at initialization.")
         self.initialize_tools()
-        selected_skills, _skills_prompt = self.select_skills(text, active_ui)
+        selected_skills, skills_prompt = self.select_skills(text, active_ui)
 
         ollama_tools = self._build_ollama_tools(self.tools)
         agent = ToolAgent(
@@ -210,6 +210,7 @@ class Runtime:
         self.result = agent.run(
             f"{prefix}: {text}",
             selected_skills=selected_skills,
+            skills_prompt=skills_prompt,
             initial_messages=self._context_messages_for_followup(),
             initial_tool_history=self.execution_history,
         )
@@ -243,6 +244,7 @@ class Runtime:
         self.result = agent.run(
             user_message,
             selected_skills=selected_skills,
+            skills_prompt=skills_prompt,
         )
         self.last_thinking_trace = agent.last_thinking_trace
         self.messages = list(agent.messages)

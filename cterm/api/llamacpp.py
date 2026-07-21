@@ -22,8 +22,9 @@ def chat(model, messages, tools=None, response_format=None, config=None, on_thin
     n_msg = len(normalized_messages)
     n_tools = len(tools) if tools else 0
 
+    headers = {"Authorization": f"Bearer {config.llamacpp_api_key}"} if config and config.llamacpp_api_key else None
     try:
-        response = requests.post(url, json=payload, timeout=120, stream=bool(on_thinking_delta))
+        response = requests.post(url, headers=headers, json=payload, timeout=120, stream=bool(on_thinking_delta))
         response.raise_for_status()
     except requests.exceptions.HTTPError as exc:
         body = response.text

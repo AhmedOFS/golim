@@ -1,0 +1,24 @@
+"""Shared color palette and style constants for the Textual TUI."""
+
+WHITE = "#f3f3f3"
+BG_DARK = "#1e1e1e"
+DIM = "#9e9e9e"
+ERROR = "#e06c75"
+SUCCESS = "#7d8a99"
+WARNING = "#c2b280"
+TOOL_OUTPUT = "#C7A4A4"
+CODE_BG = "#2a2a2a"
+PROMPT_MARKER = "#9a4f4f"
+FOOTER = "#8a858b"
+BORDER = "#7d8a99"
+PROMPT_LINE_BG = "rgba(66, 56, 56, 0.4)"
+
+STYLE_TEXT = WHITE
+STYLE_TOOL = f"bold {WHITE}"
+STYLE_SUCCESS = SUCCESS
+STYLE_ERROR = ERROR
+STYLE_WARNING = WARNING
+STYLE_DIM = DIM
+STYLE_TOOL_OUTPUT = TOOL_OUTPUT
+STYLE_HEADER = f"bold {WHITE}"
+STYLE_ACCENT = f"bold {WHITE}"

@@ -16,21 +16,21 @@ from ...config.utils import (
 def choose_provider(config: Config) -> str | None:
     """Let the user choose between Ollama, OpenRouter, and llama.cpp.
     Returns None on Ctrl+C."""
-    print("\nAPI Provider selection:")
+    print("\nSet up API Provider:")
     print(f"  1. Ollama (local, default)")
     print(f"  2. OpenRouter (cloud, requires API key)")
     print(f"  3. llama.cpp (local, llama.cpp server)")
-    default = "1" if config.api_provider == "ollama" else "2" if config.api_provider == "openrouter" else "3"
+    default = "1" if config.api_provider == Config.OLLAMA else "2" if config.api_provider == Config.OPEN_ROUTER else "3"
     try:
         choice = input(f"Select provider [1-3, default {default}]: ").strip() or default
     except (KeyboardInterrupt, EOFError):
         print()
         return None
     if choice == "2":
-        return "openrouter"
+        return Config.OPEN_ROUTER
     if choice == "3":
-        return "llamacpp"
-    return "ollama"
+        return Config.OPENAI_COMPATIBLE
+    return Config.OLLAMA
 
 
 def init_openrouter(config: Config) -> int:
@@ -55,7 +55,7 @@ def init_openrouter(config: Config) -> int:
         if not api_key:
             print("Error: API key is required")
             return 1
-        config.set(Config.OPENROUTER_API_KEY, api_key)
+        config.set_provider_value(Config.OPEN_ROUTER, Config.OPENROUTER_API_KEY, api_key)
         print("✓ API key saved")
 
     saved_model = config.openrouter_model
@@ -94,8 +94,9 @@ def init_openrouter(config: Config) -> int:
     elif small:
         print(f"✓ Small model: {small}")
 
-    config.set(Config.API_PROVIDER, "openrouter")
-    print(f"\n✓ OpenRouter configured with provider: openrouter")
+    config.set(Config.API_PROVIDER, Config.OPEN_ROUTER)
+    config.remember_model(model, Config.OPEN_ROUTER)
+    print("\n✓ OpenRouter configured")
     return 0
 
 
@@ -196,6 +197,8 @@ def init_ollama(config: Config, binary: str) -> int:
         return 1
 
     config.set(Config.SELECTED_MODEL, selected)
+    config.set(Config.API_PROVIDER, Config.OLLAMA)
+    config.remember_model(selected, Config.OLLAMA)
     print(f"✓ Selected model: {selected}")
 
     small_model = select_optional_model(models, config.small_model, "small model")
@@ -220,6 +223,15 @@ def init_llamacpp(config: Config) -> int:
         return 1
     config.set(Config.LLAMACPP_SERVER_URL, url)
 
+    api_key = config.llamacpp_api_key
+    prompt = f"OpenAI-compatible API key [{api_key or 'optional'}]: "
+    try:
+        api_key = input(prompt).strip() or api_key
+    except (KeyboardInterrupt, EOFError):
+        print()
+        return 1
+    config.set_provider_value(Config.OPENAI_COMPATIBLE, Config.OPENROUTER_API_KEY, api_key)
+
     saved_model = config.llamacpp_model
     prompt = f"Enter model name [{saved_model or 'default'}]: "
     try:
@@ -230,6 +242,7 @@ def init_llamacpp(config: Config) -> int:
     if not model:
         model = saved_model or "default"
     config.set(Config.LLAMACPP_MODEL, model)
+    config.remember_model(model, Config.OPENAI_COMPATIBLE)
     #config.set(Config.SELECTED_MODEL, model)
     print(f"✓ Model: {model}")
 
@@ -253,26 +266,27 @@ def init_llamacpp(config: Config) -> int:
     elif small:
         print(f"✓ Small model: {small}")
 
-    config.set(Config.API_PROVIDER, "llamacpp")
-    print(f"\n✓ llama.cpp configured with provider: llamacpp")
+    config.set(Config.API_PROVIDER, Config.OPENAI_COMPATIBLE)
+    print("\n✓ OpenAI-compatible provider configured")
     return 0
 
 
 def init_command(binary: str = "ollama") -> int:
     """Initialize cterm by detecting Ollama and selecting a model."""
     config = Config()
-    config.set(Config.API_PROVIDER, "ollama")
+    config.ensure_attribute_defaults()
+    config.set(Config.API_PROVIDER, Config.OLLAMA)
 
     while True:
         provider = choose_provider(config)
         if provider is None:
             return 1  # Ctrl+C during provider selection
 
-        if provider == "openrouter":
+        if provider == Config.OPEN_ROUTER:
             result = init_openrouter(config)
             if result != 0:
                 return result
-        elif provider == "llamacpp":
+        elif provider == Config.OPENAI_COMPATIBLE:
             result = init_llamacpp(config)
             if result != 0:
                 return result
