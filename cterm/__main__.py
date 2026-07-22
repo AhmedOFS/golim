@@ -85,9 +85,9 @@ def _resolve_chat_settings(binary: str = "ollama") -> tuple[str | None, str | No
             return "Error: OpenRouter API key not configured\nRun 'cterm -i' to set it up", None, None
         model = config.selected_model
         small_model = config.small_model
-    elif provider in {Config.OPENAI_COMPATIBLE, "llamacpp"}:
-        if not config.llamacpp_server_url:
-            return "Error: llama.cpp server URL not configured\nRun 'cterm -i' to set it up", None, None
+    elif provider == Config.OPENAI_COMPATIBLE:
+        if not config.openai_compatible_server_url:
+            return "Error: OpenAI-compatible server URL not configured\nRun 'cterm -i' to set it up", None, None
         model = config.selected_model
         small_model = config.small_model
 
@@ -113,7 +113,7 @@ def tui_command(binary: str = "ollama", debug: bool = False) -> int:
     provider = config.api_provider
     if provider in {Config.OPEN_ROUTER, "openrouter"}:
         model_label = config.selected_model or "OpenRouter"
-    elif provider in {Config.OPENAI_COMPATIBLE, "llamacpp"}:
+    elif provider == Config.OPENAI_COMPATIBLE:
         model_label = config.selected_model or "OpenAI-compatible"
     else:
         model_label = config.selected_model or "Ollama"
@@ -149,7 +149,7 @@ def main(argv: list[str] | None = None) -> int:
     """Main entry point for cterm CLI."""
     parser = argparse.ArgumentParser(
         prog="cterm",
-        description="Terminal interface for LLMs (Ollama, OpenRouter, llama.cpp)"
+        description="Terminal interface for LLMs (Ollama, OpenRouter, OpenAI-compatible)"
     )
     parser.add_argument(
         "--version",

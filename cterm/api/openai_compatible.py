@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 
 def chat(model, messages, tools=None, response_format=None, config=None, on_thinking_delta=None):
-    server_url = config.llamacpp_server_url if config else "http://127.0.0.1:8083"
+    server_url = config.openai_compatible_server_url if config else "http://127.0.0.1:8083"
     url = server_url.rstrip("/") + "/v1/chat/completions"
 
     normalized_messages = normalize_messages_for_openai(messages)
@@ -22,18 +22,18 @@ def chat(model, messages, tools=None, response_format=None, config=None, on_thin
     n_msg = len(normalized_messages)
     n_tools = len(tools) if tools else 0
 
-    headers = {"Authorization": f"Bearer {config.llamacpp_api_key}"} if config and config.llamacpp_api_key else None
+    headers = {"Authorization": f"Bearer {config.openai_compatible_api_key}"} if config and config.openai_compatible_api_key else None
     try:
         response = requests.post(url, headers=headers, json=payload, timeout=120, stream=bool(on_thinking_delta))
         response.raise_for_status()
     except requests.exceptions.HTTPError as exc:
         body = response.text
         logger.error(
-            "chat_api HTTP %s from llama.cpp: model=%r messages=%s tools=%s body=%s",
+            "chat_api HTTP %s from OpenAI-compatible: model=%r messages=%s tools=%s body=%s",
             response.status_code, model, n_msg, n_tools, body,
         )
         raise RuntimeError(
-            f"llama.cpp API error {response.status_code} for model {model!r}: {body}"
+            f"OpenAI-compatible API error {response.status_code} for model {model!r}: {body}"
         ) from exc
 
     if on_thinking_delta:

@@ -40,7 +40,7 @@ class OpenRouterModelApiTests(unittest.TestCase):
 class OpenRouterModelConfigTests(unittest.TestCase):
     def test_openrouter_model_uses_search_picker(self):
         from cterm.ui.tui.config import config_tui
-        config = _FakeConfig(openrouter_model="saved/model")
+        config = _FakeConfig(selected_model="saved/model")
         ui = _FakeUI("provider/selected")
 
         with patch.object(config_tui, "get_openrouter_models", return_value=["provider/first", "saved/model"]):
@@ -48,11 +48,11 @@ class OpenRouterModelConfigTests(unittest.TestCase):
 
         self.assertEqual(next_state, "OPENROUTER_SMALL_MODEL")
         self.assertEqual(ui.search_calls, [("Select model", ["provider/first", "saved/model"], "saved/model")])
-        self.assertEqual(config.values[Config.OPENROUTER_MODEL], "provider/selected")
+        self.assertEqual(config.values[Config.SELECTED_MODEL], "provider/selected")
 
     def test_openrouter_small_model_defaults_to_normal_model(self):
         from cterm.ui.tui.config import config_tui
-        config = _FakeConfig(openrouter_model="provider/normal")
+        config = _FakeConfig(selected_model="provider/normal")
         ui = _FakeUI("provider/small")
 
         with patch.object(config_tui, "get_openrouter_models", return_value=["provider/first", "provider/normal"]):
@@ -60,7 +60,6 @@ class OpenRouterModelConfigTests(unittest.TestCase):
 
         self.assertEqual(next_state, "COMMON_BASH")
         self.assertEqual(ui.search_calls, [("Select small model", ["provider/first", "provider/normal"], "provider/normal")])
-        self.assertEqual(config.values[Config.OPENROUTER_SMALL_MODEL], "provider/small")
         self.assertEqual(config.values[Config.SMALL_MODEL], "provider/small")
 
     def test_search_picker_starts_in_input_and_down_selects_first_model(self):
@@ -85,8 +84,8 @@ class OpenRouterModelConfigTests(unittest.TestCase):
 
 
 class _FakeConfig:
-    def __init__(self, openrouter_model=None):
-        self.openrouter_model = openrouter_model
+    def __init__(self, selected_model=None):
+        self.selected_model = selected_model
         self.openrouter_api_key = "test-key"
         self.values = {}
 

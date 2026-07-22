@@ -39,7 +39,7 @@ from textual.widgets import Input, OptionList, RichLog, Static
 
 from cterm.config import Config
 from cterm.config.utils import (
-    detect_ollama,
+    is_ollama_installed,
     get_models,
     get_openrouter_models,
     _ollama_server_running,
@@ -200,7 +200,7 @@ def _state_provider(config: Config, ui: ConfigPromptHandle, binary: str) -> str:
     if idx == 2:
         return "OPENROUTER_KEY_CHOICE" if config.openrouter_api_key else "OPENROUTER_KEY_INPUT"
     if idx == 1:
-        return "LLAMACPP_URL"
+        return "OPENAI_COMPATIBLE_URL"
     return "OLLAMA_INSTALL_CHECK"
 
 
@@ -223,13 +223,13 @@ def _state_openrouter_key_input(config: Config, ui: ConfigPromptHandle, binary: 
         if not api_key:
             ui.log("Error: API key is required", STYLE_ERROR)
             continue
-        config.set_provider_value(Config.OPEN_ROUTER, Config.OPENROUTER_API_KEY, api_key)
+        config.set_provider_value(Config.OPEN_ROUTER, Config.PROVIDER_API_KEY, api_key)
         ui.log("✓ API key saved", STYLE_SUCCESS)
         return "OPENROUTER_MODEL"
 
 
 def _state_openrouter_model(config: Config, ui: ConfigPromptHandle, binary: str) -> str:
-    saved_model = config.openrouter_model
+    saved_model = config.selected_model
     models = get_openrouter_models(config.openrouter_api_key)
     if not models:
         ui.log("Could not fetch OpenRouter models. Check your API key and connection.", STYLE_ERROR)
@@ -251,10 +251,9 @@ def _state_openrouter_small_model(config: Config, ui: ConfigPromptHandle, binary
         ui.log("Could not fetch OpenRouter models. Check your API key and connection.", STYLE_ERROR)
         ui.message("Unable to load OpenRouter models. Press Enter to retry.")
         return "OPENROUTER_SMALL_MODEL"
-    normal_model = config.openrouter_model
+    normal_model = config.selected_model
     ui.log("Select a small model (defaults to the selected model):", STYLE_DIM)
     small_choice = ui.search_models("Select small model", models, normal_model)
-    config.set(Config.OPENROUTER_SMALL_MODEL, small_choice)
     config.set(Config.SMALL_MODEL, small_choice)
     ui.log(f"✓ Small model: {small_choice}", STYLE_SUCCESS)
 
@@ -267,16 +266,13 @@ def _state_openrouter_small_model(config: Config, ui: ConfigPromptHandle, binary
 
 
 def _state_ollama_install_check(config: Config, ui: ConfigPromptHandle, binary: str) -> str:
-    installed, version = detect_ollama(binary)
-    if not installed:
+    if not is_ollama_installed(binary):
         ui.log(f"Error: {binary} is not installed", STYLE_ERROR)
         ui.log("Please install Ollama from https://ollama.ai", STYLE_ERROR)
         ui.select("Ollama not found", ["Exit"], 0)
         return "EXIT"
 
-    ui.log(f"✓ {binary} is installed: {version or 'version unknown'}", STYLE_SUCCESS)
-    if version:
-        config.set("ollama_version", version)
+    ui.log(f"✓ {binary} is installed", STYLE_SUCCESS)
 
     ollama_host = os.environ.get("OLLAMA_HOST", "")
     if ollama_host:
@@ -356,26 +352,26 @@ def _state_ollama_small_model(config: Config, ui: ConfigPromptHandle, binary: st
     return "COMMON_BASH"
 
 
-# -- llama.cpp branch -------------------------------------------------------
+# -- OpenAI-compatible branch -------------------------------------------------------
 
 
-def _state_llamacpp_url(config: Config, ui: ConfigPromptHandle, binary: str) -> str:
-    saved_url = config.llamacpp_server_url
-    url = ui.input("llama.cpp server URL", default=saved_url, placeholder=saved_url)
+def _state_openai_compatible_url(config: Config, ui: ConfigPromptHandle, binary: str) -> str:
+    saved_url = config.openai_compatible_server_url
+    url = ui.input("OpenAI-compatible server URL", default=saved_url, placeholder=saved_url)
     if not url:
         url = saved_url
-    config.set(Config.LLAMACPP_SERVER_URL, url)
+    config.set(Config.OPENAI_COMPATIBLE_SERVER_URL, url)
     api_key = ui.input(
         "OpenAI-compatible API key (optional)",
-        default=config.llamacpp_api_key or "",
+        default=config.openai_compatible_api_key or "",
         placeholder="Leave blank when not required",
     )
-    config.set_provider_value(Config.OPENAI_COMPATIBLE, Config.OPENROUTER_API_KEY, api_key)
-    return "LLAMACPP_MODEL"
+    config.set_provider_value(Config.OPENAI_COMPATIBLE, Config.PROVIDER_API_KEY, api_key)
+    return "OPENAI_COMPATIBLE_MODEL"
 
 
-def _state_llamacpp_model(config: Config, ui: ConfigPromptHandle, binary: str) -> str:
-    saved_model = config.llamacpp_model
+def _state_openai_compatible_model(config: Config, ui: ConfigPromptHandle, binary: str) -> str:
+    saved_model = config.selected_model
     model = ui.input("Enter model name", default=saved_model or "", placeholder=saved_model or "default")
     if not model:
         model = saved_model or "default"
@@ -384,20 +380,18 @@ def _state_llamacpp_model(config: Config, ui: ConfigPromptHandle, binary: str) -
     if hasattr(config, "remember_model"):
         config.remember_model(model, Config.OPENAI_COMPATIBLE)
     ui.log(f"✓ Model: {model}", STYLE_SUCCESS)
-    return "LLAMACPP_SMALL_MODEL"
+    return "OPENAI_COMPATIBLE_SMALL_MODEL"
 
 
-def _state_llamacpp_small_model(config: Config, ui: ConfigPromptHandle, binary: str) -> str:
-    small = config.llamacpp_small_model
+def _state_openai_compatible_small_model(config: Config, ui: ConfigPromptHandle, binary: str) -> str:
+    small = config.small_model
     ui.log("Optional small model for lightweight tasks (skills selection,", STYLE_DIM)
     ui.log("  verification). Enter to skip or 'none' to clear.", STYLE_DIM)
     small_choice = ui.input("Small model", default=small or "", placeholder=small or "none")
     if small_choice and small_choice.lower() not in ("none", "clear", "skip"):
-        config.set(Config.LLAMACPP_SMALL_MODEL, small_choice)
         config.set(Config.SMALL_MODEL, small_choice)
         ui.log(f"✓ Small model: {small_choice}", STYLE_SUCCESS)
     elif small_choice and small_choice.lower() in ("none", "clear"):
-        config.unset(Config.LLAMACPP_SMALL_MODEL)
         config.unset(Config.SMALL_MODEL)
         ui.log("✓ Small model cleared", STYLE_SUCCESS)
     elif small:
@@ -457,9 +451,9 @@ STATE_HANDLERS: dict[str, Callable[[Config, ConfigPromptHandle, str], str]] = {
     "OLLAMA_URL_INPUT": _state_ollama_url_input,
     "OLLAMA_MODEL": _state_ollama_model,
     "OLLAMA_SMALL_MODEL": _state_ollama_small_model,
-    "LLAMACPP_URL": _state_llamacpp_url,
-    "LLAMACPP_MODEL": _state_llamacpp_model,
-    "LLAMACPP_SMALL_MODEL": _state_llamacpp_small_model,
+    "OPENAI_COMPATIBLE_URL": _state_openai_compatible_url,
+    "OPENAI_COMPATIBLE_MODEL": _state_openai_compatible_model,
+    "OPENAI_COMPATIBLE_SMALL_MODEL": _state_openai_compatible_small_model,
     "COMMON_BASH": _state_common_bash,
     "COMMON_THINKING": _state_common_thinking,
 }
@@ -472,7 +466,6 @@ def run_config(config: Config, binary: str, ui: ConfigPromptHandle, mode: str = 
     which case we rewind to whichever page was actually shown right before
     it. Going back from the very first page cancels the wizard, matching
     what happens when the user cancels the very first prompt today."""
-    config.ensure_attribute_defaults()
     history: list[str] = []
     ui.config_mode = mode
     state = "PROVIDER"

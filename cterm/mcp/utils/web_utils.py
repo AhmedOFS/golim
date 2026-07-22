@@ -93,7 +93,7 @@ def _parse_mcp_response(body: str) -> str | None:
 def _websearch_provider() -> str:
     """Return the configured web search provider, defaulting to 'exa'."""
     config = _read_cterm_config()
-    provider = config.get("websearch_provider", "exa")
+    provider = config.get("attributes", {}).get("websearch_provider", "exa")
     if provider not in ("exa", "parallel"):
         return "exa"
     return provider
@@ -102,12 +102,12 @@ def _websearch_provider() -> str:
 def _exa_api_key() -> str | None:
     """Read Exa API key from config, then env var."""
     config = _read_cterm_config()
-    key = config.get("exa_api_key") or os.environ.get("EXA_API_KEY")
+    key = config.get("attributes", {}).get("exa_api_key") or os.environ.get("EXA_API_KEY")
     return key if key else None
 
 
 def _parallel_api_key() -> str | None:
     """Read Parallel API key from config, then env var."""
     config = _read_cterm_config()
-    key = config.get("parallel_api_key") or os.environ.get("PARALLEL_API_KEY")
+    key = config.get("attributes", {}).get("parallel_api_key") or os.environ.get("PARALLEL_API_KEY")
     return key if key else None

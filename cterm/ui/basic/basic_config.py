@@ -5,7 +5,7 @@ import time
 
 from ...config.config import Config
 from ...config.utils import (
-    detect_ollama,
+    is_ollama_installed,
     get_models,
     _ollama_server_running,
     select_model,
@@ -14,12 +14,12 @@ from ...config.utils import (
 
 
 def choose_provider(config: Config) -> str | None:
-    """Let the user choose between Ollama, OpenRouter, and llama.cpp.
+    """Let the user choose between Ollama, OpenRouter, and OpenAI-compatible.
     Returns None on Ctrl+C."""
     print("\nSet up API Provider:")
     print(f"  1. Ollama (local, default)")
     print(f"  2. OpenRouter (cloud, requires API key)")
-    print(f"  3. llama.cpp (local, llama.cpp server)")
+    print(f"  3. OpenAI-compatible (URL and optional API key)")
     default = "1" if config.api_provider == Config.OLLAMA else "2" if config.api_provider == Config.OPEN_ROUTER else "3"
     try:
         choice = input(f"Select provider [1-3, default {default}]: ").strip() or default
@@ -55,10 +55,10 @@ def init_openrouter(config: Config) -> int:
         if not api_key:
             print("Error: API key is required")
             return 1
-        config.set_provider_value(Config.OPEN_ROUTER, Config.OPENROUTER_API_KEY, api_key)
+        config.set_provider_value(Config.OPEN_ROUTER, Config.PROVIDER_API_KEY, api_key)
         print("✓ API key saved")
 
-    saved_model = config.openrouter_model
+    saved_model = config.selected_model
     print("\nOpenRouter model (e.g. anthropic/claude-3.5-sonnet,")
     print("  openai/gpt-4o, google/gemini-2.0-flash-001)")
     print("  See https://openrouter.ai/models for the full list.")
@@ -70,11 +70,10 @@ def init_openrouter(config: Config) -> int:
         return 1
     if not model:
         model = saved_model or "anthropic/claude-3.5-sonnet"
-    config.set(Config.OPENROUTER_MODEL, model)
-    #config.set(Config.SELECTED_MODEL, model)
+    config.set(Config.SELECTED_MODEL, model)
     print(f"✓ Model: {model}")
 
-    small = config.openrouter_small_model
+    small = config.small_model
     print(f"\nOptional small model for lightweight tasks (skills selection,")
     print(f"  verification). Enter to skip or 'none' to clear.")
     prompt = f"Small model [{small or 'none'}]: "
@@ -84,11 +83,9 @@ def init_openrouter(config: Config) -> int:
         print()
         small_choice = ""
     if small_choice and small_choice.lower() not in ("none", "clear", "skip"):
-        config.set(Config.OPENROUTER_SMALL_MODEL, small_choice)
         config.set(Config.SMALL_MODEL, small_choice)
         print(f"✓ Small model: {small_choice}")
     elif small_choice and small_choice.lower() in ("none", "clear"):
-        config.unset(Config.OPENROUTER_SMALL_MODEL)
         config.unset(Config.SMALL_MODEL)
         print("✓ Small model cleared")
     elif small:
@@ -102,15 +99,12 @@ def init_openrouter(config: Config) -> int:
 
 def init_ollama(config: Config, binary: str) -> int:
     """Configure cterm to use Ollama (local)."""
-    installed, version = detect_ollama(binary)
-    if not installed:
+    if not is_ollama_installed(binary):
         print(f"Error: {binary} is not installed")
         print("Please install Ollama from https://ollama.ai")
         return 1
 
-    print(f"✓ {binary} is installed: {version or 'version unknown'}")
-    if version:
-        config.set("ollama_version", version)
+    print(f"✓ {binary} is installed")
 
     ollama_host = os.environ.get("OLLAMA_HOST", "")
     if ollama_host:
@@ -212,27 +206,27 @@ def init_ollama(config: Config, binary: str) -> int:
     return 0
 
 
-def init_llamacpp(config: Config) -> int:
-    """Configure cterm to use llama.cpp server."""
-    saved_url = config.llamacpp_server_url
-    prompt = f"llama.cpp server URL [{saved_url}]: "
+def init_openai_compatible(config: Config) -> int:
+    """Configure cterm to use an OpenAI-compatible server."""
+    saved_url = config.openai_compatible_server_url
+    prompt = f"OpenAI-compatible server URL [{saved_url}]: "
     try:
         url = input(prompt).strip() or saved_url
     except (KeyboardInterrupt, EOFError):
         print()
         return 1
-    config.set(Config.LLAMACPP_SERVER_URL, url)
+    config.set(Config.OPENAI_COMPATIBLE_SERVER_URL, url)
 
-    api_key = config.llamacpp_api_key
+    api_key = config.openai_compatible_api_key
     prompt = f"OpenAI-compatible API key [{api_key or 'optional'}]: "
     try:
         api_key = input(prompt).strip() or api_key
     except (KeyboardInterrupt, EOFError):
         print()
         return 1
-    config.set_provider_value(Config.OPENAI_COMPATIBLE, Config.OPENROUTER_API_KEY, api_key)
+    config.set_provider_value(Config.OPENAI_COMPATIBLE, Config.PROVIDER_API_KEY, api_key)
 
-    saved_model = config.llamacpp_model
+    saved_model = config.selected_model
     prompt = f"Enter model name [{saved_model or 'default'}]: "
     try:
         model = input(prompt).strip()
@@ -241,12 +235,11 @@ def init_llamacpp(config: Config) -> int:
         return 1
     if not model:
         model = saved_model or "default"
-    config.set(Config.LLAMACPP_MODEL, model)
+    config.set(Config.SELECTED_MODEL, model)
     config.remember_model(model, Config.OPENAI_COMPATIBLE)
-    #config.set(Config.SELECTED_MODEL, model)
     print(f"✓ Model: {model}")
 
-    small = config.llamacpp_small_model
+    small = config.small_model
     print(f"\nOptional small model for lightweight tasks (skills selection,")
     print(f"  verification). Enter to skip or 'none' to clear.")
     prompt = f"Small model [{small or 'none'}]: "
@@ -256,11 +249,9 @@ def init_llamacpp(config: Config) -> int:
         print()
         small_choice = ""
     if small_choice and small_choice.lower() not in ("none", "clear", "skip"):
-        config.set(Config.LLAMACPP_SMALL_MODEL, small_choice)
         config.set(Config.SMALL_MODEL, small_choice)
         print(f"✓ Small model: {small_choice}")
     elif small_choice and small_choice.lower() in ("none", "clear"):
-        config.unset(Config.LLAMACPP_SMALL_MODEL)
         config.unset(Config.SMALL_MODEL)
         print("✓ Small model cleared")
     elif small:
@@ -274,7 +265,6 @@ def init_llamacpp(config: Config) -> int:
 def init_command(binary: str = "ollama") -> int:
     """Initialize cterm by detecting Ollama and selecting a model."""
     config = Config()
-    config.ensure_attribute_defaults()
     config.set(Config.API_PROVIDER, Config.OLLAMA)
 
     while True:
@@ -287,7 +277,7 @@ def init_command(binary: str = "ollama") -> int:
             if result != 0:
                 return result
         elif provider == Config.OPENAI_COMPATIBLE:
-            result = init_llamacpp(config)
+            result = init_openai_compatible(config)
             if result != 0:
                 return result
         else:

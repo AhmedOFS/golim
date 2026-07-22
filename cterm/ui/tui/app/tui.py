@@ -373,10 +373,10 @@ class CtermApp(ConfigUIMixin, App[int]):
             if not config.openrouter_api_key:
                 return "Error: OpenRouter API key not configured\nRun 'cterm -i' to set it up", None, None, label
             return None, config.selected_model, config.small_model, label
-        if provider in {Config.OPENAI_COMPATIBLE, "llamacpp"}:
+        if provider == Config.OPENAI_COMPATIBLE:
             label = config.selected_model or "OpenAI-compatible"
-            if not config.llamacpp_server_url:
-                return "Error: llama.cpp server URL not configured\nRun 'cterm -i' to set it up", None, None, label
+            if not config.openai_compatible_server_url:
+                return "Error: OpenAI-compatible server URL not configured\nRun 'cterm -i' to set it up", None, None, label
             return None, config.selected_model, config.small_model, label
 
         label = config.selected_model or "Ollama"

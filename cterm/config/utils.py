@@ -9,31 +9,9 @@ import requests
 OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
 
 
-def run_cmd(binary: str, *args, timeout: float = 3.0) -> str | None:
-    """Run a command and return stdout."""
-    try:
-        result = subprocess.run(
-            [binary] + list(args),
-            capture_output=True,
-            text=True,
-            timeout=timeout
-        )
-        return result.stdout.strip() or None
-    except Exception:
-        return None
-
-
-def detect_ollama(binary: str = "ollama") -> tuple[bool, str | None]:
-    """Returns (installed, version)."""
-    if not shutil.which(binary):
-        return False, None
-
-    for args in (["--version"], ["version"], ["--help"]):
-        output = run_cmd(binary, *args)
-        if output:
-            return True, output.splitlines()[0]
-
-    return True, None
+def is_ollama_installed(binary: str = "ollama") -> bool:
+    """Return whether the configured Ollama executable is available."""
+    return bool(shutil.which(binary))
 
 
 def get_models(binary: str) -> list[str]:
@@ -122,8 +100,8 @@ def get_configured_model_choices(config, binary: str) -> tuple[list[str], dict[s
         providers.append((Config.OLLAMA, get_models(binary)))
     if config.openrouter_api_key:
         providers.append((Config.OPEN_ROUTER, get_openrouter_models(config.openrouter_api_key)))
-    if config.provider(Config.OPENAI_COMPATIBLE).get(Config.LLAMACPP_SERVER_URL):
-        providers.append((Config.OPENAI_COMPATIBLE, get_openai_compatible_models(config.llamacpp_server_url, config.llamacpp_api_key)))
+    if config.provider(Config.OPENAI_COMPATIBLE).get(Config.OPENAI_COMPATIBLE_SERVER_URL):
+        providers.append((Config.OPENAI_COMPATIBLE, get_openai_compatible_models(config.openai_compatible_server_url, config.openai_compatible_api_key)))
     pairs = [(provider, model) for provider, models in providers for model in models]
     recent = [(item["provider"], item["model"]) for item in config.recent_models()]
     ordered = [pair for pair in recent if pair in pairs] + [pair for pair in pairs if pair not in recent]

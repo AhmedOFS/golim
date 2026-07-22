@@ -4,7 +4,7 @@ Guidance for coding agents working in this repository.
 
 ## Project Shape
 
-Cterm is a Python CLI, Textual TUI, and local MCP-like tool harness for completing desktop OS tasks with an Ollama-backed model, OpenRouter, or a llama.cpp-compatible server.
+Cterm is a Python CLI, Textual TUI, and local MCP-like tool harness for completing desktop OS tasks with an Ollama-backed model, OpenRouter, or an OpenAI-compatible server.
 
 The current architecture is a single action agent managed by a runtime object:
 
@@ -14,9 +14,9 @@ The current architecture is a single action agent managed by a runtime object:
 - `cterm/core/agent_ui.py`: common UI protocol consumed by `ToolAgent`. It includes spinner, message, tool-call, tool-output, privileged approval, Python approval/display, and thinking-trace hooks.
 - `cterm/core/mcp_client.py`: Unix-domain-socket JSON-RPC-ish client. Supports `tools/list`, `tools/call`, and streaming bash output via newline-delimited `"stream"` frames before the final result frame.
 - `cterm/core/utils.py`: shared helpers for socket paths, async bridging, output labels, thinking trace markers, final summary prompt, and Python-in-bash detection.
-- `cterm/config/config.py`: `Config` class reading/writing `~/.config/cterm/config.json` (or `$XDG_CONFIG_HOME/cterm/config.json`). Keys include `selected_model`, `small_model`, `bash_unrestricted`, `stream_thinking_traces`, `api_provider`, Ollama/OpenRouter/llama.cpp model settings, `websearch_provider`, `exa_api_key`, and `parallel_api_key`.
+- `cterm/config/config.py`: `Config` class reading/writing `~/.config/cterm/config.json` (or `$XDG_CONFIG_HOME/cterm/config.json`). Keys include `selected_model`, `small_model`, `bash_unrestricted`, `stream_thinking_traces`, `api_provider`, Ollama/OpenRouter/OpenAI-compatible model settings, `websearch_provider`, `exa_api_key`, and `parallel_api_key`.
 - `cterm/config/utils.py`: configuration helper functions used by init flows for provider setup and model selection.
-- `cterm/api/`: provider HTTP layer. `chat_api.py` dispatches based on `Config.api_provider`; `ollama.py`, `openrouter.py`, and `llamacpp.py` implement provider calls; `utils.py` normalizes OpenAI-compatible messages/responses and streaming reasoning/tool-call chunks.
+- `cterm/api/`: provider HTTP layer. `chat_api.py` dispatches based on `Config.api_provider`; `ollama.py`, `openrouter.py`, and `openai_compatible.py` implement provider calls; `utils.py` normalizes OpenAI-compatible messages/responses and streaming reasoning/tool-call chunks.
 - `cterm/mcp/server.py`: persistent MCP-like tool server over a Unix domain socket at `/tmp/cterm_mcp_{username}.sock` using `pwd.getpwuid(os.getuid()).pw_name` with `$USER` fallback. It has a 20-minute inactivity shutdown and emits newline-delimited JSON frames for streaming output.
 - `cterm/mcp/tools.py`: exposed MCP tool implementations. The registered tools are marked with `__mcp_tool__` and attached to the `mcp` object. Current exposed tool names include `finder`, `read_file`, `write_file`, `bash`, `exec` (backed by `exec_python`), `system_info`, and `websearch`. This is the source of truth; there is no `cterm/mcp/tools_mcp.py`.
 - `cterm/mcp/utils/bash_utils.py`: restricted/unrestricted bash parsing and execution helpers, including command parsing, pipelines, `&&`, glob/env expansion, streaming, PTY streaming for apt/snap-style commands, output finalization, and privileged command routing.
@@ -88,8 +88,8 @@ python3 -m cterm
 - Debug output is part of observable behavior in tests. When changing orchestration logging, update tests intentionally. Existing debug event names include legacy `planner_skills_selected` even though there is no planner.
 - Keep MCP server responses newline-delimited JSON. Streaming tool calls send zero or more `"stream"` frames followed by one final `"result"` frame.
 - Thinking traces are controlled by `Config.stream_thinking_traces`; keep config, `ToolAgent._chat_with_optional_thinking`, provider stream parsing, and both UI implementations in sync when changing this behavior.
-- Provider support is abstracted in `chat_with_model_api` in `cterm/api/chat_api.py`, dispatching to Ollama, OpenRouter, or llama.cpp based on `Config.api_provider`. Keep `__main__.py` provider-specific model selection and `Config` keys in sync when changing provider setup.
-- For OpenRouter and llama.cpp, preserve `normalize_messages_for_openai`, `normalize_openai_response`, and `normalize_openai_stream_response` semantics when changing tool calls, tool-result history, or streaming thinking traces. Streamed tool-call argument chunks must be reassembled before the response reaches `ToolAgent`.
+- Provider support is abstracted in `chat_with_model_api` in `cterm/api/chat_api.py`, dispatching to Ollama, OpenRouter, or OpenAI-compatible based on `Config.api_provider`. Keep `__main__.py` provider-specific model selection and `Config` keys in sync when changing provider setup.
+- For OpenRouter and OpenAI-compatible providers, preserve `normalize_messages_for_openai`, `normalize_openai_response`, and `normalize_openai_stream_response` semantics when changing tool calls, tool-result history, or streaming thinking traces. Streamed tool-call argument chunks must be reassembled before the response reaches `ToolAgent`.
 - Socket path logic exists in multiple places. `cterm/mcp/server.py` uses UID/pwd lookup; `cterm/core/utils.py` is used by the client/runtime. Keep them compatible when changing.
 - Tool result history is fed back into model context and into followups. Keep tool-result messages provider-compatible and avoid adding non-chat fields to messages sent to providers.
 
@@ -162,7 +162,7 @@ Note: the current skill files have empty `## Skill` sections, so they are ignore
 - Follow the existing simple style: type hints where useful, small helper functions, direct dictionaries for protocol payloads, and explicit error dicts for tool failures.
 - Keep imports lightweight. `requests` is already used for provider and web access; avoid introducing new dependencies unless the project is also given packaging metadata.
 - Do not rewrite unrelated code or normalize old comments while making focused fixes.
-- Prefer deterministic tests with mocked model/tool responses over tests that depend on a live Ollama server, OpenRouter, llama.cpp, systemd service, or desktop state.
+- Prefer deterministic tests with mocked model/tool responses over tests that depend on a live Ollama server, OpenRouter, OpenAI-compatible server, systemd service, or desktop state.
 - Use current import paths in tests. Patch `cterm.core.agent.chat_with_model_api`, `cterm.core.runtime.FastMCPClient`, and `cterm.mcp.tools.*` rather than stale `cterm.llm`, `cterm.runtime`, or `cterm.mcp.tools_mcp` paths.
 
 ## Files to Avoid Treating as Source of Truth

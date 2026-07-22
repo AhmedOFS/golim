@@ -323,7 +323,7 @@ def _run_pipeline(argv_list: list, cmd_str: str, timeout=None) -> dict:
 # ---------------------------------------------------------------------------
 
 def _is_bash_unrestricted() -> bool:
-    return bool(_read_cterm_config().get("bash_unrestricted", False))
+    return bool(_read_cterm_config().get("attributes", {}).get("bash_unrestricted"))
 
 
 def _count_output_lines(results: list[dict]) -> int:

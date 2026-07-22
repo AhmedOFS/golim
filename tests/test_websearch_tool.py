@@ -33,6 +33,10 @@ SAMPLE_PARALLEL_RESPONSE = json.dumps({
 })
 
 
+def _schema(attributes=None):
+    return {"providers": {}, "attributes": attributes or {}}
+
+
 class WebSearchToolTests(unittest.TestCase):
 
     @patch("cterm.mcp.utils.web_utils._read_cterm_config", return_value={})
@@ -62,7 +66,7 @@ class WebSearchToolTests(unittest.TestCase):
     @patch("cterm.mcp.utils.web_utils._read_cterm_config")
     @patch("cterm.mcp.utils.web_utils.requests.post")
     def test_exa_with_api_key(self, mock_post, mock_config):
-        mock_config.return_value = {"exa_api_key": "test-key-123"}
+        mock_config.return_value = _schema({"exa_api_key": "test-key-123"})
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.text = SAMPLE_EXA_RESPONSE
@@ -138,7 +142,7 @@ class WebSearchToolTests(unittest.TestCase):
     @patch("cterm.mcp.utils.web_utils._read_cterm_config")
     @patch("cterm.mcp.utils.web_utils.requests.post")
     def test_parallel_provider(self, mock_post, mock_config):
-        mock_config.return_value = {"websearch_provider": "parallel"}
+        mock_config.return_value = _schema({"websearch_provider": "parallel"})
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.text = SAMPLE_PARALLEL_RESPONSE
@@ -159,10 +163,10 @@ class WebSearchToolTests(unittest.TestCase):
     @patch("cterm.mcp.utils.web_utils._read_cterm_config")
     @patch("cterm.mcp.utils.web_utils.requests.post")
     def test_parallel_with_api_key(self, mock_post, mock_config):
-        mock_config.return_value = {
+        mock_config.return_value = _schema({
             "websearch_provider": "parallel",
             "parallel_api_key": "par-key-456",
-        }
+        })
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.text = SAMPLE_PARALLEL_RESPONSE
