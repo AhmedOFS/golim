@@ -298,6 +298,8 @@ def _run_pipeline(argv_list: list, cmd_str: str, timeout=None) -> dict:
         except subprocess.TimeoutExpired:
             for p in procs:
                 p.kill()
+            for p in procs:
+                p.wait()
             return {"ok": False, "error": f"Pipeline timed out: {cmd_str}"}
 
         for p in procs[:-1]:
@@ -313,6 +315,11 @@ def _run_pipeline(argv_list: list, cmd_str: str, timeout=None) -> dict:
         for p in procs:
             try:
                 p.kill()
+            except Exception:
+                pass
+        for p in procs:
+            try:
+                p.wait()
             except Exception:
                 pass
         return {"ok": False, "error": str(e)}
@@ -495,18 +502,21 @@ def _stream_subprocess(argv, cmd_str, results, timeout, suppress_stderr, use_pty
                 output_lines[stream_name].append(chunk)
                 yield {"type": "stream", "fd": stream_name, "line": chunk, "end": "\n"}
 
-        proc.wait()
     finally:
+        if proc is not None:
+            try:
+                proc.wait()
+            except Exception:
+                pass
+            if proc.stdout:
+                proc.stdout.close()
+            if proc.stderr:
+                proc.stderr.close()
         if master_fd is not None:
             try:
                 os.close(master_fd)
             except OSError:
                 pass
-        if proc is not None:
-            if proc.stdout:
-                proc.stdout.close()
-            if proc.stderr:
-                proc.stderr.close()
 
     return {
         "command": cmd_str,

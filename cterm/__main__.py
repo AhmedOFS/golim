@@ -7,7 +7,7 @@ import shutil
 import sys
 from pathlib import Path
 from . import __version__
-from .config import Config
+from .config import Config, get_config, init_config
 from .logger import setup_root_logger
 from .core.agent_ui import active_agent_ui
 from .core.runtime import Runtime
@@ -40,6 +40,7 @@ def _setup_session_log():
 
 def chat_command(message: str, binary: str = "ollama", debug: bool = False) -> int:
     """Send a message to the configured model."""
+    init_config()
     error, model, small_model = _resolve_chat_settings(binary)
     if error:
         print(error)
@@ -70,7 +71,7 @@ def chat_command(message: str, binary: str = "ollama", debug: bool = False) -> i
 
 
 def _resolve_chat_settings(binary: str = "ollama") -> tuple[str | None, str | None, str | None]:
-    config = Config()
+    config = get_config()
     model = config.selected_model
     small_model = config.small_model
     provider = config.api_provider
@@ -107,9 +108,10 @@ def _create_tui_log():
 
 def tui_command(binary: str = "ollama", debug: bool = False) -> int:
     """Open the default Textual interface."""
+    init_config()
     from .ui.tui.app.tui import CtermApp
 
-    config = Config()
+    config = get_config()
     provider = config.api_provider
     if provider in {Config.OPEN_ROUTER, "openrouter"}:
         model_label = config.selected_model or "OpenRouter"
@@ -185,12 +187,13 @@ def main(argv: list[str] | None = None) -> int:
     
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
     setup_root_logger(debug=args.debug)
-    
+
     if args.version:
         print(f"cterm {__version__}")
         return 0
-    
+
     if args.init:
+        init_config()
         from .ui.tui.config.config_tui import init_command_tui
 
         return init_command_tui(args.binary)

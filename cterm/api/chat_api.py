@@ -1,6 +1,6 @@
 import logging
 
-from cterm.config import Config
+from cterm.config import Config, get_config
 from cterm.api import ollama, openrouter, openai_compatible
 
 logger = logging.getLogger(__name__)
@@ -14,7 +14,7 @@ def chat_with_model_api(
     response_format=None,
     on_thinking_delta=None,
 ):
-    config = Config()
+    config = get_config()
     provider = config.api_provider
 
     if provider in {"open_router", "openrouter"}:

@@ -9,7 +9,7 @@ import threading
 import time
 
 from cterm.core.agent_ui import AgentUI, active_agent_ui
-from cterm.config import Config
+from cterm.config import Config, get_config
 from cterm.api.chat_api import chat_with_model_api
 from cterm.core.mcp_client import FastMCPClient
 from cterm.core.utils import get_socket_path
@@ -35,7 +35,7 @@ class Runtime:
         debug: bool = False,
         ui: AgentUI | None = None,
     ):
-        self.config = config or Config()
+        self.config = config or get_config()
         self.model = model
         self.small_model = small_model
         self.binary = binary

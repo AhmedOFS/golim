@@ -7,7 +7,7 @@ import shlex
 
 from cterm.core.agent_ui import AgentUI
 from cterm.ui.basic.basic import TerminalUI
-from cterm.config import Config
+from cterm.config import Config, get_config
 from cterm.api.chat_api import chat_with_model_api
 from cterm.core.utils import _CONTENT_MARKER, _DIRECT_THINKING_KEYS, _FINAL_SUMMARY_PROMPT, _PYTHON_DENIED_RESULT, _REASONING_DETAIL_KEYS, _THINKING_KEYS, _TRACE_MARKER, _TRACE_ONLY_MARKER, _detect_python_in_bash, _indent, _clip_label, _run_async
 
@@ -50,7 +50,7 @@ class ToolAgent:
         self.execution_history = []
         self.result = None
         self._should_interrupt = should_interrupt or (lambda: False)
-        self.MAX_AGENT_ITERATIONS = Config().max_iteration_limit
+        self.MAX_AGENT_ITERATIONS = get_config().max_iteration_limit
 
     def __enter__(self):
         return self
@@ -219,7 +219,7 @@ class ToolAgent:
 
     def _chat_with_optional_thinking(self, *args, **kwargs):
         self._last_thinking_trace = ""
-        if not Config().stream_thinking_traces:
+        if not get_config().stream_thinking_traces:
             response = chat_with_model_api(*args, **kwargs)
             message = response.get("message", {}) if isinstance(response, dict) else {}
             self._last_thinking_trace = self._extract_message_thinking(message)
@@ -280,7 +280,7 @@ class ToolAgent:
             return self._prepare_shell_tool_call(tool_name, args)
 
         self.ui.tool_call(tool_name, args)
-        if is_exec and not Config().unrestricted_bash:
+        if is_exec and not get_config().unrestricted_bash:
             code = args.get("code") or args.get("script") or args.get("source") or ""
             if not self.ui.approve_python_code(code):
                 tool_result = self._python_denied_result()
@@ -299,7 +299,7 @@ class ToolAgent:
         display_args["command"] = command.replace(py_code, "<python>")
         self.ui.tool_call(tool_name, display_args)
 
-        if Config().unrestricted_bash:
+        if get_config().unrestricted_bash:
             self.ui.show_python_code(py_code)
         elif not self.ui.approve_python_code(py_code):
             tool_result = self._python_denied_result()

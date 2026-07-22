@@ -37,7 +37,7 @@ from textual.app import App, ComposeResult
 from textual.containers import Vertical
 from textual.widgets import Input, OptionList, RichLog, Static
 
-from cterm.config import Config
+from cterm.config import Config, get_config
 from cterm.config.utils import (
     is_ollama_installed,
     get_models,
@@ -621,7 +621,7 @@ class ConfigApp(ConfigUIMixin, App[int]):
 
     @work(exclusive=True, thread=True)
     def run_wizard(self) -> None:
-        config = Config()
+        config = get_config()
         ui = ConfigPromptHandle(self)
         try:
             self._result = run_config(config, self.binary, ui)

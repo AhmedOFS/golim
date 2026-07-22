@@ -4,7 +4,7 @@ import sys
 from typing import Any, Protocol
 
 from cterm.core.agent_ui import AgentUI
-from cterm.config import Config
+from cterm.config import Config, get_config
 from cterm.core.runtime import Runtime
 from cterm.core.utils import _clip_label
 from cterm.ui.basic.spinner import Spinner
@@ -19,7 +19,7 @@ class TerminalUI(AgentUI):
         small_model: str | None = None,
         debug: bool = False,
     ):
-        self._config = config or Config()
+        self._config = config or get_config()
         self._model = model
         self._binary = binary
         self._small_model = small_model

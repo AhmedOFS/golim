@@ -1,7 +1,26 @@
 """Configuration and recent-model persistence for cterm."""
-from pathlib import Path
+from __future__ import annotations
+
+import contextvars
 import json
 import os
+from pathlib import Path
+
+
+_config_context: contextvars.ContextVar[Config | None] = contextvars.ContextVar("_config_context", default=None)
+
+
+def get_config() -> Config:
+    config = _config_context.get()
+    if config is None:
+        config = Config()
+    return config
+
+
+def init_config() -> Config:
+    config = Config()
+    _config_context.set(config)
+    return config
 
 
 class ConfigSchemaError(ValueError):
@@ -85,6 +104,9 @@ class Config:
             self.PROVIDERS: {name: dict(values) for name, values in self._PROVIDER_DEFAULTS.items()},
             self.ATTRIBUTES: dict(self._ATTRIBUTE_DEFAULTS),
         }
+
+    def reload(self) -> None:
+        self.data = self._load()
 
     def save(self) -> None:
         tmp = self.path.with_suffix(".tmp")

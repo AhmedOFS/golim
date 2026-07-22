@@ -3,7 +3,7 @@ import os
 import subprocess
 import time
 
-from ...config.config import Config
+from ...config import Config, get_config
 from ...config.utils import (
     is_ollama_installed,
     get_models,
@@ -264,7 +264,7 @@ def init_openai_compatible(config: Config) -> int:
 
 def init_command(binary: str = "ollama") -> int:
     """Initialize cterm by detecting Ollama and selecting a model."""
-    config = Config()
+    config = get_config()
     config.set(Config.API_PROVIDER, Config.OLLAMA)
 
     while True:

@@ -16,7 +16,7 @@ from textual.containers import Vertical
 from textual.widgets import Input, OptionList
 
 from cterm.core.agent_ui import AgentUI, active_agent_ui
-from cterm.config import Config
+from cterm.config import Config, get_config
 from cterm.core.runtime import Runtime
 from cterm.ui.tui.config.config_tui import (
     ConfigPromptHandle,
@@ -320,7 +320,7 @@ class CtermApp(ConfigUIMixin, App[int]):
         log_factory: Callable[[], tuple[object, object]] | None = None,
     ):
         super().__init__()
-        self._config = config or Config()
+        self._config = config or get_config()
         self._model = model
         self._binary = binary
         self._small_model = small_model
@@ -366,7 +366,7 @@ class CtermApp(ConfigUIMixin, App[int]):
         return self._runtime
 
     def _resolve_current_settings(self) -> tuple[str | None, str | None, str | None, str]:
-        config = Config()
+        config = get_config()
         provider = config.api_provider
         if provider in {Config.OPEN_ROUTER, "openrouter"}:
             label = config.selected_model or "OpenRouter"
@@ -387,7 +387,8 @@ class CtermApp(ConfigUIMixin, App[int]):
         return None, config.selected_model, config.small_model, label
 
     def _reload_config_settings(self) -> None:
-        self._config = Config()
+        self._config = get_config()
+        self._config.reload()
         self._runtime_error, self._model, self._small_model, self.model_label = self._resolve_current_settings()
         self.query_one("#footer", Footer).set_model(self.model_label)
         if self._runtime is not None:
@@ -607,7 +608,7 @@ class CtermApp(ConfigUIMixin, App[int]):
         self._config_result = 1
 
     def _show_model_menu(self) -> None:
-        labels, choices = get_configured_model_choices(Config(), self._binary)
+        labels, choices = get_configured_model_choices(get_config(), self._binary)
         if not labels:
             self.append_line("No models are available. Set up a provider or add a model first.", STYLE_WARNING)
             self._hide_menu()
@@ -618,7 +619,7 @@ class CtermApp(ConfigUIMixin, App[int]):
         self.query_one("#menu_panel", MenuPanel).show_model_search(labels)
 
     def _show_settings_menu(self) -> None:
-        config = Config()
+        config = get_config()
         self._menu_page = "settings"
         self.query_one("#menu_panel", MenuPanel).show_options("Settings", [
             f"Thinking traces: {'on' if config.stream_thinking_traces else 'off'}",
@@ -644,7 +645,7 @@ class CtermApp(ConfigUIMixin, App[int]):
             shown = panel.query_one("#menu_options", OptionList).get_option_at_index(index).prompt
             label = str(shown)
             provider, model = self._menu_choices[label]
-            config = Config()
+            config = get_config()
             config.set(Config.API_PROVIDER, provider)
             config.set(Config.SELECTED_MODEL, model)
             config.remember_model(model, provider)
@@ -653,7 +654,7 @@ class CtermApp(ConfigUIMixin, App[int]):
             self.append_line(f"Selected {model} ({provider}).", STYLE_SUCCESS)
             return
         if self._menu_page == "settings":
-            config = Config()
+            config = get_config()
             if index == 0:
                 config.set(Config.STREAM_THINKING_TRACES, not config.stream_thinking_traces)
             elif index == 1:
@@ -695,7 +696,7 @@ class CtermApp(ConfigUIMixin, App[int]):
             except ValueError:
                 self.bell()
                 return
-            Config().set(Config.MAX_ITERATION_LIMIT, value)
+            get_config().set(Config.MAX_ITERATION_LIMIT, value)
             self._show_settings_menu()
 
     def _handle_menu_key(self, event) -> None:

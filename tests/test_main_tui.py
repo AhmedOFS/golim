@@ -133,9 +133,9 @@ class MainTuiTests(unittest.TestCase):
 
         app.query_one = fake_query_one
 
-        with patch("cterm.ui.tui.app.tui.Config") as config_cls, \
+        with patch("cterm.ui.tui.app.tui.get_config") as get_config_fn, \
              patch("cterm.ui.tui.app.tui.shutil.which", return_value="/usr/bin/ollama"):
-            config = config_cls.return_value
+            config = get_config_fn.return_value
             config.api_provider = "ollama"
             config.selected_model = "new-model"
             config.small_model = "new-small"
