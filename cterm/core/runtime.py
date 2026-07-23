@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import subprocess
+import sys
 import threading
 import time
 
@@ -48,6 +49,8 @@ class Runtime:
         self.messages = []
         self.execution_history = []
         self._interrupt_requested = threading.Event()
+        self._hard_cancel_requested = threading.Event()
+        self._system_prompt: str | None = None
 
     @staticmethod
     def is_followup_message(user_message: str) -> bool:
@@ -80,8 +83,18 @@ class Runtime:
     def interrupt(self) -> None:
         self._interrupt_requested.set()
 
+    def hard_cancel(self) -> None:
+        """Immediately unblock a pending MCP request; used by a second Esc."""
+        self._interrupt_requested.set()
+        self._hard_cancel_requested.set()
+        if self.mcp_client is not None:
+            self.mcp_client.close()
+
     def should_interrupt(self) -> bool:
         return self._interrupt_requested.is_set()
+
+    def should_hard_cancel(self) -> bool:
+        return self._hard_cancel_requested.is_set()
 
     def initialize_tools(self) -> None:
         socket_path = get_socket_path()
@@ -99,8 +112,18 @@ class Runtime:
                     capture_output=True,
                     text=True,
                 )
-            except subprocess.CalledProcessError as exc:
-                raise RuntimeError("Failed to activate tool server.") from exc
+            except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+                # A user systemd bus is not guaranteed (notably in SSH,
+                # containers, and graphical-less sessions).  Start the same
+                # server directly as a local fallback.
+                logger.warning("systemd user service unavailable; starting MCP server directly: %s", exc)
+                subprocess.Popen(
+                    [sys.executable, "-m", "cterm.mcp.server"],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
 
         try:
             _try_connect()
@@ -189,11 +212,18 @@ class Runtime:
             return self.run(text)
 
         self._interrupt_requested.clear()
+        self._hard_cancel_requested.clear()
         active_ui = self.ui
         if active_ui is None:
             raise RuntimeError("Runtime requires an active AgentUI context at initialization.")
         self.initialize_tools()
-        selected_skills, skills_prompt = self.select_skills(text, active_ui)
+        # Followups retain the original prompt and its selected skill content.
+        # Re-selecting here only produces duplicate "Available Skills" UI
+        # output and cannot affect the already-persisted prompt.
+        if self._system_prompt is None:
+            selected_skills, skills_prompt = self.select_skills(text, active_ui)
+        else:
+            selected_skills, skills_prompt = [], ""
 
         ollama_tools = self._build_ollama_tools(self.tools)
         agent = ToolAgent(
@@ -205,6 +235,7 @@ class Runtime:
             mcp_client=self.mcp_client,
             tools=ollama_tools,
             should_interrupt=self.should_interrupt,
+            should_hard_cancel=self.should_hard_cancel,
         )
         prefix = "clarification" if clarification else "followup"
         self.result = agent.run(
@@ -213,8 +244,10 @@ class Runtime:
             skills_prompt=skills_prompt,
             initial_messages=self._context_messages_for_followup(),
             initial_tool_history=self.execution_history,
+            system_prompt=self._system_prompt,
         )
         self.last_thinking_trace = agent.last_thinking_trace
+        self._system_prompt = agent.system_prompt
         self.messages = list(agent.messages)
         self.execution_history = list(agent.execution_history)
         return self.result
@@ -223,6 +256,7 @@ class Runtime:
         from cterm.core.agent import ToolAgent
 
         self._interrupt_requested.clear()
+        self._hard_cancel_requested.clear()
         active_ui = self.ui
         if active_ui is None:
             raise RuntimeError("Runtime requires an active AgentUI context at initialization.")
@@ -240,12 +274,14 @@ class Runtime:
             mcp_client=self.mcp_client,
             tools=ollama_tools,
             should_interrupt=self.should_interrupt,
+            should_hard_cancel=self.should_hard_cancel,
         )
         self.result = agent.run(
             user_message,
             selected_skills=selected_skills,
             skills_prompt=skills_prompt,
         )
+        self._system_prompt = agent.system_prompt
         self.last_thinking_trace = agent.last_thinking_trace
         self.messages = list(agent.messages)
         self.execution_history = list(agent.execution_history)

@@ -162,6 +162,21 @@ class BashParsingTests(unittest.TestCase):
         self.assertFalse(result["ok"], result)
         self.assertIn("timeout must be a number", result["error"])
 
+    def test_boolean_timeout_is_rejected(self):
+        result = bash("printf hello", timeout=True)
+
+        self.assertFalse(result["ok"], result)
+        self.assertIn("not a boolean", result["error"])
+
+    def test_approval_retry_exposes_only_unexecuted_chain_suffix(self):
+        with patch.object(bash_utils, "is_privileged_binary_allowed", return_value=False), \
+             patch.object(bash_utils.os.path, "isfile", return_value=True):
+            result = bash("printf first && sudo echo second")
+
+        self.assertTrue(result["approval_required"], result)
+        self.assertEqual(result["retry_command"], "sudo echo second")
+        self.assertEqual(result["results"][0]["stdout"], "first")
+
     def test_expands_home_variable_without_shell(self):
         result = bash("test -d $HOME")
 

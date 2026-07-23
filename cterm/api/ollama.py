@@ -4,6 +4,7 @@ import logging
 import requests
 
 from cterm.api.utils import extract_thinking_delta
+from cterm.api.retry import with_retries
 
 logger = logging.getLogger(__name__)
 
@@ -18,24 +19,20 @@ def chat(model, messages, tools=None, response_format=None, on_thinking_delta=No
     n_msg = len(messages)
     n_tools = len(tools) if tools else 0
 
-    try:
+    def _request():
         response = requests.post(
             (config.ollama_server_url if config else "http://localhost:11434").rstrip("/") + "/api/chat",
-            json=payload, timeout=60, stream=bool(on_thinking_delta)
+            json=payload, timeout=(10, 120), stream=bool(on_thinking_delta)
         )
         response.raise_for_status()
-    except requests.exceptions.HTTPError as exc:
-        body = response.text
-        logger.error(
-            "chat_api HTTP %s from Ollama: model=%r messages=%s tools=%s body=%s",
-            response.status_code, model, n_msg, n_tools, body,
-        )
-        raise RuntimeError(
-            f"Ollama API error {response.status_code} for model {model!r}: {body}"
-        ) from exc
-    if on_thinking_delta:
-        return _normalize_ollama_stream_response(response, on_thinking_delta)
-    return response.json()
+        if on_thinking_delta:
+            return _normalize_ollama_stream_response(response, on_thinking_delta)
+        raw = response.json()
+        # if not isinstance(raw, dict) or not isinstance(raw.get("message"), dict):
+        #     raise ValueError("malformed Ollama chat response: missing message object")
+        return raw
+
+    return with_retries(_request, provider="Ollama")
 
 
 def _normalize_ollama_stream_response(response, on_thinking_delta) -> dict:
@@ -46,6 +43,8 @@ def _normalize_ollama_stream_response(response, on_thinking_delta) -> dict:
         if not raw_line:
             continue
         chunk = json.loads(raw_line)
+        # if not isinstance(chunk, dict):
+        #     raise ValueError("malformed Ollama stream chunk")
         message = chunk.get("message") or {}
         thinking = extract_thinking_delta(message) or extract_thinking_delta(chunk)
         if thinking:
@@ -61,4 +60,6 @@ def _normalize_ollama_stream_response(response, on_thinking_delta) -> dict:
     final_message["content"] = "".join(content_parts) or final_message.get("content") or ""
     if tool_calls:
         final_message["tool_calls"] = tool_calls
+    # if not final_message.get("content") and not final_message.get("tool_calls"):
+    #     raise ValueError("malformed Ollama stream response: no assistant message")
     return {"message": final_message}

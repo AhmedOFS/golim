@@ -144,7 +144,8 @@ class Config:
 
     def is_complete(self) -> bool:
         attributes = self.data[self.ATTRIBUTES]
-        if any(key not in attributes for key in self._ATTRIBUTE_DEFAULTS):
+        required = [self.API_PROVIDER, self.SELECTED_MODEL]
+        if any(key not in attributes for key in required):
             return False
         provider = self.api_provider
         if provider not in self._PROVIDER_DEFAULTS or not self.selected_model:

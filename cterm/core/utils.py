@@ -1,6 +1,7 @@
 
 import asyncio
 import os
+import pwd
 from pathlib import Path
 import shlex
 import sys
@@ -50,7 +51,16 @@ def _clip_label(text, max_chars=80):
 
 
 def get_socket_path() -> Path:
-    return Path(f"/tmp/cterm_mcp_{os.getlogin()}.sock")
+    """Return the same per-user socket path used by the MCP server.
+
+    ``os.getlogin`` depends on a controlling terminal and is frequently wrong
+    (or unavailable) in services, SSH sessions, and containers.
+    """
+    try:
+        username = pwd.getpwuid(os.getuid()).pw_name
+    except Exception:
+        username = os.environ.get("USER", "default")
+    return Path(f"/tmp/cterm_mcp_{username}.sock")
 def _is_python_binary(tok: str) -> bool:
     name = os.path.basename(tok)
     return name in _PYTHON_BINARIES or name.startswith("python3.")

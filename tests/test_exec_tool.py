@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from cterm.mcp.tools import mcp
 
@@ -26,6 +27,14 @@ class ExecToolTests(unittest.TestCase):
         self.assertFalse(result["ok"], result)
         self.assertEqual(result["returncode"], 1)
         self.assertIn("RuntimeError: boom", result["stderr"])
+
+    def test_exec_tool_does_not_cap_timeout_at_120_seconds(self):
+        completed = type("Completed", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+        with patch("cterm.mcp.tools.subprocess.run", return_value=completed) as run:
+            result = getattr(mcp, "exec")(code="pass", timeout=121)
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(run.call_args.kwargs["timeout"], 121)
 
 
 if __name__ == "__main__":

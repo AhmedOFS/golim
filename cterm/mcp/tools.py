@@ -30,6 +30,8 @@ _should_stream_with_pty = _requires_pty_streaming
 def _coerce_bash_timeout(timeout):
     if timeout is None:
         return None, None
+    if isinstance(timeout, bool):
+        return None, {"ok": False, "error": "timeout must be a number of seconds or null, not a boolean"}
     try:
         coerced = float(timeout)
     except (TypeError, ValueError):
@@ -341,7 +343,7 @@ def read_file(path: str, page: int = 1) -> dict:
         return {"ok": False, "error": str(e)}
 
 @tool
-def bash(command: str, stream: bool = False, allow_privileged: bool = False, timeout: int | None = 120) -> dict:
+def bash(command: str, stream: bool = False, allow_privileged: bool = False, timeout: int | None = None) -> dict:
     """
     Executes command lines.
 
@@ -387,7 +389,7 @@ def exec_python(
     Args:
         code:    Python source to run. Friendly aliases are also accepted:
                  "script", "source", or "python".
-        timeout: Maximum run time in seconds. Capped at 120 seconds.
+        timeout: Maximum run time in seconds. ``None`` disables the limit.
         cwd:     Optional working directory.
         stdin:   Optional text passed to the Python process on stdin.
     """
@@ -401,7 +403,7 @@ def exec_python(
         return {"ok": False, "error": "exec requires Python code in the 'code' argument"}
 
     try:
-        timeout = max(1, min(int(timeout), 120))
+        timeout = None if timeout is None else max(1, int(timeout))
     except (TypeError, ValueError):
         return {"ok": False, "error": "timeout must be an integer number of seconds"}
 

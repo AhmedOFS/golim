@@ -78,6 +78,23 @@ class OrchestrationTests(unittest.TestCase):
         self.assertIn("tool_calls", second_call[-2])
         self.assertEqual(second_call[-1]["role"], "tool")
 
+    def test_summarization_failure_keeps_history_for_followup(self):
+        agent = ToolAgent("main")
+        agent.MAX_AGENT_ITERATIONS = 1
+
+        tool_call = {
+            "message": {"role": "assistant", "content": "", "tool_calls": [{
+                "function": {"name": "bash", "arguments": {"command": "printf ok"}}
+            }]}
+        }
+        with patch.object(agent, "_execute_tool", return_value={"ok": True, "results": []}), \
+             patch("cterm.core.agent.chat_with_model_api", side_effect=[tool_call, RuntimeError("summary unavailable")]):
+            result = agent._run_action_agent("Do work.", selected_skills=[])
+
+        self.assertIn("summary unavailable", result)
+        self.assertEqual(agent.execution_history[0]["tool"], "bash")
+        self.assertEqual(agent.messages[-1]["role"], "tool")
+
     def test_agent_continues_from_initial_messages(self):
         chat_calls = []
         initial_messages = [

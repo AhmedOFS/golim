@@ -49,7 +49,7 @@ class ConfigSchemaTests(unittest.TestCase):
             "attributes": {"api_provider": "ollama", "current_model": "model"},
         }))
 
-        self.assertFalse(Config().is_complete())
+        self.assertTrue(Config().is_complete())
 
     def test_legacy_flat_config_is_rejected(self):
         path = Path(self.tmp.name) / "cterm" / "config.json"

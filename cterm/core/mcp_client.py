@@ -5,15 +5,28 @@ from pathlib import Path
 import socket
 import sys
 import select as _select
+import threading
 
 class FastMCPClient:
     def __init__(self, socket_path):
         self.socket_path = socket_path
+        self._active_sockets = set()
+        self._socket_lock = threading.Lock()
 
     def _open_socket(self):
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sock.connect(str(self.socket_path))
+        with self._socket_lock:
+            self._active_sockets.add(sock)
         return sock
+
+    def _close_socket(self, sock):
+        with self._socket_lock:
+            self._active_sockets.discard(sock)
+        try:
+            sock.close()
+        except OSError:
+            pass
 
     def _send_request(self, method, params=None):
         sock = self._open_socket()
@@ -37,7 +50,7 @@ class FastMCPClient:
                 raise ConnectionError("No response from server")
             return json.loads(buf.decode().strip())
         finally:
-            sock.close()
+            self._close_socket(sock)
 
     def _stream_request(self, method, params=None, on_stream=None):
         sock = self._open_socket()
@@ -79,7 +92,7 @@ class FastMCPClient:
                 raise ConnectionError("No result frame received from server")
             return final_frame
         finally:
-            sock.close()
+            self._close_socket(sock)
 
     def _make_tool(self, name, description='', parameters=None):
         return type('Tool', (), {'name': name, 'description': description,
@@ -145,4 +158,8 @@ class FastMCPClient:
         return {"ok": True, "result": response}
 
     def close(self):
-        pass
+        """Abort outstanding requests by closing their Unix sockets."""
+        with self._socket_lock:
+            sockets = list(self._active_sockets)
+        for sock in sockets:
+            self._close_socket(sock)

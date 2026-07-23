@@ -4,6 +4,9 @@ import logging
 import json
 import os
 import shlex
+import concurrent.futures
+import queue
+import threading
 
 from cterm.core.agent_ui import AgentUI
 from cterm.ui.basic.basic import TerminalUI
@@ -26,6 +29,7 @@ def _clip_text(text, limit=1200):
 
 class ToolAgent:
     MAX_AGENT_ITERATIONS = 50
+    LONG_TOOL_NOTICE_SECONDS = 30
 
     def __init__(
         self,
@@ -37,6 +41,7 @@ class ToolAgent:
         mcp_client=None,
         tools=None,
         should_interrupt=None,
+        should_hard_cancel=None,
     ):
         self.model = model
         self.small_model = small_model
@@ -49,7 +54,10 @@ class ToolAgent:
         self.messages = []
         self.execution_history = []
         self.result = None
+        self.system_prompt = None
         self._should_interrupt = should_interrupt or (lambda: False)
+        self._should_hard_cancel = should_hard_cancel or (lambda: False)
+        self._active_messages = []
         self.MAX_AGENT_ITERATIONS = get_config().max_iteration_limit
 
     def __enter__(self):
@@ -146,13 +154,22 @@ class ToolAgent:
     def last_thinking_trace(self):
         return self._last_thinking_trace
 
-    def run(self, user_message, selected_skills=None, skills_prompt="", initial_messages=None, initial_tool_history=None):
+    def run(
+        self,
+        user_message,
+        selected_skills=None,
+        skills_prompt="",
+        initial_messages=None,
+        initial_tool_history=None,
+        system_prompt=None,
+    ):
         return self._run_action_agent(
             user_message,
             selected_skills,
             skills_prompt=skills_prompt,
             initial_messages=initial_messages,
             initial_tool_history=initial_tool_history,
+            system_prompt=system_prompt,
         )
 
     def _debug_tool_result(self, tool_name, args, result):
@@ -315,6 +332,49 @@ class ToolAgent:
         finally:
             self.ui.stop_spinner()
 
+    def _long_tool_decision(self, tool_name, args, streamed_output):
+        """Ask the model whether a tool that exceeded 30s may be stopped.
+
+        Stopping is deliberately opt-in: malformed/unavailable model answers
+        keep waiting, so the runtime never kills useful work on its own.
+        """
+        prompt = {
+            "role": "user",
+            "content": (
+                "A tool call has run for more than 30 seconds. Decide whether "
+                "to keep waiting or terminate it. Reply with JSON only in this "
+                "schema: {\"action\": \"keep\"|\"terminate\"}. "
+                f"Tool: {tool_name}; arguments: {self._compact_json(args)}; "
+                f"partial output: {_clip_text(''.join(streamed_output), 4000)}"
+            ),
+        }
+        try:
+            response = self._chat_with_optional_thinking(
+                self.model,
+                [*self._active_messages, prompt],
+                tools=None,
+                binary=self.binary,
+                response_format="json",
+            )
+            content = response.get("message", {}).get("content", "")
+            decision = json.loads(content) if isinstance(content, str) else content
+            return isinstance(decision, dict) and decision.get("action") == "terminate"
+        except Exception as exc:
+            logger.warning("long tool decision unavailable; keeping tool alive: %s", exc)
+            return False
+
+    def _call_tool_with_long_running_policy(self, label, call_once, args, tool_name, streamed_output):
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(self._call_tool_with_spinner, label, call_once, args)
+            try:
+                return future.result(timeout=self.LONG_TOOL_NOTICE_SECONDS)
+            except concurrent.futures.TimeoutError:
+                if self._long_tool_decision(tool_name, args, streamed_output):
+                    # Closing active MCP sockets unblocks the server request;
+                    # its partial streamed output is already in the prompt.
+                    self.mcp_client.close()
+                return future.result()
+
     def _needs_privileged_approval(self, tool_result):
         return (
             isinstance(tool_result, dict)
@@ -335,8 +395,20 @@ class ToolAgent:
 
         retry_args = dict(args)
         retry_args["allow_privileged"] = True
+        retry_command = tool_result.get("retry_command")
+        if retry_command:
+            retry_args["command"] = retry_command
         self.ui.tool_call(tool_name, retry_args)
-        return self._call_tool_with_spinner(label, call_once, retry_args)
+        retried_result = self._call_tool_with_spinner(label, call_once, retry_args)
+        if retry_command and isinstance(retried_result, dict):
+            # Keep the full chain's result available to the model without
+            # replaying already-completed commands or duplicating their UI.
+            earlier_results = tool_result.get("results", [])
+            retry_results = retried_result.get("results", [])
+            retried_result = dict(retried_result)
+            retried_result["command"] = args.get("command", retry_command)
+            retried_result["results"] = [*earlier_results, *retry_results]
+        return retried_result
 
     def _tool_status(self, tool_result):
         if (
@@ -350,10 +422,12 @@ class ToolAgent:
         is_shell = tool_name == "bash"
         is_exec = tool_name in ("exec_python", "exec")
         shell_stream_seen = False
+        streamed_output = []
 
         def _on_shell_stream(fd, line, end="\n"):
             nonlocal shell_stream_seen
             shell_stream_seen = True
+            streamed_output.append(str(line) + end)
             self.ui.handle_tool_output(fd=fd, line=line, end=end)
 
         def _call_once(call_args):
@@ -371,7 +445,9 @@ class ToolAgent:
             self._debug_tool_result(tool_name, args, tool_result)
             return tool_result
 
-        tool_result = self._call_tool_with_spinner(label, _call_once, args)
+        tool_result = self._call_tool_with_long_running_policy(
+            label, _call_once, args, tool_name, streamed_output,
+        )
 
         if not is_shell and isinstance(tool_result, dict):
             self.ui.handle_tool_output(result=tool_result)
@@ -402,12 +478,33 @@ class ToolAgent:
     def _chat_for_next_action(self, messages):
         self.ui.update_spinner("Thinking")
         try:
-            return self._chat_with_optional_thinking(
-                self.model,
-                messages,
-                tools=self.tools,
-                binary=self.binary,
-            )
+            # ``requests`` has no safe cross-thread cancellation primitive.
+            # Keep the provider request in a daemon worker and poll the hard
+            # cancellation signal so a second Escape immediately releases the
+            # agent/UI.  Any late response is discarded and never enters
+            # conversation history.
+            outcome = queue.Queue(maxsize=1)
+
+            def _request_model():
+                try:
+                    outcome.put((True, self._chat_with_optional_thinking(
+                        self.model, messages, tools=self.tools, binary=self.binary,
+                    )))
+                except BaseException as exc:
+                    outcome.put((False, exc))
+
+            request_thread = threading.Thread(target=_request_model, daemon=True)
+            request_thread.start()
+            while True:
+                if self._should_hard_cancel():
+                    raise InterruptedError("LLM request hard-cancelled")
+                try:
+                    ok, value = outcome.get(timeout=0.1)
+                except queue.Empty:
+                    continue
+                if ok:
+                    return value
+                raise value
         finally:
             self.ui.stop_spinner()
 
@@ -454,9 +551,14 @@ class ToolAgent:
         self.execution_history = list(tool_history)
 
     def _interrupt_result(self, messages, tool_history):
+        # Do not preserve an assistant tool-call without its matching result.
+        # OpenAI-compatible APIs reject that sequence on a later followup.
+        safe_messages = [dict(item) for item in messages]
+        if safe_messages and safe_messages[-1].get("role") == "assistant" and safe_messages[-1].get("tool_calls"):
+            safe_messages.pop()
         self.result = "Interrupted."
         self.messages = [
-            *messages,
+            *safe_messages,
             {"role": "assistant", "content": self.result},
         ]
         self.execution_history = list(tool_history)
@@ -547,6 +649,7 @@ class ToolAgent:
         skills_prompt="",
         initial_messages=None,
         initial_tool_history=None,
+        system_prompt=None,
     ):
         try:
             self._reset_run_state()
@@ -556,7 +659,8 @@ class ToolAgent:
                 skills=[s.name for s in selected_skills],
             )
 
-            system_prompt = self._agent_system_prompt(skills_prompt)
+            system_prompt = system_prompt or self._agent_system_prompt(skills_prompt)
+            self.system_prompt = system_prompt
             if initial_messages:
                 messages = [dict(message) for message in initial_messages]
                 if not messages or messages[0].get("role") != "system":
@@ -571,6 +675,7 @@ class ToolAgent:
                     {"role": "user", "content": user_message},
                 ]
             tool_history = [dict(item) for item in (initial_tool_history or [])]
+            self._active_messages = messages
             stopped_for_final_response = False
             message = {}
 
@@ -587,13 +692,7 @@ class ToolAgent:
 
                 if has_tool_call:
                     if self._should_interrupt():
-                        return self._interrupt_result(
-                            [
-                                *messages,
-                                self._assistant_message_for_history(message),
-                            ],
-                            tool_history,
-                        )
+                        return self._interrupt_result(messages, tool_history)
 
                     tool_result = self._execute_tool(tool_name, args)
                     self._record_tool_result(
@@ -634,6 +733,15 @@ class ToolAgent:
             )
 
         except Exception as e:
-            logger.exception("Exception in _run_action_agent: %s", e)
+            if self._should_hard_cancel():
+                return self._interrupt_result(
+                    locals().get("messages", self.messages),
+                    locals().get("tool_history", self.execution_history),
+                )
+            logger.error("Exception in _run_action_agent: %s", e)
             self.result = f"Error: {e}"
+            # Preserve the last valid history for Runtime followups even if a
+            # summary/provider call fails.
+            self.messages = list(locals().get("messages", self.messages))
+            self.execution_history = list(locals().get("tool_history", self.execution_history))
             return self.result

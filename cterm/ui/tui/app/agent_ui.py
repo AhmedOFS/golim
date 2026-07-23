@@ -215,6 +215,8 @@ class TextualAgentUI(AgentUI):
     def stop_spinner(self):
         if self.is_cancelled():
             return
+        if self.app._runtime is not None and self.app._runtime.should_interrupt():
+            return
         self.app.call_from_thread(self.app.set_status, "")
 
     def tool_call(self, tool_name, args):

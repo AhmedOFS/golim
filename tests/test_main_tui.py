@@ -1,7 +1,7 @@
 import unittest
 import asyncio
 from importlib.util import find_spec
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from cterm import __main__ as main_module
 
@@ -155,7 +155,9 @@ class MainTuiTests(unittest.TestCase):
         from cterm.ui.tui.app.tui import CtermApp
 
         async def run_case():
-            app = CtermApp("model", model="main")
+            config = MagicMock()
+            config.is_complete.return_value = True
+            app = CtermApp("model", model="main", config=config)
             async with app.run_test() as pilot:
                 self.assertEqual(app.focused.id, "prompt")
                 await pilot.press("tab")
@@ -166,6 +168,30 @@ class MainTuiTests(unittest.TestCase):
                 self.assertEqual(app.focused.id, "menu_options")
                 app._hide_menu()
                 await pilot.pause(0.2)
+
+        asyncio.run(run_case())
+
+    @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
+    def test_model_menu_arrow_keys_move_between_search_and_results(self):
+        from cterm.ui.tui.app.tui import CtermApp
+
+        async def run_case():
+            config = MagicMock()
+            config.is_complete.return_value = True
+            app = CtermApp("model", model="main", config=config)
+            async with app.run_test() as pilot:
+                with patch("cterm.ui.tui.app.tui.get_configured_model_choices", return_value=(
+                    ["provider/one", "provider/two"],
+                    {"provider/one": ("provider", "one"), "provider/two": ("provider", "two")},
+                )):
+                    app._show_menu()
+                    app._show_model_menu()
+                    await pilot.pause()
+                    self.assertEqual(app.focused.id, "menu_input")
+                    await pilot.press("down")
+                    self.assertEqual(app.focused.id, "menu_options")
+                    await pilot.press("up")
+                    self.assertEqual(app.focused.id, "menu_input")
 
         asyncio.run(run_case())
 

@@ -1,8 +1,10 @@
+import json
 import logging
 
 import requests
 
 from cterm.api.utils import normalize_messages_for_openai, normalize_openai_response, normalize_openai_stream_response
+from cterm.api.retry import with_retries
 
 logger = logging.getLogger(__name__)
 
@@ -33,22 +35,20 @@ def chat(model, messages, tools=None, response_format=None, config=None, on_thin
     n_msg = len(normalized_messages)
     n_tools = len(tools) if tools else 0
 
-    try:
+    def _request():
         response = requests.post(
-            _CHAT_COMPLETIONS_URL, headers=headers, json=payload, timeout=120, stream=bool(on_thinking_delta)
+            _CHAT_COMPLETIONS_URL, headers=headers, json=payload, timeout=(10, 120), stream=bool(on_thinking_delta)
         )
         response.raise_for_status()
-    except requests.exceptions.HTTPError as exc:
-        body = response.text
-        logger.error(
-            "chat_api HTTP %s from OpenRouter: model=%r messages=%s tools=%s body=%s",
-            response.status_code, model, n_msg, n_tools, body,
-        )
-        raise RuntimeError(
-            f"OpenRouter API error {response.status_code} for model {model!r}: {body}"
-        ) from exc
+        if on_thinking_delta:
+            return normalize_openai_stream_response(response, on_thinking_delta)
+        try:
+            return normalize_openai_response(response.json())
+        except json.JSONDecodeError as exc:
+            body_preview = response.text[:500] if response.text else "(empty)"
+            raise ValueError(
+                f"OpenRouter returned invalid JSON (status {response.status_code}): "
+                f"{exc}. Body preview: {body_preview}"
+            ) from exc
 
-    if on_thinking_delta:
-        return normalize_openai_stream_response(response, on_thinking_delta)
-    raw = response.json()
-    return normalize_openai_response(raw)
+    return with_retries(_request, provider="OpenRouter")

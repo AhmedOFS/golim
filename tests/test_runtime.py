@@ -199,6 +199,29 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(runtime.result, "Interrupted.")
         self.assertEqual(runtime.execution_history, [])
         execute_tool.assert_not_called()
+        self.assertFalse(any(message.get("tool_calls") for message in runtime.messages))
+
+    def test_followup_preserves_initial_system_prompt(self):
+        token = active_agent_ui.set(FakeUI())
+        try:
+            runtime = Runtime(model="main")
+        finally:
+            active_agent_ui.reset(token)
+        runtime.mcp_client = FakeMCPClient()
+        prompts = []
+
+        def fake_chat(model, messages, tools=None, binary="ollama", response_format=None):
+            prompts.append(messages[0]["content"])
+            return {"message": {"role": "assistant", "content": "Done."}}
+
+        with patch.object(runtime, "select_skills", side_effect=[([], "first skill"), ([], "different skill")]) as select_skills, \
+             patch("cterm.core.agent.chat_with_model_api", side_effect=fake_chat):
+            runtime.run("First.")
+            runtime.run_followup("// Again.")
+
+        self.assertEqual(prompts, [prompts[0], prompts[0]])
+        self.assertIn("first skill", prompts[0])
+        self.assertEqual(select_skills.call_count, 1)
 
     def test_runtime_verifies_tools_on_every_run(self):
         token = active_agent_ui.set(FakeUI())

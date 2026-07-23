@@ -190,6 +190,12 @@ class CtermApp(ConfigUIMixin, App[int]):
         background: transparent;
         border: none;
         padding: 0;
+        scrollbar-size-vertical: 1;
+        scrollbar-gutter: stable;
+        scrollbar-background: transparent;
+        scrollbar-color: {WHITE};
+        scrollbar-color-hover: {WHITE};
+        scrollbar-color-active: {WHITE};
     }}
 
     #menu_options > .option-list--option-highlighted {{
@@ -456,7 +462,6 @@ class CtermApp(ConfigUIMixin, App[int]):
             if is_followup:
                 self.query_one(PromptLine).add_history(text)
                 event.input.value = ""
-                self.append_followup_query(followup_text)
                 self.queue_followup(followup_text, clarification=True)
                 self.set_status("Clarifying")
                 return
@@ -700,6 +705,29 @@ class CtermApp(ConfigUIMixin, App[int]):
             self._show_settings_menu()
 
     def _handle_menu_key(self, event) -> None:
+        if self._menu_page == "models":
+            panel = self.query_one("#menu_panel", MenuPanel)
+            input_widget = panel.query_one("#menu_input", Input)
+            option_list = panel.query_one("#menu_options", OptionList)
+            if (
+                event.key == "down"
+                and self.focused is input_widget
+                and option_list.option_count
+            ):
+                option_list.highlighted = 0
+                option_list.focus()
+                event.stop()
+                event.prevent_default()
+                return
+            if (
+                event.key == "up"
+                and self.focused is option_list
+                and option_list.highlighted == 0
+            ):
+                input_widget.focus()
+                event.stop()
+                event.prevent_default()
+                return
         if event.key == "escape":
             if self._menu_page == "main":
                 self._hide_menu()
@@ -784,6 +812,8 @@ class CtermApp(ConfigUIMixin, App[int]):
 
     # -- Spinner -----------------------------------------------------------
     def set_status(self, text: str) -> None:
+        if text and self._busy and self._runtime is not None and self._runtime.should_interrupt():
+            text = "Interrupting, press again to force."
         self.query_one("#status", Spinner).set_message(text)
 
     def start_python_approval_prompt(self, request: ApprovalRequest) -> None:
@@ -864,12 +894,18 @@ class CtermApp(ConfigUIMixin, App[int]):
                 self._cancel_config()
             return
         if self._busy:
-            self._cancel_active_run(force_thread=False)
+            # First Escape requests a cooperative interrupt so completed tool
+            # output can be recorded.  A second Escape is an explicit hard
+            # cancellation of the current request/thread.
+            force = self._runtime is not None and self._runtime.should_interrupt()
+            if force and self._runtime is not None:
+                self._runtime.hard_cancel()
+            self._cancel_active_run(force_thread=force)
             if self._approval_request is not None:
                 self._approval_request.answer = False
                 self._approval_request.event.set()
                 self._approval_request = None
-            self.set_status("Interrupting")
+            self.set_status("Interrupting, press again to force.")
         else:
             self._cancel_active_run()
             if self._chat_thread_id is not None:
@@ -927,10 +963,12 @@ class CtermApp(ConfigUIMixin, App[int]):
                             if pending is None:
                                 break
                             current_message, current_clarification = pending
+                            self.call_from_thread(self.append_followup_query, current_message)
                             current_followup = True
                         if log_file is not None:
                             log_file.write(f"\nresponse: {response}\n")
-                        result = ChatResult(True, response, str(log_path) if log_path else None)
+                        ok = not str(response).startswith("Error:")
+                        result = ChatResult(ok, response, str(log_path) if log_path else None)
                 finally:
                     active_agent_ui.reset(token)
             if not self.is_run_active(run_id):

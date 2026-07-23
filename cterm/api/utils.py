@@ -47,7 +47,14 @@ def normalize_messages_for_openai(messages: list) -> list:
 
 
 def normalize_openai_response(raw: dict) -> dict:
-    openai_message = raw.get("choices", [{}])[0].get("message", {})
+    # if not isinstance(raw, dict):
+    #     raise ValueError("malformed OpenAI response: expected object")
+    choices = raw.get("choices") if isinstance(raw, dict) else None
+    # if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+    #     raise ValueError("malformed OpenAI response: missing choices")
+    openai_message = choices[0].get("message") if isinstance(choices, list) and choices else {}
+    # if not isinstance(openai_message, dict):
+    #     raise ValueError("malformed OpenAI response: missing assistant message")
     normalized = {
         "message": {
             "role": openai_message.get("role", "assistant"),
@@ -59,12 +66,16 @@ def normalize_openai_response(raw: dict) -> dict:
         normalized_calls = []
         for tc in tool_calls:
             func = tc.get("function", {})
-            raw_args = func.get("arguments", "{}")
+            # if not isinstance(func, dict) or not func.get("name"):
+            #     raise ValueError("malformed OpenAI response: invalid tool call")
+            raw_args = func.get("arguments", "{}") if isinstance(func, dict) else "{}"
             if isinstance(raw_args, str):
                 try:
                     raw_args = json.loads(raw_args)
                 except json.JSONDecodeError:
                     raw_args = {}
+            #     except json.JSONDecodeError as exc:
+            #         raise ValueError("malformed OpenAI response: invalid tool arguments") from exc
             entry = {
                 "type": "function",
                 "function": {
@@ -88,14 +99,24 @@ def normalize_openai_stream_response(response, on_thinking_delta) -> dict:
         if not raw_line:
             continue
         line = raw_line.strip()
-        if line.startswith(":"):
-            continue
-        if line.startswith("data:"):
-            line = line[5:].strip()
         if line == "[DONE]":
             break
-        chunk = json.loads(line)
-        choice = (chunk.get("choices") or [{}])[0]
+        if not line.startswith("data:"):
+            continue
+        line = line[5:].strip()
+        if line == "[DONE]":
+            break
+        try:
+            chunk = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"Invalid JSON in stream response line: {exc}. "
+                f"Line preview: {line[:200]}"
+            ) from exc
+        choices = chunk.get("choices") if isinstance(chunk, dict) else None
+        choice = choices[0] if isinstance(choices, list) and choices else {}
+        # if not isinstance(choice, dict):
+        #     raise ValueError("malformed OpenAI stream chunk: invalid choice")
         delta = choice.get("delta") or {}
         role = delta.get("role") or role
 
@@ -131,6 +152,7 @@ def normalize_openai_stream_response(response, on_thinking_delta) -> dict:
             parsed_args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
         except json.JSONDecodeError:
             parsed_args = {}
+        #     raise ValueError("malformed OpenAI stream response: invalid tool arguments") from exc
         normalized = {
             "type": entry.get("type", "function"),
             "function": {
@@ -145,4 +167,6 @@ def normalize_openai_stream_response(response, on_thinking_delta) -> dict:
     message = {"role": role, "content": "".join(content_parts)}
     if normalized_calls:
         message["tool_calls"] = normalized_calls
+    # if not message["content"] and not normalized_calls:
+    #     raise ValueError("malformed OpenAI stream response: no assistant message")
     return {"message": message}

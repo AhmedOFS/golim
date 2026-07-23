@@ -560,9 +560,14 @@ def _exec_restricted(command, timeout=120, allow_privileged=False):
     """Generator: yields stream frames then a final result frame."""
     results = []
 
-    for cmd_str in _split_chained_commands(command):
+    commands = _split_chained_commands(command)
+    for command_index, cmd_str in enumerate(commands):
         parsed, err = _parse_command_part(cmd_str, results, allow_privileged=allow_privileged)
         if err:
+            if err.get("approval_required"):
+                # Earlier links have already run.  The client must retry only
+                # the unexecuted suffix after approval, never the whole chain.
+                err["retry_command"] = " && ".join(commands[command_index:])
             yield {"type": "result", **err}
             return
 
