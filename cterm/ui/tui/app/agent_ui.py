@@ -11,6 +11,7 @@ from rich.syntax import Syntax
 from rich.text import Text
 
 from cterm.core.agent_ui import AgentUI, active_agent_ui
+from cterm.ui.tui.app.tui import CtermApp
 from cterm.ui.tui.tui_style import (
     STYLE_DIM,
     STYLE_ERROR,

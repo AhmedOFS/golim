@@ -78,6 +78,15 @@ class CtermApp(ConfigUIMixin, App[int]):
         outline: none;
     }}
 
+    Screen.-pitch-black {{
+        background: #000000;
+    }}
+
+    Screen.-pitch-black #transcript {{
+        background: #000000;
+        scrollbar-background: #000000;
+    }}
+
     #outer {{
         height: 100%;
         width: 100%;
@@ -413,12 +422,18 @@ class CtermApp(ConfigUIMixin, App[int]):
             yield PromptLine(id="prompt_line")
             yield Footer(self.model_label, id="footer")
 
+    def _apply_dark_mode(self, dark: bool) -> None:
+        self.dark = dark
+        self.screen.set_class(dark, "-pitch-black")
+
     def on_mount(self) -> None:
         self.query_one("#query_bar", QueryBar).display = False
         self.update_prompt_placeholder()
         self.query_one(PromptLine).focus_input()
         if not self._config.is_complete():
             self._open_provider_config(mode="initial")
+        config = get_config()
+        self._apply_dark_mode(config.dark_mode)
 
     def on_unmount(self) -> None:
         if self._runtime is not None:
@@ -676,6 +691,7 @@ class CtermApp(ConfigUIMixin, App[int]):
                 return
             elif index == 3:
                 config.set(Config.DARK_MODE, not config.dark_mode)
+                self._apply_dark_mode(config.dark_mode)
             else:
                 self._menu_page = "main"
                 self.query_one("#menu_panel", MenuPanel).show_options(
@@ -813,7 +829,11 @@ class CtermApp(ConfigUIMixin, App[int]):
     # -- Spinner -----------------------------------------------------------
     def set_status(self, text: str) -> None:
         if text and self._busy and self._runtime is not None and self._runtime.should_interrupt():
-            text = "Interrupting, press again to force."
+            with self._pending_followup_lock:
+                is_clarification = (
+                    self._pending_followup is not None and self._pending_followup[1]
+                )
+            text = "Clarifying" if is_clarification else "Interrupting. Press Esc again to force."
         self.query_one("#status", Spinner).set_message(text)
 
     def start_python_approval_prompt(self, request: ApprovalRequest) -> None:
@@ -905,7 +925,7 @@ class CtermApp(ConfigUIMixin, App[int]):
                 self._approval_request.answer = False
                 self._approval_request.event.set()
                 self._approval_request = None
-            self.set_status("Interrupting, press again to force.")
+            self.set_status("Interrupting. Press Esc again to force.")
         else:
             self._cancel_active_run()
             if self._chat_thread_id is not None:

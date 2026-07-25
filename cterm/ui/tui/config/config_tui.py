@@ -509,6 +509,10 @@ class ConfigApp(ConfigUIMixin, App[int]):
         color: {WHITE};
     }}
 
+    Screen.-pitch-black {{
+        background: #000000;
+    }}
+
     #outer {{
         height: 100%;
         width: 100%;
@@ -615,6 +619,9 @@ class ConfigApp(ConfigUIMixin, App[int]):
             yield Static("↑/↓ move • Enter select • Esc back", id="hint")
 
     def on_mount(self) -> None:
+        config = get_config()
+        self.dark = config.dark_mode
+        self.screen.set_class(config.dark_mode, "-pitch-black")
         # self._append_log("cterm configuration", STYLE_DIM)
         self._append_log("", STYLE_TEXT)
         self.run_wizard()
