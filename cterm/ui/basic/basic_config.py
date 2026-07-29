@@ -208,12 +208,14 @@ def init_ollama(config: Config, binary: str) -> int:
 
 def init_openai_compatible(config: Config) -> int:
     """Configure cterm to use an OpenAI-compatible server."""
-    saved_url = config.openai_compatible_server_url
-    prompt = f"OpenAI-compatible server URL [{saved_url}]: "
+    prompt = "OpenAI-compatible server URL: "
     try:
-        url = input(prompt).strip() or saved_url
+        url = input(prompt).strip()
     except (KeyboardInterrupt, EOFError):
         print()
+        return 1
+    if not url:
+        print("Error: server URL is required")
         return 1
     config.set(Config.OPENAI_COMPATIBLE_SERVER_URL, url)
 

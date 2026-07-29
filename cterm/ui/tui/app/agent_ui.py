@@ -10,8 +10,8 @@ from rich.console import Group, RenderableType
 from rich.syntax import Syntax
 from rich.text import Text
 
-from cterm.core.agent_ui import AgentUI, active_agent_ui
-from cterm.ui.tui.app.tui import CtermApp
+from cterm.core.agent_ui import AgentUI
+
 from cterm.ui.tui.tui_style import (
     STYLE_DIM,
     STYLE_ERROR,
@@ -103,7 +103,7 @@ MAX_EXPANDED_OUTPUT_LINES = 20
 class TextualAgentUI(AgentUI):
     """Adapter used by ToolAgent to render progress inside the Textual app."""
 
-    def __init__(self, app: "CtermApp", run_id: int, cancel_event: threading.Event):
+    def __init__(self, app, run_id: int, cancel_event: threading.Event):
         self.app = app
         self.run_id = run_id
         self.cancel_event = cancel_event

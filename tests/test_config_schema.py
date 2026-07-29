@@ -3,8 +3,10 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from cterm.config import Config, ConfigSchemaError
+from cterm.config.utils import get_configured_model_choices
 
 
 class ConfigSchemaTests(unittest.TestCase):
@@ -102,6 +104,20 @@ class ConfigSchemaTests(unittest.TestCase):
             {"model": "one", "provider": "ollama"},
             {"model": "two", "provider": "open_router"},
         ])
+
+    def test_model_picker_keeps_configured_remote_model_when_catalogue_is_unavailable(self):
+        config = Config()
+        config.set_provider_value(Config.OPEN_ROUTER, Config.PROVIDER_API_KEY, "key")
+        config.set(Config.API_PROVIDER, Config.OPEN_ROUTER)
+        config.set(Config.SELECTED_MODEL, "provider/selected")
+
+        with patch("cterm.config.utils.get_models", return_value=[]), \
+             patch("cterm.config.utils.get_openrouter_models", return_value=[]), \
+             patch("cterm.config.utils.get_openai_compatible_models", return_value=[]):
+            labels, choices = get_configured_model_choices(config, "ollama")
+
+        self.assertEqual(labels, ["open_router: provider/selected"])
+        self.assertEqual(choices, {"open_router: provider/selected": ("open_router", "provider/selected")})
 
 
 if __name__ == "__main__":

@@ -92,7 +92,13 @@ def get_openai_compatible_models(url: str, api_key: str | None) -> list[str]:
 
 
 def get_configured_model_choices(config, binary: str) -> tuple[list[str], dict[str, tuple[str, str]]]:
-    """Build the Tab-menu model list with recent entries before provider lists."""
+    """Build the Tab-menu model list with recent entries before provider lists.
+
+    A configured provider's saved model remains selectable when its catalogue
+    cannot be fetched. This is especially important immediately after the
+    first-run wizard, where that saved model may be the only known model for a
+    remote provider.
+    """
     from cterm.config import Config
 
     providers: list[tuple[str, list[str]]] = []
@@ -103,8 +109,18 @@ def get_configured_model_choices(config, binary: str) -> tuple[list[str], dict[s
     if config.provider(Config.OPENAI_COMPATIBLE).get(Config.OPENAI_COMPATIBLE_SERVER_URL):
         providers.append((Config.OPENAI_COMPATIBLE, get_openai_compatible_models(config.openai_compatible_server_url, config.openai_compatible_api_key)))
     pairs = [(provider, model) for provider, models in providers for model in models]
-    recent = [(item["provider"], item["model"]) for item in config.recent_models()]
-    ordered = [pair for pair in recent if pair in pairs] + [pair for pair in pairs if pair not in recent]
+    configured_providers = {provider for provider, _ in providers}
+    recent = [
+        (item["provider"], item["model"])
+        for item in config.recent_models()
+        if item["provider"] in configured_providers
+    ]
+    current = (config.api_provider, config.selected_model)
+    saved = [current] if current[0] in configured_providers and current[1] else []
+    ordered: list[tuple[str, str]] = []
+    for pair in recent + saved + pairs:
+        if pair not in ordered:
+            ordered.append(pair)
     labels = [f"{provider}: {model}" for provider, model in ordered]
     return labels, dict(zip(labels, ordered))
 

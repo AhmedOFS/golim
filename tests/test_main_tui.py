@@ -121,7 +121,11 @@ class MainTuiTests(unittest.TestCase):
             def terminate(self):
                 self.terminated = True
 
-        app = CtermApp("old", model="old-model", small_model="old-small")
+        config = MagicMock()
+        config.api_provider = "ollama"
+        config.selected_model = "new-model"
+        config.small_model = "new-small"
+        app = CtermApp("old", config=config, model="old-model", small_model="old-small")
         fake_footer = FakeFooter()
         runtime = FakeRuntime()
         app._runtime = runtime
@@ -133,13 +137,7 @@ class MainTuiTests(unittest.TestCase):
 
         app.query_one = fake_query_one
 
-        with patch("cterm.ui.tui.app.tui.get_config") as get_config_fn, \
-             patch("cterm.ui.tui.app.tui.shutil.which", return_value="/usr/bin/ollama"):
-            config = get_config_fn.return_value
-            config.api_provider = "ollama"
-            config.selected_model = "new-model"
-            config.small_model = "new-small"
-
+        with patch("cterm.ui.tui.app.tui.shutil.which", return_value="/usr/bin/ollama"):
             app._reload_config_settings()
 
         self.assertEqual(app.model_label, "new-model")
@@ -149,6 +147,7 @@ class MainTuiTests(unittest.TestCase):
         self.assertEqual(fake_footer.model_label, "new-model")
         self.assertTrue(runtime.terminated)
         self.assertIsNone(app._runtime)
+        config.reload.assert_called_once_with()
 
     @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
     def test_tab_opens_main_menu_while_prompt_is_focused(self):

@@ -53,8 +53,8 @@ class Transcript(ScrollView, can_focus=False):
 
         theme = Theme(
             {
-                "markdown.code": f"{WHITE} on {CODE_BG}",
-                "markdown.code_block": f"{WHITE} on {CODE_BG}",
+                "markdown.code": f"#525252 on {CODE_BG}",
+                "markdown.code_block": f"#525252 on {CODE_BG}",
             }
         )
 

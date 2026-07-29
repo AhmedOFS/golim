@@ -356,10 +356,10 @@ def _state_ollama_small_model(config: Config, ui: ConfigPromptHandle, binary: st
 
 
 def _state_openai_compatible_url(config: Config, ui: ConfigPromptHandle, binary: str) -> str:
-    saved_url = config.openai_compatible_server_url
-    url = ui.input("OpenAI-compatible server URL", default=saved_url, placeholder=saved_url)
+    url = ui.input("OpenAI-compatible server URL (required)", default="", placeholder="http://your-server:port")
     if not url:
-        url = saved_url
+        ui.log("Error: server URL is required", STYLE_ERROR)
+        return "OPENAI_COMPATIBLE_URL"
     config.set(Config.OPENAI_COMPATIBLE_SERVER_URL, url)
     api_key = ui.input(
         "OpenAI-compatible API key (optional)",
@@ -458,6 +458,11 @@ STATE_HANDLERS: dict[str, Callable[[Config, ConfigPromptHandle, str], str]] = {
     "COMMON_THINKING": _state_common_thinking,
 }
 
+_NON_INTERACTIVE_STATES = frozenset({
+    "OLLAMA_CONNECT",
+    "OLLAMA_INSTALL_CHECK",
+})
+
 
 def run_config(config: Config, binary: str, ui: ConfigPromptHandle, mode: str = "initial") -> int:
     """Drive the wizard as a sequence of single-prompt pages.
@@ -481,7 +486,8 @@ def run_config(config: Config, binary: str, ui: ConfigPromptHandle, mode: str = 
                 state = history.pop()
                 continue
             return 1
-        history.append(state)
+        if state not in _NON_INTERACTIVE_STATES:
+            history.append(state)
         state = next_state
 
     if state == "EXIT":

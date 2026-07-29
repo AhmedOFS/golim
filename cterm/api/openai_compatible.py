@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 def chat(model, messages, tools=None, response_format=None, config=None, on_thinking_delta=None):
-    server_url = config.openai_compatible_server_url if config else "http://127.0.0.1:8083"
+    server_url = config.openai_compatible_server_url if config else None
     url = server_url.rstrip("/") + "/v1/chat/completions"
 
     normalized_messages = normalize_messages_for_openai(messages)

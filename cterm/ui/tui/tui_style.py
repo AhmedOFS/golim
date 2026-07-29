@@ -11,7 +11,7 @@ CODE_BG = "#2a2a2a"
 PROMPT_MARKER = "#9a4f4f"
 FOOTER = "#8a858b"
 BORDER = "#7d8a99"
-PROMPT_LINE_BG = "rgba(66, 56, 56, 0.4)"
+PROMPT_LINE_BG = "rgba(61, 61, 61, 0.4)"
 
 STYLE_TEXT = WHITE
 STYLE_TOOL = f"bold {WHITE}"

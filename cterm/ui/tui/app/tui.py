@@ -33,6 +33,7 @@ from cterm.ui.tui.config.mixin import (
 from cterm.ui.tui.tui_style import (
     BG_DARK,
     BORDER,
+    CODE_BG,
     DIM,
     ERROR,
     FOOTER,
@@ -381,7 +382,7 @@ class CtermApp(ConfigUIMixin, App[int]):
         return self._runtime
 
     def _resolve_current_settings(self) -> tuple[str | None, str | None, str | None, str]:
-        config = get_config()
+        config = self._config
         provider = config.api_provider
         if provider in {Config.OPEN_ROUTER, "openrouter"}:
             label = config.selected_model or "OpenRouter"
@@ -402,7 +403,6 @@ class CtermApp(ConfigUIMixin, App[int]):
         return None, config.selected_model, config.small_model, label
 
     def _reload_config_settings(self) -> None:
-        self._config = get_config()
         self._config.reload()
         self._runtime_error, self._model, self._small_model, self.model_label = self._resolve_current_settings()
         self.query_one("#footer", Footer).set_model(self.model_label)
@@ -432,8 +432,7 @@ class CtermApp(ConfigUIMixin, App[int]):
         self.query_one(PromptLine).focus_input()
         if not self._config.is_complete():
             self._open_provider_config(mode="initial")
-        config = get_config()
-        self._apply_dark_mode(config.dark_mode)
+        self._apply_dark_mode(self._config.dark_mode)
 
     def on_unmount(self) -> None:
         if self._runtime is not None:
@@ -628,7 +627,7 @@ class CtermApp(ConfigUIMixin, App[int]):
         self._config_result = 1
 
     def _show_model_menu(self) -> None:
-        labels, choices = get_configured_model_choices(get_config(), self._binary)
+        labels, choices = get_configured_model_choices(self._config, self._binary)
         if not labels:
             self.append_line("No models are available. Set up a provider or add a model first.", STYLE_WARNING)
             self._hide_menu()
@@ -807,7 +806,7 @@ class CtermApp(ConfigUIMixin, App[int]):
         one is needed) does not re-display it."""
         transcript = self.query_one("#transcript", Transcript)
         transcript.write(Text(title, style=STYLE_TOOL))
-        transcript.write(Syntax(code or "", language, theme="monokai", line_numbers=True))
+        transcript.write(Syntax(code or "", language, theme="monokai", line_numbers=True, background_color=CODE_BG))
 
     def append_markdown(self, text: str, ok: bool = True) -> None:
         """Render the final answer as Markdown so tables/emphasis show correctly."""
