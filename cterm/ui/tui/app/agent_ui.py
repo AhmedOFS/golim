@@ -10,8 +10,6 @@ from rich.syntax import Syntax
 from rich.text import Text
 
 from cterm.core.agent_ui import AgentUI
-from cterm.logger import log_diagnostic_section
-
 from cterm.ui.tui.tui_style import (
     STYLE_DIM,
     STYLE_ERROR,
@@ -133,24 +131,6 @@ class TextualAgentUI(AgentUI):
             self._transcript_file.flush()
         except Exception:
             pass
-
-    def log_tool_call(self, tool_name, args):
-        log_diagnostic_section(f"tool_call {tool_name}", args or {})
-
-    def log_tool_result(self, tool_name, result):
-        log_diagnostic_section(f"tool_result {tool_name}", result)
-
-    def log_tool_output(self, tool_name, fd, line, end="\n"):
-        log_diagnostic_section(
-            f"tool_output {tool_name} {fd}",
-            f"{line}{end}",
-        )
-
-    def log_thinking_trace(self, text):
-        log_diagnostic_section("thinking_trace", str(text or ""))
-
-    def log_summary(self, text):
-        log_diagnostic_section("summary", str(text or ""))
 
     def is_cancelled(self) -> bool:
         return self.cancel_event.is_set() or not self.app.is_run_active(self.run_id)

@@ -33,14 +33,12 @@ class Runtime:
         model: str | None = None,
         binary: str = "ollama",
         small_model: str | None = None,
-        debug: bool = False,
         ui: AgentUI | None = None,
     ):
         self.config = config or get_config()
         self.model = model
         self.small_model = small_model
         self.binary = binary
-        self.debug = debug
         self.ui = ui or active_agent_ui.get()
         self.mcp_client: FastMCPClient | None = None
         self.tools = []
@@ -157,7 +155,7 @@ class Runtime:
                 raise RuntimeError("Tool server did not return a valid tool list.") from last_error
 
     def select_skills(self, user_message: str, ui: AgentUI):
-        loader = SkillsLoader(debug=self.debug)
+        loader = SkillsLoader()
         skills = loader.load()
         if skills:
             ui.message(f"Available Skills: {', '.join(s.name for s in skills)}")
@@ -178,8 +176,7 @@ class Runtime:
         names = [skill.name for skill in selected]
         if names:
             ui.message(f"\033[32m✓\033[0m {' '.join(names)}")
-        if self.debug:
-            logger.debug("selected_skills=%s", names)
+        logger.debug("selected_skills=%s", names)
 
         return selected, loader.render_for_system_prompt(selected)
 
@@ -230,7 +227,6 @@ class Runtime:
             self.model,
             self.binary,
             self.small_model,
-            debug=self.debug,
             ui=active_ui,
             mcp_client=self.mcp_client,
             tools=ollama_tools,
@@ -269,7 +265,6 @@ class Runtime:
             self.model,
             self.binary,
             self.small_model,
-            debug=self.debug,
             ui=active_ui,
             mcp_client=self.mcp_client,
             tools=ollama_tools,

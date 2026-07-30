@@ -12,6 +12,7 @@ from cterm.core.agent_ui import AgentUI
 from cterm.ui.basic.basic import TerminalUI
 from cterm.config import Config, get_config
 from cterm.api.chat_api import chat_with_model_api
+from cterm.logger import log_diagnostic_section
 from cterm.core.utils import _CONTENT_MARKER, _DIRECT_THINKING_KEYS, _FINAL_SUMMARY_PROMPT, _PYTHON_DENIED_RESULT, _REASONING_DETAIL_KEYS, _THINKING_KEYS, _TRACE_MARKER, _TRACE_ONLY_MARKER, _detect_python_in_bash, _indent, _clip_label, _run_async
 
 logger = logging.getLogger(__name__)
@@ -36,7 +37,6 @@ class ToolAgent:
         model,
         binary="ollama",
         small_model=None,
-        debug=False,
         ui: AgentUI | None = None,
         mcp_client=None,
         tools=None,
@@ -46,7 +46,6 @@ class ToolAgent:
         self.model = model
         self.small_model = small_model
         self.binary = binary
-        self.debug = debug
         self.mcp_client = mcp_client
         self.tools = list(tools or [])
         self.ui = ui or TerminalUI()
@@ -72,20 +71,12 @@ class ToolAgent:
         except TypeError:
             return json.dumps(str(value), ensure_ascii=False)
 
-    def _debug_orchestration(self, event, **fields):
-        if not self.debug:
-            return
-
+    def _log_orchestration(self, event, **fields):
         details = " ".join(
             f"{key}={self._compact_json(value)}" for key, value in fields.items()
         )
         suffix = f" {details}" if details else ""
         logger.debug("orchestration event=%s%s", event, suffix)
-
-    def _ui_log(self, method, *args):
-        callback = getattr(self.ui, method, None)
-        if callback is not None:
-            callback(*args)
 
     def _build_execution_summary(self, tool_history):
         if not tool_history:
@@ -177,10 +168,7 @@ class ToolAgent:
             system_prompt=system_prompt,
         )
 
-    def _debug_tool_result(self, tool_name, args, result):
-        if not self.debug:
-            return
-
+    def _log_tool_result(self, tool_name, args, result):
         ok = result.get("ok") if isinstance(result, dict) else None
         if ok is True:
             state = "success"
@@ -191,10 +179,7 @@ class ToolAgent:
 
         logger.debug("tool=%s state=%s args=%s", tool_name, state, json.dumps(args))
 
-    def _debug_agent_response(self, content):
-        if not self.debug:
-            return
-
+    def _log_agent_response(self, content):
         logger.debug("agent_response=%r", content)
 
     def _assistant_message_for_history(self, message):
@@ -265,7 +250,7 @@ class ToolAgent:
         finally:
             if thinking_parts:
                 self._last_thinking_trace = "".join(thinking_parts)
-                self._ui_log("log_thinking_trace", self._last_thinking_trace)
+                log_diagnostic_section("thinking_trace", self._last_thinking_trace)
                 self.ui.thinking_trace_complete(self._last_thinking_trace)
 
         if not self._last_thinking_trace and isinstance(response, dict):
@@ -404,7 +389,7 @@ class ToolAgent:
         retry_command = tool_result.get("retry_command")
         if retry_command:
             retry_args["command"] = retry_command
-        self._ui_log("log_tool_call", tool_name, retry_args)
+        log_diagnostic_section(f"tool_call {tool_name}", retry_args or {})
         self.ui.tool_call(tool_name, retry_args)
         retried_result = self._call_tool_with_spinner(label, call_once, retry_args)
         if retry_command and isinstance(retried_result, dict):
@@ -430,13 +415,16 @@ class ToolAgent:
         is_exec = tool_name in ("exec_python", "exec")
         shell_stream_seen = False
         streamed_output = []
-        self._ui_log("log_tool_call", tool_name, args)
+        log_diagnostic_section(f"tool_call {tool_name}", args or {})
 
         def _on_shell_stream(fd, line, end="\n"):
             nonlocal shell_stream_seen
             shell_stream_seen = True
             streamed_output.append(str(line) + end)
-            self._ui_log("log_tool_output", tool_name, fd, line, end)
+            log_diagnostic_section(
+                f"tool_output {tool_name} {fd}",
+                f"{line}{end}",
+            )
             self.ui.handle_tool_output(fd=fd, line=line, end=end)
 
         def _call_once(call_args):
@@ -451,8 +439,8 @@ class ToolAgent:
 
         label, tool_result = self._prepare_tool_call(tool_name, args, is_shell, is_exec)
         if tool_result is not None:
-            self._ui_log("log_tool_result", tool_name, tool_result)
-            self._debug_tool_result(tool_name, args, tool_result)
+            log_diagnostic_section(f"tool_result {tool_name}", tool_result)
+            self._log_tool_result(tool_name, args, tool_result)
             return tool_result
 
         tool_result = self._call_tool_with_long_running_policy(
@@ -477,8 +465,8 @@ class ToolAgent:
             else:
                 self.ui.handle_shell_result_output(tool_result)
 
-        self._debug_tool_result(tool_name, args, tool_result)
-        self._ui_log("log_tool_result", tool_name, tool_result)
+        self._log_tool_result(tool_name, args, tool_result)
+        log_diagnostic_section(f"tool_result {tool_name}", tool_result)
         return tool_result
 
     def _reset_run_state(self):
@@ -543,7 +531,7 @@ class ToolAgent:
             "result": tool_result,
             "status": status,
         })
-        self._debug_orchestration(
+        self._log_orchestration(
             "agent_tool_result",
             iteration=iteration,
             tool=tool_name,
@@ -575,14 +563,14 @@ class ToolAgent:
         self.execution_history = list(tool_history)
         return self.result
 
-    def _debug_final_answer(self, content):
-        self._ui_log("log_summary", content)
-        self._debug_agent_response(content)
-        self._debug_orchestration("agent_final_answer", chars=len(content))
+    def _log_final_answer(self, content):
+        log_diagnostic_section("summary", str(content or ""))
+        self._log_agent_response(content)
+        self._log_orchestration("agent_final_answer", chars=len(content))
 
     def _finalize_direct_response(self, messages, tool_history, message):
         content = message.get("content") or ""
-        self._debug_final_answer(content)
+        self._log_final_answer(content)
         if not content:
             content = (
                 "Agent completed the task, but did not produce a final "
@@ -621,7 +609,7 @@ class ToolAgent:
         finally:
             self.ui.stop_spinner()
 
-        self._debug_final_answer(content)
+        self._log_final_answer(content)
         if not content:
             content = (
                 "Agent reached the iteration limit.\n\n"
@@ -687,7 +675,7 @@ class ToolAgent:
             message = {}
 
             for iteration in range(1, self.MAX_AGENT_ITERATIONS + 1):
-                self._debug_orchestration(
+                self._log_orchestration(
                     "agent_iteration",
                     iteration=iteration,
                     max_iterations=self.MAX_AGENT_ITERATIONS,
@@ -724,7 +712,7 @@ class ToolAgent:
                 break
 
             if not stopped_for_final_response:
-                self._debug_orchestration(
+                self._log_orchestration(
                     "agent_iteration_limit",
                     max_iterations=self.MAX_AGENT_ITERATIONS,
                     tool_calls=len(tool_history),

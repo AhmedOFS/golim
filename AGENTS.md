@@ -8,7 +8,7 @@ Cterm is a Python CLI, Textual TUI, and local MCP-like tool harness for completi
 
 The current architecture is a single action agent managed by a runtime object:
 
-- `cterm/__main__.py`: CLI entry point. Handles `cterm --version`, `cterm -i` / `cterm -init`, `cterm --binary`, `cterm --debug` / `-d`, no-argument TUI mode, and one-shot `cterm "message"` mode. It resolves provider-specific model settings, creates session logs under `~/cterm/logs/`, runs the Textual app by default, and falls back to the basic terminal UI for direct message mode.
+- `cterm/__main__.py`: CLI entry point. Handles `cterm --version`, `cterm -i` / `cterm -init`, `cterm --binary`, no-argument TUI mode, and one-shot `cterm "message"` mode. It resolves provider-specific model settings, creates session transcripts under `~/cterm/transcripts/` and diagnostic logs under `~/cterm/logs/`, runs the Textual app by default, and falls back to the basic terminal UI for direct message mode.
 - `cterm/core/runtime.py`: owns MCP client lifecycle, tool discovery, skill selection, interrupt state, and run state copied from the agent (`messages`, `execution_history`, `result`, `last_thinking_trace`). It starts `cterm-mcp.service` with `systemctl --user start` when the socket is missing, retries tool discovery, and exposes `run()` plus `run_followup()`. Followups are user inputs starting with `//`: after a completed run they inject `followup: ...`; while a run is active the TUI queues them as an interrupt/elaboration and injects `clarification: ...`.
 - `cterm/core/agent.py`: `ToolAgent`, the single tool-calling loop. `MAX_AGENT_ITERATIONS = 50`. There is no planner/worker/verifier flow. It builds chat history, calls `chat_with_model_api`, executes MCP tools, records tool results, supports interrupts, optionally summarizes at the iteration limit, strips/embeds provider thinking traces for valid followup context, and accepts `initial_messages` / `initial_tool_history` for followup runs.
 - `cterm/core/agent_ui.py`: common UI protocol consumed by `ToolAgent`. It includes spinner, message, tool-call, tool-output, privileged approval, Python approval/display, and thinking-trace hooks.
@@ -73,7 +73,7 @@ Useful manual CLI checks:
 ```bash
 python3 -m cterm --version
 python3 -m cterm -i
-python3 -m cterm -d "your prompt"
+python3 -m cterm "your prompt"
 python3 -m cterm
 ```
 
@@ -85,7 +85,7 @@ python3 -m cterm
 - `Runtime` is the owner of MCP client lifecycle, tool discovery, skill selection, interrupt state, and cross-run context for followups. Keep TUI-specific event handling in `cterm/ui/tui/tui.py`; keep model/tool-loop behavior in `cterm/core/agent.py`.
 - Followups are part of the observable TUI behavior. A prompt beginning with `//` after a completed run should preserve previous `Runtime.messages` and `Runtime.execution_history` and append a `followup: ...` user message. A `//` prompt while a run is busy should queue a pending followup, interrupt the active run via `Runtime.interrupt()`, and continue with `clarification: ...`.
 - The TUI reuses one `Runtime` for context, but each worker run must refresh `Runtime.ui` to the current `TextualAgentUI` instance. Otherwise later runs can be treated as stale/cancelled by the old run id.
-- Debug output is part of observable behavior in tests. When changing orchestration logging, update tests intentionally. Existing debug event names include legacy `planner_skills_selected` even though there is no planner.
+- Diagnostic output is written to the per-run log files and is never rendered by either UI. When changing orchestration logging, update tests intentionally. Existing event names include legacy `planner_skills_selected` even though there is no planner.
 - Keep MCP server responses newline-delimited JSON. Streaming tool calls send zero or more `"stream"` frames followed by one final `"result"` frame.
 - Thinking traces are controlled by `Config.stream_thinking_traces`; keep config, `ToolAgent._chat_with_optional_thinking`, provider stream parsing, and both UI implementations in sync when changing this behavior.
 - Provider support is abstracted in `chat_with_model_api` in `cterm/api/chat_api.py`, dispatching to Ollama, OpenRouter, or OpenAI-compatible based on `Config.api_provider`. Keep `__main__.py` provider-specific model selection and `Config` keys in sync when changing provider setup.

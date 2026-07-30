@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run real cterm debug prompt tests and save full output."""
+"""Run real cterm prompt tests and save full output."""
 
 from __future__ import annotations
 
@@ -73,7 +73,7 @@ def run_prompt(prompt: str) -> tuple[int, float, str]:
     last_spinner_text: str | None = None
     try:
         proc = subprocess.Popen(
-            [sys.executable, "-m", "cterm", "-d", prompt],
+            [sys.executable, "-m", "cterm", prompt],
             cwd=ROOT,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -106,7 +106,7 @@ def main() -> int:
             handle,
             f"cterm real prompt test run started {datetime.now().isoformat(timespec='seconds')}",
         )
-        handle.write(f"Command prefix: {sys.executable} -m cterm -d\n")
+        handle.write(f"Command prefix: {sys.executable} -m cterm\n")
         handle.write(f"Working directory: {ROOT}\n")
         handle.write(f"Timeout per prompt: {TIMEOUT_SECONDS}s\n")
         handle.flush()

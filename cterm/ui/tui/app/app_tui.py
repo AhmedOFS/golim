@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import logging
 import shutil
 import threading
 from typing import Callable
@@ -67,22 +66,6 @@ from cterm.ui.tui.app.agent_ui import (
     RunCancelled,
     TextualAgentUI,
 )
-
-
-class _TranscriptLogHandler(logging.Handler):
-    def __init__(self, app):
-        super().__init__()
-        self._app = app
-
-    def emit(self, record):
-        try:
-            self._app.call_from_thread(
-                self._app.append_line,
-                self.format(record),
-                STYLE_TEXT,
-            )
-        except Exception:
-            self.handleError(record)
 
 
 class CtermApp(ConfigUIMixin, App[int]):
@@ -350,7 +333,6 @@ class CtermApp(ConfigUIMixin, App[int]):
         model: str | None = None,
         binary: str = "ollama",
         small_model: str | None = None,
-        debug: bool = False,
         runtime_error: str | None = None,
         log_factory: Callable[[], tuple[object, object]] | None = None,
     ):
@@ -359,7 +341,6 @@ class CtermApp(ConfigUIMixin, App[int]):
         self._model = model
         self._binary = binary
         self._small_model = small_model
-        self.cterm_debug = debug
         self._runtime_error = runtime_error
         self.log_factory = log_factory
         self._runtime: Runtime | None = None
@@ -384,42 +365,6 @@ class CtermApp(ConfigUIMixin, App[int]):
         self._menu_page = "main"
         self._menu_labels: list[str] = []
         self._menu_choices: dict[str, tuple[str, str]] = {}
-        self._debug_handler = None
-        self._debug_previous_handlers = None
-        self._debug_previous_level = None
-
-    def _enable_debug_logging(self) -> None:
-        if not self.cterm_debug or self._debug_handler is not None:
-            return
-
-        root = logging.getLogger()
-        handler = _TranscriptLogHandler(self)
-        handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
-        self._debug_previous_handlers = [
-            existing for existing in root.handlers
-            if not getattr(existing, "_cterm_run_log", False)
-        ]
-        self._debug_previous_level = root.level
-        for existing in self._debug_previous_handlers:
-            root.removeHandler(existing)
-        root.addHandler(handler)
-        root.setLevel(logging.DEBUG)
-        self._debug_handler = handler
-
-    def _disable_debug_logging(self) -> None:
-        if self._debug_handler is None:
-            return
-
-        root = logging.getLogger()
-        root.removeHandler(self._debug_handler)
-        for previous in self._debug_previous_handlers or []:
-            root.addHandler(previous)
-        if self._debug_previous_level is not None:
-            root.setLevel(self._debug_previous_level)
-        self._debug_handler = None
-        self._debug_previous_handlers = None
-        self._debug_previous_level = None
-
     def _get_runtime(self, ui: AgentUI | None = None) -> Runtime | None:
         if self._model is None:
             return None
@@ -429,7 +374,6 @@ class CtermApp(ConfigUIMixin, App[int]):
                 model=self._model,
                 binary=self._binary,
                 small_model=self._small_model,
-                debug=self.cterm_debug,
             )
         if ui is not None:
             self._runtime.ui = ui
@@ -481,7 +425,6 @@ class CtermApp(ConfigUIMixin, App[int]):
         self.screen.set_class(dark, "-pitch-black")
 
     def on_mount(self) -> None:
-        self._enable_debug_logging()
         self.query_one("#query_bar", QueryBar).display = False
         self.update_prompt_placeholder()
         self.query_one(PromptLine).focus_input()
@@ -490,7 +433,6 @@ class CtermApp(ConfigUIMixin, App[int]):
         self._apply_dark_mode(self._config.dark_mode)
 
     def on_unmount(self) -> None:
-        self._disable_debug_logging()
         if self._runtime is not None:
             self._runtime.terminate()
 

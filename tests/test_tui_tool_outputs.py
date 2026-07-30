@@ -189,8 +189,10 @@ class TextualToolOutputTests(unittest.TestCase):
         DIAGNOSTIC_LOGGER.setLevel(logging.DEBUG)
 
         try:
-            ui.log_tool_call("bash", {"command": "seq 1 3"})
-            ui.log_tool_result("bash", {
+            from cterm.logger import log_diagnostic_section
+
+            log_diagnostic_section("tool_call bash", {"command": "seq 1 3"})
+            log_diagnostic_section("tool_result bash", {
                 "ok": True,
                 "results": [{
                     "command": "seq 1 3",
@@ -199,8 +201,8 @@ class TextualToolOutputTests(unittest.TestCase):
                     "returncode": 0,
                 }],
             })
-            ui.log_tool_output("bash", "stdout", "full streamed line")
-            ui.log_thinking_trace("first line\nsecond line")
+            log_diagnostic_section("tool_output bash stdout", "full streamed line\n")
+            log_diagnostic_section("thinking_trace", "first line\nsecond line")
         finally:
             DIAGNOSTIC_LOGGER.removeHandler(handler)
 

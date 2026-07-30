@@ -27,10 +27,8 @@ class SkillsLoader:
     def __init__(
         self,
         skills_dir: str | Path | None = None,
-        debug: bool = False,
     ):
         self.skills_dir = Path(skills_dir) if skills_dir else self.DEFAULT_SKILLS_DIR
-        self.debug = debug
 
     def load(self) -> list[Skill]:
         if not self.skills_dir.exists():

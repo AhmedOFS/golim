@@ -1,6 +1,5 @@
 import unittest
 import asyncio
-import logging
 from importlib.util import find_spec
 from unittest.mock import MagicMock, patch
 
@@ -14,7 +13,7 @@ class MainTuiTests(unittest.TestCase):
             result = main_module.main([])
 
         self.assertEqual(result, 0)
-        tui.assert_called_once_with("ollama", debug=False)
+        tui.assert_called_once_with("ollama")
 
     def test_message_arguments_keep_plain_chat_mode(self):
         with patch.object(main_module, "setup_root_logger"), \
@@ -23,26 +22,12 @@ class MainTuiTests(unittest.TestCase):
             result = main_module.main(["hello", "there"])
 
         self.assertEqual(result, 0)
-        chat.assert_called_once_with("hello there", "ollama", debug=False)
+        chat.assert_called_once_with("hello there", "ollama")
         tui.assert_not_called()
 
-    @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
-    def test_debug_logging_is_written_to_tui_transcript(self):
-        from cterm.ui.tui.app.app_tui import CtermApp
-
-        app = CtermApp("model", model="main", debug=True)
-        written = []
-        app.append_line = lambda text, style: written.append((text, style))
-        app.call_from_thread = lambda func, *args: func(*args)
-        logger = logging.getLogger("tests.main_tui.debug")
-
-        app._enable_debug_logging()
-        try:
-            logger.debug("agent iteration=%s", 3)
-        finally:
-            app._disable_debug_logging()
-
-        self.assertEqual(written, [("DEBUG: agent iteration=3", "#f3f3f3")])
+    def test_debug_flag_is_removed(self):
+        with self.assertRaises(SystemExit):
+            main_module.main(["--debug"])
 
     @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
     def test_reused_tui_runtime_refreshes_ui(self):
@@ -156,7 +141,7 @@ class MainTuiTests(unittest.TestCase):
 
         app.query_one = fake_query_one
 
-        with patch("cterm.ui.tui.app.tui.shutil.which", return_value="/usr/bin/ollama"):
+        with patch("cterm.ui.tui.app.app_tui.shutil.which", return_value="/usr/bin/ollama"):
             app._reload_config_settings()
 
         self.assertEqual(app.model_label, "new-model")
@@ -198,7 +183,7 @@ class MainTuiTests(unittest.TestCase):
             config.is_complete.return_value = True
             app = CtermApp("model", model="main", config=config)
             async with app.run_test() as pilot:
-                with patch("cterm.ui.tui.app.tui.get_configured_model_choices", return_value=(
+                with patch("cterm.ui.tui.app.app_tui.get_configured_model_choices", return_value=(
                     ["provider/one", "provider/two"],
                     {"provider/one": ("provider", "one"), "provider/two": ("provider", "two")},
                 )):

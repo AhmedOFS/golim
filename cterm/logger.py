@@ -56,9 +56,9 @@ def log_diagnostic_section(title: str, payload) -> None:
     DIAGNOSTIC_LOGGER.info("## %s\n%s", title, body)
 
 
-def setup_root_logger(debug: bool = False) -> None:
+def setup_root_logger() -> None:
     logging.basicConfig(level=logging.DEBUG, format=LOG_FORMAT, force=True)
     root = logging.getLogger()
     root.setLevel(logging.DEBUG)
     for handler in root.handlers:
-        handler.setLevel(logging.DEBUG if debug else logging.WARNING)
+        handler.setLevel(logging.CRITICAL + 1)

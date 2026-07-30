@@ -1,27 +1,12 @@
 """Thin terminal UI layer for cterm client output."""
 
 import sys
-import logging
-from typing import Any, Protocol
 
 from cterm.core.agent_ui import AgentUI
 from cterm.config import Config, get_config
 from cterm.core.runtime import Runtime
 from cterm.core.utils import _clip_label
-from cterm.logger import log_diagnostic_section
 from cterm.ui.basic.spinner import Spinner
-
-
-class _SpinnerLogHandler(logging.Handler):
-    def __init__(self, ui):
-        super().__init__()
-        self._ui = ui
-
-    def emit(self, record):
-        try:
-            self._ui._write_output(self.format(record))
-        except Exception:
-            self.handleError(record)
 
 
 class TerminalUI(AgentUI):
@@ -32,18 +17,13 @@ class TerminalUI(AgentUI):
         model: str | None = None,
         binary: str = "ollama",
         small_model: str | None = None,
-        debug: bool = False,
     ):
         self._config = config or get_config()
         self._model = model
         self._binary = binary
         self._small_model = small_model
-        self._debug = debug
         self._spinner = None
         self._thinking_live = False
-        self._debug_handler = None
-        self._debug_previous_handlers = None
-        self._debug_previous_level = None
 
     def run(self, message: str) -> str:
         with Runtime(
@@ -51,7 +31,6 @@ class TerminalUI(AgentUI):
             model=self._model,
             binary=self._binary,
             small_model=self._small_model,
-            debug=self._debug,
         ) as runtime:
             return runtime.run(message)
 
@@ -66,56 +45,6 @@ class TerminalUI(AgentUI):
         if self._spinner:
             self._spinner.stop()
             self._spinner = None
-
-    def enable_debug_logging(self):
-        if self._debug_handler is not None:
-            return
-
-        root = logging.getLogger()
-        handler = _SpinnerLogHandler(self)
-        handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
-        self._debug_previous_handlers = [
-            existing for existing in root.handlers
-            if not getattr(existing, "_cterm_run_log", False)
-        ]
-        self._debug_previous_level = root.level
-        for existing in self._debug_previous_handlers:
-            root.removeHandler(existing)
-        root.addHandler(handler)
-        root.setLevel(logging.DEBUG)
-        self._debug_handler = handler
-
-    def disable_debug_logging(self):
-        if self._debug_handler is None:
-            return
-
-        root = logging.getLogger()
-        root.removeHandler(self._debug_handler)
-        for previous in self._debug_previous_handlers or []:
-            root.addHandler(previous)
-        if self._debug_previous_level is not None:
-            root.setLevel(self._debug_previous_level)
-        self._debug_handler = None
-        self._debug_previous_handlers = None
-        self._debug_previous_level = None
-
-    def log_tool_call(self, tool_name, args):
-        log_diagnostic_section(f"tool_call {tool_name}", args or {})
-
-    def log_tool_result(self, tool_name, result):
-        log_diagnostic_section(f"tool_result {tool_name}", result)
-
-    def log_tool_output(self, tool_name, fd, line, end="\n"):
-        log_diagnostic_section(
-            f"tool_output {tool_name} {fd}",
-            f"{line}{end}",
-        )
-
-    def log_thinking_trace(self, text):
-        log_diagnostic_section("thinking_trace", str(text or ""))
-
-    def log_summary(self, text):
-        log_diagnostic_section("summary", str(text or ""))
 
     def _write_output(self, text, end="\n"):
         if self._spinner:

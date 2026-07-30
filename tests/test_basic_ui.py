@@ -1,5 +1,4 @@
 import io
-import logging
 import tempfile
 import unittest
 from pathlib import Path
@@ -73,22 +72,6 @@ class BasicUiOutputTests(unittest.TestCase):
         self.assertIn("THINKING: The user wants to uninstall Spotify.", stderr.getvalue())
         self.assertIn("Let me check the current OS first.", stderr.getvalue())
         self.assertNotIn("▶ THINKING:", stderr.getvalue())
-
-    def test_debug_logging_uses_spinner_output(self):
-        ui = TerminalUI(config=object())
-        spinner = _RecordingSpinner()
-        ui._spinner = spinner
-        logger = logging.getLogger("tests.basic_ui.debug")
-
-        ui.enable_debug_logging()
-        try:
-            with patch("sys.stderr", new_callable=io.StringIO) as stderr:
-                logger.debug("tool state=%s", "success")
-        finally:
-            ui.disable_debug_logging()
-
-        self.assertEqual(stderr.getvalue(), "")
-        self.assertEqual(spinner.calls, [("DEBUG: tool state=success", "\n")])
 
     def test_run_logging_keeps_full_diagnostic_sections_out_of_ui(self):
         with tempfile.TemporaryDirectory() as tmp:

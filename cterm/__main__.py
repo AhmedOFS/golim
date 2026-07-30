@@ -38,7 +38,7 @@ def _setup_session_log():
     sys.stderr = _Tee()
     return log_file, log_path, real_stderr
 
-def chat_command(message: str, binary: str = "ollama", debug: bool = False) -> int:
+def chat_command(message: str, binary: str = "ollama") -> int:
     """Send a message to the configured model."""
     init_config()
     error, model, small_model = _resolve_chat_settings(binary)
@@ -49,9 +49,7 @@ def chat_command(message: str, binary: str = "ollama", debug: bool = False) -> i
     log_file, log_path, real_stderr = _setup_session_log()
     run_logging = start_run_logging(log_path)
     try:
-        ui = TerminalUI(model=model, binary=binary, small_model=small_model, debug=debug)
-        if debug:
-            ui.enable_debug_logging()
+        ui = TerminalUI(model=model, binary=binary, small_model=small_model)
         token = active_agent_ui.set(ui)
         try:
             response = ui.run(message)
@@ -68,8 +66,6 @@ def chat_command(message: str, binary: str = "ollama", debug: bool = False) -> i
         print(f"Error: {e}", file=sys.stderr)
         return 1
     finally:
-        if "ui" in locals() and debug:
-            ui.disable_debug_logging()
         run_logging.close()
         sys.stderr = real_stderr
         log_file.close()
@@ -112,7 +108,7 @@ def _create_tui_log():
     return open(log_path, "w", encoding="utf-8"), log_path
 
 
-def tui_command(binary: str = "ollama", debug: bool = False) -> int:
+def tui_command(binary: str = "ollama") -> int:
     """Open the default Textual interface."""
     init_config()
     from .ui.tui.app.app_tui import CtermApp
@@ -135,7 +131,6 @@ def tui_command(binary: str = "ollama", debug: bool = False) -> int:
             model=model,
             binary=binary,
             small_model=small_model,
-            debug=debug,
             runtime_error=error,
             log_factory=_create_tui_log,
         ).run()
@@ -145,12 +140,12 @@ def tui_command(binary: str = "ollama", debug: bool = False) -> int:
         return 1
 
 
-def run_command(message: str, binary: str = "ollama", debug: bool = False) -> int:
-    return chat_command(message, binary, debug=debug)
+def run_command(message: str, binary: str = "ollama") -> int:
+    return chat_command(message, binary)
 
 
-def run_tui_command(binary: str = "ollama", debug: bool = False) -> int:
-    return tui_command(binary, debug=debug)
+def run_tui_command(binary: str = "ollama") -> int:
+    return tui_command(binary)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -181,18 +176,13 @@ def main(argv: list[str] | None = None) -> int:
         help="ollama binary name or path (default: ollama)"
     )
     parser.add_argument(
-        "-d", "--debug",
-        action="store_true",
-        help="print each tool call and whether it succeeded"
-    )
-    parser.add_argument(
         "message",
         nargs="*",
         help="message to send to the LLM"
     )
     
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
-    setup_root_logger(debug=args.debug)
+    setup_root_logger()
 
     if args.version:
         print(f"cterm {__version__}")
@@ -206,10 +196,10 @@ def main(argv: list[str] | None = None) -> int:
     
     # Chat mode
     if not args.message:
-        return tui_command(args.binary, debug=args.debug)
+        return tui_command(args.binary)
     
     message = " ".join(args.message)
-    return chat_command(message, args.binary, debug=args.debug)
+    return chat_command(message, args.binary)
 
 
 if __name__ == "__main__":
