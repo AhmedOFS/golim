@@ -32,10 +32,10 @@ class FakeUI:
         self.shell_results = []
         self.streams = []
 
-    def update_spinner(self, message):
+    def status(self, message):
         pass
 
-    def stop_spinner(self):
+    def clear_status(self):
         pass
 
     def message(self, text):
@@ -44,16 +44,16 @@ class FakeUI:
     def tool_call(self, tool_name, args):
         pass
 
-    def handle_tool_output(self, fd=None, line="", end="\n", result=None):
+    def tool_output(self, fd=None, line="", end="\n", result=None):
         if result is not None:
             self.tool_results.append(result)
         elif fd is not None:
             self.streams.append((fd, line, end))
 
-    def handle_shell_result_output(self, result):
+    def shell_output(self, result):
         self.shell_results.append(result)
 
-    def approve_privileged_binary(self, binary):
+    def request_binary_approval(self, binary):
         self.approval_prompts.append(binary)
         return self.approved
 
@@ -110,7 +110,7 @@ class ToolApprovalTests(unittest.TestCase):
         agent = self._agent_with_client(client)
         stderr = StringIO()
 
-        with patch.object(agent.ui, "approve_privileged_binary", return_value=True), \
+        with patch.object(agent.ui, "request_binary_approval", return_value=True), \
              redirect_stderr(stderr):
             result = agent._execute_tool("bash", {"command": "sudo snap install spotify"})
 

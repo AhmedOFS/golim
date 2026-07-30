@@ -9,7 +9,7 @@ from pathlib import Path
 from . import __version__
 from .config import Config, get_config, init_config
 from .logger import setup_root_logger, start_run_logging
-from .core.agent_ui import active_agent_ui
+from .core.agent_events import active_agent_events_handler
 from .core.runtime import Runtime
 from .ui.basic.basic import TerminalUI
 
@@ -50,11 +50,11 @@ def chat_command(message: str, binary: str = "ollama") -> int:
     run_logging = start_run_logging(log_path)
     try:
         ui = TerminalUI(model=model, binary=binary, small_model=small_model)
-        token = active_agent_ui.set(ui)
+        token = active_agent_events_handler.set(ui)
         try:
             response = ui.run(message)
         finally:
-            active_agent_ui.reset(token)
+            active_agent_events_handler.reset(token)
         log_file.write(f"\nresponse: {response}\n")
         log_file.flush()
         print(response)

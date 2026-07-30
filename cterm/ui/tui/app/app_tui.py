@@ -15,7 +15,7 @@ from textual.app import App, ComposeResult
 from textual.containers import Vertical
 from textual.widgets import Input, OptionList
 
-from cterm.core.agent_ui import AgentUI, active_agent_ui
+from cterm.core.agent_events import AgentEvents, active_agent_events_handler
 from cterm.config import Config, get_config
 from cterm.core.runtime import Runtime
 from cterm.ui.tui.config.config_tui import (
@@ -58,13 +58,13 @@ from cterm.ui.tui.menu.widgets import MenuPanel
 from cterm.config.utils import get_configured_model_choices
 from cterm.logger import start_run_logging
 
-from cterm.ui.tui.app.agent_ui import (
+from cterm.ui.tui.app.agent_events_handler import (
     _ANSI_RE,
     _raise_in_thread,
     ApprovalRequest,
     ChatResult,
     RunCancelled,
-    TextualAgentUI,
+    TUIAgentEventsHandler,
 )
 
 
@@ -365,7 +365,7 @@ class CtermApp(ConfigUIMixin, App[int]):
         self._menu_page = "main"
         self._menu_labels: list[str] = []
         self._menu_choices: dict[str, tuple[str, str]] = {}
-    def _get_runtime(self, ui: AgentUI | None = None) -> Runtime | None:
+    def _get_runtime(self, ui: AgentEvents | None = None) -> Runtime | None:
         if self._model is None:
             return None
         if self._runtime is None:
@@ -779,7 +779,7 @@ class CtermApp(ConfigUIMixin, App[int]):
             transcript.write(Text(line, style=style))
 
     def append_stream(self, renderable: RenderableType, replace_last: bool, commit: bool) -> None:
-        """Low-level hook used by TextualAgentUI for live \\r/\\n-aware output."""
+        """Low-level hook used by TUIAgentEventsHandler for live \\r/\\n-aware output."""
         transcript = self.query_one("#transcript", Transcript)
         transcript.write(renderable, replace_last=replace_last, commit=commit)
 
@@ -942,7 +942,7 @@ class CtermApp(ConfigUIMixin, App[int]):
     ) -> None:
         self._chat_thread_id = threading.get_ident()
         cancel_event = self._active_cancel_event or threading.Event()
-        ui = TextualAgentUI(self, run_id, cancel_event)
+        ui = TUIAgentEventsHandler(self, run_id, cancel_event)
         log_file = None
         log_path = None
         run_logging = None
@@ -958,7 +958,7 @@ class CtermApp(ConfigUIMixin, App[int]):
                     log_file.write(f"error: {self._runtime_error}\n")
                 result = ChatResult(False, self._runtime_error, str(log_path) if log_path else None)
             else:
-                token = active_agent_ui.set(ui)
+                token = active_agent_events_handler.set(ui)
                 try:
                     runtime = self._get_runtime(ui)
                     if runtime is None:
@@ -989,7 +989,7 @@ class CtermApp(ConfigUIMixin, App[int]):
                         ok = not str(response).startswith("Error:")
                         result = ChatResult(ok, response, str(log_path) if log_path else None)
                 finally:
-                    active_agent_ui.reset(token)
+                    active_agent_events_handler.reset(token)
             if not self.is_run_active(run_id):
                 return
             self.call_from_thread(self.append_line, "")

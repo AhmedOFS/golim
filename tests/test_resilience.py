@@ -17,10 +17,12 @@ from cterm.core.utils import get_socket_path
 
 
 class _UI:
-    def update_spinner(self, *_): pass
-    def stop_spinner(self): pass
-    def thinking_trace_delta(self, *_): pass
-    def thinking_trace_complete(self, *_): pass
+    def status(self, *_): pass
+    def clear_status(self): pass
+    def thinking_delta(self, *_): pass
+    def thinking_complete(self, *_): pass
+    def status(self, *_): pass
+    def clear_status(self, *_): pass
 
 
 class ResilienceTests(unittest.TestCase):

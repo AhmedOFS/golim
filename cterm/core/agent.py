@@ -8,7 +8,7 @@ import concurrent.futures
 import queue
 import threading
 
-from cterm.core.agent_ui import AgentUI
+from cterm.core.agent_events import AgentEvents
 from cterm.ui.basic.basic import TerminalUI
 from cterm.config import Config, get_config
 from cterm.api.chat_api import chat_with_model_api
@@ -37,7 +37,7 @@ class ToolAgent:
         model,
         binary="ollama",
         small_model=None,
-        ui: AgentUI | None = None,
+        ui: AgentEvents | None = None,
         mcp_client=None,
         tools=None,
         should_interrupt=None,
@@ -239,7 +239,7 @@ class ToolAgent:
                 return
             text = str(delta)
             thinking_parts.append(text)
-            self.ui.thinking_trace_delta(text)
+            self.ui.thinking_delta(text)
 
         try:
             response = chat_with_model_api(*args, on_thinking_delta=_on_thinking_delta, **kwargs)
@@ -251,7 +251,7 @@ class ToolAgent:
             if thinking_parts:
                 self._last_thinking_trace = "".join(thinking_parts)
                 log_diagnostic_section("thinking_trace", self._last_thinking_trace)
-                self.ui.thinking_trace_complete(self._last_thinking_trace)
+                self.ui.thinking_complete(self._last_thinking_trace)
 
         if not self._last_thinking_trace and isinstance(response, dict):
             message = response.get("message", {})
@@ -290,9 +290,9 @@ class ToolAgent:
         self.ui.tool_call(tool_name, args)
         if is_exec and not get_config().unrestricted_bash:
             code = args.get("code") or args.get("script") or args.get("source") or ""
-            if not self.ui.approve_python_code(code):
+            if not self.ui.request_python_approval(code):
                 tool_result = self._python_denied_result()
-                self.ui.handle_tool_output(result=tool_result)
+                self.ui.tool_output(result=tool_result)
                 return tool_name, tool_result
         return tool_name, None
 
@@ -308,20 +308,20 @@ class ToolAgent:
         self.ui.tool_call(tool_name, display_args)
 
         if get_config().unrestricted_bash:
-            self.ui.show_python_code(py_code)
-        elif not self.ui.approve_python_code(py_code):
+            self.ui.python_code(py_code)
+        elif not self.ui.request_python_approval(py_code):
             tool_result = self._python_denied_result()
-            self.ui.handle_tool_output(result=tool_result)
+            self.ui.tool_output(result=tool_result)
             return _clip_label(display_args.get("command", tool_name), 120), tool_result
 
         return _clip_label(display_args.get("command", tool_name), 120), None
 
     def _call_tool_with_spinner(self, label, call_once, args):
-        self.ui.update_spinner(label)
+        self.ui.status(label)
         try:
             return call_once(args)
         finally:
-            self.ui.stop_spinner()
+            self.ui.clear_status()
 
     def _long_tool_decision(self, tool_name, args, streamed_output):
         """Ask the model whether a tool that exceeded 30s may be stopped.
@@ -378,7 +378,7 @@ class ToolAgent:
             return tool_result
 
         binary = tool_result.get("binary", "")
-        if not self.ui.approve_privileged_binary(binary):
+        if not self.ui.request_binary_approval(binary):
             return {
                 "ok": False,
                 "error": f"Privileged command not approved: {binary}",
@@ -425,7 +425,7 @@ class ToolAgent:
                 f"tool_output {tool_name} {fd}",
                 f"{line}{end}",
             )
-            self.ui.handle_tool_output(fd=fd, line=line, end=end)
+            self.ui.tool_output(fd=fd, line=line, end=end)
 
         def _call_once(call_args):
             return _run_async(
@@ -448,7 +448,7 @@ class ToolAgent:
         )
 
         if not is_shell and isinstance(tool_result, dict):
-            self.ui.handle_tool_output(result=tool_result)
+            self.ui.tool_output(result=tool_result)
 
         if is_shell:
             tool_result = self._retry_privileged_shell_tool(
@@ -461,9 +461,9 @@ class ToolAgent:
 
         if is_shell:
             if shell_stream_seen:
-                self.ui.handle_tool_output(result=tool_result)
+                self.ui.tool_output(result=tool_result)
             else:
-                self.ui.handle_shell_result_output(tool_result)
+                self.ui.shell_output(tool_result)
 
         self._log_tool_result(tool_name, args, tool_result)
         log_diagnostic_section(f"tool_result {tool_name}", tool_result)
@@ -475,7 +475,7 @@ class ToolAgent:
         self.execution_history = []
 
     def _chat_for_next_action(self, messages):
-        self.ui.update_spinner("Thinking")
+        self.ui.status("Thinking")
         try:
             # ``requests`` has no safe cross-thread cancellation primitive.
             # Keep the provider request in a daemon worker and poll the hard
@@ -505,7 +505,7 @@ class ToolAgent:
                     return value
                 raise value
         finally:
-            self.ui.stop_spinner()
+            self.ui.clear_status()
 
     def _tool_call_from_message(self, message):
         tool_calls = message.get("tool_calls")
@@ -597,7 +597,7 @@ class ToolAgent:
             *messages[1:],
             {"role": "user", "content": _FINAL_SUMMARY_PROMPT},
         ]
-        self.ui.update_spinner("Summarizing Task")
+        self.ui.status("Summarizing Task")
         try:
             response = self._chat_with_optional_thinking(
                 self.model,
@@ -607,7 +607,7 @@ class ToolAgent:
             )
             content = response.get("message", {}).get("content") or ""
         finally:
-            self.ui.stop_spinner()
+            self.ui.clear_status()
 
         self._log_final_answer(content)
         if not content:

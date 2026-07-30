@@ -2,14 +2,14 @@
 
 import sys
 
-from cterm.core.agent_ui import AgentUI
+from cterm.core.agent_events import AgentEvents
 from cterm.config import Config, get_config
 from cterm.core.runtime import Runtime
 from cterm.core.utils import _clip_label
 from cterm.ui.basic.spinner import Spinner
 
 
-class TerminalUI(AgentUI):
+class TerminalUI(AgentEvents):
     def __init__(
         self,
         *,
@@ -34,14 +34,14 @@ class TerminalUI(AgentUI):
         ) as runtime:
             return runtime.run(message)
 
-    def update_spinner(self, message):
+    def status(self, message):
         if self._spinner is None:
             self._spinner = Spinner(message, reserve_above=True)
             self._spinner.start()
         else:
             self._spinner.update_message(message)
 
-    def stop_spinner(self):
+    def clear_status(self):
         if self._spinner:
             self._spinner.stop()
             self._spinner = None
@@ -56,16 +56,16 @@ class TerminalUI(AgentUI):
     def message(self, text):
         self._write_output(text)
 
-    def thinking_trace_delta(self, text):
+    def thinking_delta(self, text):
         if not text:
             return
         if not self._thinking_live and self._spinner:
-            self.stop_spinner()
+            self.clear_status()
         prefix = "THINKING: " if not self._thinking_live else ""
         self._thinking_live = True
         self._write_output(f"\033[38;5;248m{prefix}{text}\033[0m", end="")
 
-    def thinking_trace_complete(self, text):
+    def thinking_complete(self, text):
         if not text:
             return
         if self._thinking_live:
@@ -85,7 +85,7 @@ class TerminalUI(AgentUI):
             formatted = self._format_tool_call(tool_name, args)
             self._write_output(formatted)
 
-    def handle_tool_output(self, fd=None, line="", end="\n", result=None):
+    def tool_output(self, fd=None, line="", end="\n", result=None):
         if result is not None:
             formatted = self._format_tool_result(result)
             if formatted:
@@ -95,7 +95,7 @@ class TerminalUI(AgentUI):
             output = f"\033[33m{line}\033[0m" if fd == "stderr" else line
             self._spinner.write_above(output, end=end)
 
-    def handle_shell_result_output(self, result):
+    def shell_output(self, result):
         if not isinstance(result, dict):
             return
 
@@ -114,7 +114,7 @@ class TerminalUI(AgentUI):
                     end="" if text.endswith("\n") else "\n",
                 )
 
-    def approve_privileged_binary(self, binary):
+    def request_binary_approval(self, binary):
     
         prompt = f"Allow sudo access for {binary}? [Y/N] "
         try:
@@ -135,7 +135,7 @@ class TerminalUI(AgentUI):
             sys.stderr.write(f"\033[33m{line}\033[0m\n")
         sys.stderr.write("\033[38;5;248m" + "-" * 40 + "\033[0m\n")
 
-    def show_python_code(self, code):
+    def python_code(self, code):
         if self._spinner:
             self._spinner.stop()
             self._spinner = None
@@ -143,7 +143,7 @@ class TerminalUI(AgentUI):
         self._show_python(code)
         sys.stderr.flush()
 
-    def approve_python_code(self, code):
+    def request_python_approval(self, code):
         if self._spinner:
             self._spinner.stop()
             self._spinner = None

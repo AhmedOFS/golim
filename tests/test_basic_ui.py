@@ -35,9 +35,9 @@ class BasicUiOutputTests(unittest.TestCase):
         with patch("sys.stderr", new_callable=io.StringIO) as stderr:
             ui.message("status")
             ui.tool_call("finder", {"pattern": "*.py", "path": "."})
-            ui.handle_tool_output(fd="stdout", line="streamed")
-            ui.handle_tool_output(result={"ok": True, "text": "done"})
-            ui.handle_shell_result_output(
+            ui.tool_output(fd="stdout", line="streamed")
+            ui.tool_output(result={"ok": True, "text": "done"})
+            ui.shell_output(
                 {"results": [{"stdout": "stdout\n", "stderr": "stderr"}]}
             )
 
@@ -61,9 +61,9 @@ class BasicUiOutputTests(unittest.TestCase):
         ui._spinner = spinner
 
         with patch("sys.stderr", new_callable=io.StringIO) as stderr:
-            ui.thinking_trace_delta("The user wants to uninstall Spotify. ")
-            ui.thinking_trace_delta("Let me check the current OS first.")
-            ui.thinking_trace_complete(
+            ui.thinking_delta("The user wants to uninstall Spotify. ")
+            ui.thinking_delta("Let me check the current OS first.")
+            ui.thinking_complete(
                 "The user wants to uninstall Spotify. Let me check the current OS first."
             )
 

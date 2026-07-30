@@ -9,7 +9,7 @@ from rich.console import Group, RenderableType
 from rich.syntax import Syntax
 from rich.text import Text
 
-from cterm.core.agent_ui import AgentUI
+from cterm.core.agent_events import AgentEvents
 from cterm.ui.tui.tui_style import (
     STYLE_DIM,
     STYLE_ERROR,
@@ -104,7 +104,7 @@ MAX_TOOL_OUTPUT_LINES = 2
 MAX_EXPANDED_OUTPUT_LINES = 20
 
 
-class TextualAgentUI(AgentUI):
+class TUIAgentEventsHandler(AgentEvents):
     """Adapter used by ToolAgent to render progress inside the Textual app."""
 
     def __init__(self, app, run_id: int, cancel_event: threading.Event):
@@ -183,7 +183,7 @@ class TextualAgentUI(AgentUI):
     def message(self, text):
         self._emit(_ANSI_RE.sub("", str(text)))
 
-    def thinking_trace_delta(self, text):
+    def thinking_delta(self, text):
         if not text:
             return
         self._ensure_active()
@@ -192,7 +192,7 @@ class TextualAgentUI(AgentUI):
         self.app.call_from_thread(self.app.append_thinking_delta, self._thinking_buffer)
         self.app.call_from_thread(self.app.set_status, f"Thinking: {' '.join(self._thinking_buffer.split())[:80]}")
 
-    def thinking_trace_complete(self, text):
+    def thinking_complete(self, text):
         self._ensure_active()
         full_text = str(text or self._thinking_buffer).strip()
         self._thinking_buffer = ""
@@ -200,12 +200,12 @@ class TextualAgentUI(AgentUI):
             self._write_transcript(f"▶ THINKING: {full_text}")
             self.app.call_from_thread(self.app.append_thinking_trace, full_text)
 
-    def update_spinner(self, message):
+    def status(self, message):
         self._ensure_active()
         self._spinner_message = str(message)
         self.app.call_from_thread(self.app.set_status, f"{self._spinner_message}...")
 
-    def stop_spinner(self):
+    def clear_status(self):
         if self.is_cancelled():
             return
         if self.app._runtime is not None and self.app._runtime.should_interrupt():
@@ -243,7 +243,7 @@ class TextualAgentUI(AgentUI):
         else:
             self._emit(f"{tool_name}: {', '.join(args.keys()) if args else ''}", STYLE_TOOL)
 
-    def handle_tool_output(self, fd=None, line="", end="\n", result=None):
+    def tool_output(self, fd=None, line="", end="\n", result=None):
         if result is not None:
             if self._current_tool == "bash":
                 self._last_stream.clear()
@@ -345,7 +345,7 @@ class TextualAgentUI(AgentUI):
             self.app.append_expandable_result, summary, Group(*detail_lines)
         )
 
-    def handle_shell_result_output(self, result):
+    def shell_output(self, result):
         if not isinstance(result, dict):
             return
         for fd_name in ("stdout", "stderr"):
@@ -398,7 +398,7 @@ class TextualAgentUI(AgentUI):
         head_count = max(0, limit - tail_count - 1)
         return lines[:head_count] + ["…"] + lines[-tail_count:]
 
-    def approve_privileged_binary(self, binary):
+    def request_binary_approval(self, binary):
         self._ensure_active()
         event = threading.Event()
         request = ApprovalRequest(self.run_id, binary, event)
@@ -406,11 +406,11 @@ class TextualAgentUI(AgentUI):
         event.wait()
         return bool(request.answer)
 
-    def show_python_code(self, code):
+    def python_code(self, code):
         self._ensure_active()
         self.app.call_from_thread(self.app.append_code, "» python in bash", code)
 
-    def approve_python_code(self, code):
+    def request_python_approval(self, code):
         self._ensure_active()
         if not self._code_shown_for_approval:
             self.app.call_from_thread(self.app.append_code, "» python in bash", code)

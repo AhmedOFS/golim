@@ -12,10 +12,10 @@ class FakeUI:
         self.deltas = []
         self.completed = []
 
-    def thinking_trace_delta(self, text):
+    def thinking_delta(self, text):
         self.deltas.append(text)
 
-    def thinking_trace_complete(self, text):
+    def thinking_complete(self, text):
         self.completed.append(text)
 
 

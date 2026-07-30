@@ -16,7 +16,7 @@ def _plain(renderable):
 @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
 class TextualToolOutputTests(unittest.TestCase):
     def make_ui(self):
-        from cterm.ui.tui.app.agent_ui import TextualAgentUI
+        from cterm.ui.tui.app.agent_events_handler import TUIAgentEventsHandler
 
         class FakeApp:
             def __init__(self):
@@ -55,13 +55,13 @@ class TextualToolOutputTests(unittest.TestCase):
                 pass
 
         app = FakeApp()
-        ui = TextualAgentUI(app, 1, threading.Event())
+        ui = TUIAgentEventsHandler(app, 1, threading.Event())
         return ui, app
 
     def test_system_info_done_expands_to_formatted_data(self):
         ui, app = self.make_ui()
         ui.tool_call("system_info", {})
-        ui.handle_tool_output(result={
+        ui.tool_output(result={
             "ok": True,
             "os": {"system": "Linux", "release": "6.1"},
             "cwd": "/home/ahmed/Cterm",
@@ -76,7 +76,7 @@ class TextualToolOutputTests(unittest.TestCase):
     def test_finder_result_expands_to_match_list(self):
         ui, app = self.make_ui()
         ui.tool_call("finder", {"path": "/tmp", "pattern": "*.py"})
-        ui.handle_tool_output(result={
+        ui.tool_output(result={
             "ok": True,
             "total": 2,
             "matches": ["/tmp/a.py", "/tmp/b.py"],
@@ -90,7 +90,7 @@ class TextualToolOutputTests(unittest.TestCase):
     def test_bash_truncated_nested_results_expand_to_twenty_lines(self):
         ui, app = self.make_ui()
         ui.tool_call("bash", {"command": "seq 1 60"})
-        ui.handle_tool_output(result={
+        ui.tool_output(result={
             "ok": True,
             "output_truncated": True,
             "results": [{"stdout": "\n".join(str(i) for i in range(1, 51)) + "\n"}],
@@ -108,8 +108,8 @@ class TextualToolOutputTests(unittest.TestCase):
     def test_streamed_bash_completion_lines_remain_visible_after_done(self):
         ui, app = self.make_ui()
         ui.tool_call("bash", {"command": "sudo snap install example"})
-        ui.handle_tool_output(fd="stdout", line="progress 10%", end="\n")
-        ui.handle_tool_output(result={
+        ui.tool_output(fd="stdout", line="progress 10%", end="\n")
+        ui.tool_output(result={
             "ok": True,
             "results": [{
                 "stdout": "\n".join([
@@ -131,8 +131,8 @@ class TextualToolOutputTests(unittest.TestCase):
     def test_final_streamed_bash_result_does_not_reemit_terminal_controls(self):
         ui, app = self.make_ui()
         ui.tool_call("bash", {"command": "sudo snap remove example"})
-        ui.handle_tool_output(fd="stdout", line="progress", end="\n")
-        ui.handle_tool_output(result={
+        ui.tool_output(fd="stdout", line="progress", end="\n")
+        ui.tool_output(result={
             "ok": True,
             "results": [{
                 "stdout": (
@@ -163,12 +163,12 @@ class TextualToolOutputTests(unittest.TestCase):
         ui.message("Available Skills: Filesystem_Operations")
         ui.message("\033[32m✓\033[0m Filesystem_Operations")
         ui.tool_call("bash", {"command": "seq 1 4"})
-        ui.handle_tool_output(fd="stdout", line="live output", end="\n")
-        ui.handle_tool_output(result={
+        ui.tool_output(fd="stdout", line="live output", end="\n")
+        ui.tool_output(result={
             "ok": True,
             "results": [{"stdout": "1\n2\n3\n4", "stderr": ""}],
         })
-        ui.thinking_trace_complete("inspect the current system")
+        ui.thinking_complete("inspect the current system")
 
         text = transcript.getvalue()
         self.assertIn("Available Skills: Filesystem_Operations", text)

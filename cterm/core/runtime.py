@@ -9,7 +9,7 @@ import sys
 import threading
 import time
 
-from cterm.core.agent_ui import AgentUI, active_agent_ui
+from cterm.core.agent_events import AgentEvents, active_agent_events_handler
 from cterm.config import Config, get_config
 from cterm.api.chat_api import chat_with_model_api
 from cterm.core.mcp_client import FastMCPClient
@@ -33,13 +33,13 @@ class Runtime:
         model: str | None = None,
         binary: str = "ollama",
         small_model: str | None = None,
-        ui: AgentUI | None = None,
+        ui: AgentEvents | None = None,
     ):
         self.config = config or get_config()
         self.model = model
         self.small_model = small_model
         self.binary = binary
-        self.ui = ui or active_agent_ui.get()
+        self.ui = ui or active_agent_events_handler.get()
         self.mcp_client: FastMCPClient | None = None
         self.tools = []
         self.result: str | None = None
@@ -154,12 +154,12 @@ class Runtime:
             else:
                 raise RuntimeError("Tool server did not return a valid tool list.") from last_error
 
-    def select_skills(self, user_message: str, ui: AgentUI):
+    def select_skills(self, user_message: str, ui: AgentEvents):
         loader = SkillsLoader()
         skills = loader.load()
         if skills:
             ui.message(f"Available Skills: {', '.join(s.name for s in skills)}")
-        ui.update_spinner("Selecting Skills")
+        ui.status("Selecting Skills")
         try:
             selected = loader.select(
                 user_message,
@@ -171,7 +171,7 @@ class Runtime:
             logger.debug("skills_selection_failed error=%s", exc)
             selected = []
         finally:
-            ui.stop_spinner()
+            ui.clear_status()
 
         names = [skill.name for skill in selected]
         if names:
@@ -212,7 +212,7 @@ class Runtime:
         self._hard_cancel_requested.clear()
         active_ui = self.ui
         if active_ui is None:
-            raise RuntimeError("Runtime requires an active AgentUI context at initialization.")
+            raise RuntimeError("Runtime requires an active AgentEvents context at initialization.")
         self.initialize_tools()
         # Followups retain the original prompt and its selected skill content.
         # Re-selecting here only produces duplicate "Available Skills" UI
@@ -255,7 +255,7 @@ class Runtime:
         self._hard_cancel_requested.clear()
         active_ui = self.ui
         if active_ui is None:
-            raise RuntimeError("Runtime requires an active AgentUI context at initialization.")
+            raise RuntimeError("Runtime requires an active AgentEvents context at initialization.")
         self.initialize_tools()
         selected_skills, skills_prompt = self.select_skills(user_message, active_ui)
 
