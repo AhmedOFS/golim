@@ -13,6 +13,14 @@ from ..vars import (
 )
 
 
+def _response_body_utf8(response) -> str:
+    """Read an HTTP body as UTF-8, regardless of a bad server charset."""
+    body = getattr(response, "content", None)
+    if isinstance(body, (bytes, bytearray)):
+        return bytes(body).decode("utf-8")
+    return response.text
+
+
 def _websearch_mcp_call(url: str, tool: str, args: dict, headers: dict | None = None) -> tuple[str | None, str | None]:
     """
     Call an MCP tool over HTTP.
@@ -36,7 +44,7 @@ def _websearch_mcp_call(url: str, tool: str, args: dict, headers: dict | None = 
             timeout=25,
         )
         resp.raise_for_status()
-        body = resp.text
+        body = _response_body_utf8(resp)
     except requests.exceptions.HTTPError as exc:
         status = resp.status_code if isinstance(exc, requests.exceptions.HTTPError) and hasattr(exc, 'response') and exc.response is not None else 0
         detail = resp.text[:200] if hasattr(exc, 'response') and exc.response is not None else str(exc)

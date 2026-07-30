@@ -18,6 +18,17 @@ class FakeStreamResponse:
 
 
 class ChatApiStreamingTests(unittest.TestCase):
+    def test_json_response_decodes_utf8_bytes_independent_of_response_charset(self):
+        class Response:
+            content = json.dumps({"content": "🌤️ — +32°C"}, ensure_ascii=False).encode("utf-8")
+
+            def json(self):
+                raise AssertionError("raw UTF-8 content should be parsed directly")
+
+        parsed = chat_api_utils.parse_utf8_json_response(Response())
+
+        self.assertEqual(parsed["content"], "🌤️ — +32°C")
+
     def test_ollama_stream_emits_thinking_and_preserves_tool_call(self):
         deltas = []
         response = FakeStreamResponse([
@@ -64,6 +75,21 @@ class ChatApiStreamingTests(unittest.TestCase):
             result["message"]["tool_calls"][0]["function"]["arguments"],
             {"command": "pwd"},
         )
+
+    def test_openai_stream_decodes_utf8_independent_of_response_charset(self):
+        deltas = []
+        response = FakeStreamResponse([
+            "data: " + json.dumps({
+                "choices": [{"delta": {
+                    "content": "Clear 🌤️ — +32°C ↓",
+                }}],
+            }, ensure_ascii=False),
+            "data: [DONE]",
+        ])
+
+        result = chat_api_utils.normalize_openai_stream_response(response, deltas.append)
+
+        self.assertEqual(result["message"]["content"], "Clear 🌤️ — +32°C ↓")
 
 
 if __name__ == "__main__":

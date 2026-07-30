@@ -205,6 +205,24 @@ class WebSearchToolTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["text"], NO_RESULTS)
 
+    @patch("cterm.mcp.utils.web_utils._read_cterm_config", return_value={})
+    @patch("cterm.mcp.utils.web_utils.requests.post")
+    def test_response_body_uses_utf8_bytes_not_declared_charset(self, mock_post, mock_config):
+        payload = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {"content": [{"type": "text", "text": "Clear 🌤️ — +32°C"}]},
+        }
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.content = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        mock_response.text = json.dumps(payload).encode("utf-8").decode("latin-1")
+        mock_post.return_value = mock_response
+
+        result = websearch("weather")
+
+        self.assertEqual(result["text"], "Clear 🌤️ — +32°C")
+
 
 if __name__ == "__main__":
     unittest.main()

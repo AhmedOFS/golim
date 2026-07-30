@@ -3,7 +3,7 @@ import logging
 
 import requests
 
-from cterm.api.utils import extract_thinking_delta
+from cterm.api.utils import decode_utf8_stream_line, extract_thinking_delta, parse_utf8_json_response
 from cterm.api.retry import with_retries
 
 logger = logging.getLogger(__name__)
@@ -27,7 +27,7 @@ def chat(model, messages, tools=None, response_format=None, on_thinking_delta=No
         response.raise_for_status()
         if on_thinking_delta:
             return _normalize_ollama_stream_response(response, on_thinking_delta)
-        raw = response.json()
+        raw = parse_utf8_json_response(response)
         # if not isinstance(raw, dict) or not isinstance(raw.get("message"), dict):
         #     raise ValueError("malformed Ollama chat response: missing message object")
         return raw
@@ -39,7 +39,8 @@ def _normalize_ollama_stream_response(response, on_thinking_delta) -> dict:
     content_parts = []
     tool_calls = None
     final_message = {"role": "assistant", "content": ""}
-    for raw_line in response.iter_lines(decode_unicode=True):
+    for raw_line in response.iter_lines(decode_unicode=False):
+        raw_line = decode_utf8_stream_line(raw_line)
         if not raw_line:
             continue
         chunk = json.loads(raw_line)

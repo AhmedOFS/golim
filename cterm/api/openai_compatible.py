@@ -3,7 +3,12 @@ import logging
 
 import requests
 
-from cterm.api.utils import normalize_messages_for_openai, normalize_openai_response, normalize_openai_stream_response
+from cterm.api.utils import (
+    normalize_messages_for_openai,
+    normalize_openai_response,
+    normalize_openai_stream_response,
+    parse_utf8_json_response,
+)
 from cterm.api.retry import with_retries
 
 logger = logging.getLogger(__name__)
@@ -31,7 +36,7 @@ def chat(model, messages, tools=None, response_format=None, config=None, on_thin
         if on_thinking_delta:
             return normalize_openai_stream_response(response, on_thinking_delta)
         try:
-            return normalize_openai_response(response.json())
+            return normalize_openai_response(parse_utf8_json_response(response))
         except json.JSONDecodeError as exc:
             body_preview = response.text[:500] if response.text else "(empty)"
             raise ValueError(

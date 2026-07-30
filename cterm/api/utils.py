@@ -2,6 +2,29 @@ import json
 import logging
 import uuid
 
+
+def decode_utf8_stream_line(raw_line) -> str:
+    """Decode a provider stream line using JSON/SSE's required UTF-8 encoding.
+
+    ``requests.iter_lines(decode_unicode=True)`` delegates decoding to the
+    response charset. Some OpenAI-compatible servers advertise an incorrect
+    Latin-1/Windows charset, turning UTF-8 characters into mojibake before the
+    JSON parser ever sees them. Provider protocols are UTF-8, so decode the
+    raw bytes explicitly at this boundary.
+    """
+    if isinstance(raw_line, bytes):
+        return raw_line.decode("utf-8")
+    return str(raw_line)
+
+
+def parse_utf8_json_response(response):
+    """Parse a JSON response without trusting a potentially bad charset."""
+    body = getattr(response, "content", None)
+    if isinstance(body, (bytes, bytearray)):
+        return json.loads(bytes(body).decode("utf-8"))
+    return response.json()
+
+
 def extract_thinking_delta(obj: dict) -> str:
     for key in ("thinking", "reasoning", "reasoning_content", "reasoning_text"):
         value = obj.get(key)
@@ -95,7 +118,8 @@ def normalize_openai_stream_response(response, on_thinking_delta) -> dict:
     role = "assistant"
     tool_calls: dict[int, dict] = {}
 
-    for raw_line in response.iter_lines(decode_unicode=True):
+    for raw_line in response.iter_lines(decode_unicode=False):
+        raw_line = decode_utf8_stream_line(raw_line)
         if not raw_line:
             continue
         line = raw_line.strip()
