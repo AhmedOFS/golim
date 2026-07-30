@@ -19,8 +19,8 @@ from cterm.core.skill_loader import SkillsLoader
 
 logger = logging.getLogger(__name__)
 
-TOOL_DISCOVERY_ATTEMPTS = 10
-TOOL_DISCOVERY_RETRY_DELAY_SECONDS = 0.2
+RETRY_ATTEMPTS = 10
+RETRY_DELAY_SECONDS = 0.2
 
 
 class Runtime:
@@ -62,7 +62,7 @@ class Runtime:
         return str(user_message).strip()
 
     def __enter__(self):
-        self.initialize_tools()
+        self.ensure_mcp_server()
         return self
 
     def __exit__(self, *_):
@@ -93,66 +93,73 @@ class Runtime:
 
     def should_hard_cancel(self) -> bool:
         return self._hard_cancel_requested.is_set()
+    
+    def create_mcp_client(self, socket_path=None):
+        """Create the transport client without performing tool discovery."""
+        self.mcp_client = FastMCPClient(socket_path or get_socket_path())
+        return self.mcp_client
+    
+    def ensure_mcp_server(self):
+        """Wake the MCP server when needed and wait for its socket."""
+        socket_path = get_socket_path()
+        if socket_path.exists():
+            self.create_mcp_client(socket_path)
+            return socket_path
+
+        try:
+            subprocess.run(
+                ["systemctl", "--user", "start", "cterm-mcp.service"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+        except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+            # A user systemd bus is not guaranteed (notably in SSH,
+            # containers, and graphical-less sessions).  Start the same
+            # server directly as a local fallback.
+            logger.warning("systemd user service unavailable; starting MCP server directly: %s", exc)
+            subprocess.Popen(
+                [sys.executable, "-m", "cterm.mcp.server"],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+
+        for _ in range(RETRY_ATTEMPTS):
+            if socket_path.exists():
+                self.create_mcp_client(socket_path)
+                return socket_path
+            time.sleep(RETRY_DELAY_SECONDS)
+        raise TimeoutError("Tool server started but socket never became available.")
+
+
+   
 
     def initialize_tools(self) -> None:
-        socket_path = get_socket_path()
+
 
         def _try_connect():
-            if self.mcp_client is None:
-                self.mcp_client = FastMCPClient(socket_path)
-            self.tools = asyncio.run(self.mcp_client.list_tools())
 
-        def _start_service():
-            try:
-                subprocess.run(
-                    ["systemctl", "--user", "start", "cterm-mcp.service"],
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                )
-            except (subprocess.CalledProcessError, FileNotFoundError) as exc:
-                # A user systemd bus is not guaranteed (notably in SSH,
-                # containers, and graphical-less sessions).  Start the same
-                # server directly as a local fallback.
-                logger.warning("systemd user service unavailable; starting MCP server directly: %s", exc)
-                subprocess.Popen(
-                    [sys.executable, "-m", "cterm.mcp.server"],
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    start_new_session=True,
-                )
+            self.tools = asyncio.run(self.mcp_client.list_tools())
 
         try:
             _try_connect()
-        except (ConnectionRefusedError, FileNotFoundError):
-            self.close()
-            _start_service()
-            for _ in range(TOOL_DISCOVERY_ATTEMPTS):
-                time.sleep(TOOL_DISCOVERY_RETRY_DELAY_SECONDS)
-                try:
-                    self.mcp_client = FastMCPClient(socket_path)
-                    _try_connect()
-                    break
-                except (ConnectionRefusedError, FileNotFoundError):
-                    self.close()
-                    continue
-            else:
-                raise TimeoutError("Tool server started but socket never became available.")
+
         except Exception:
             self.close()
             last_error = None
-            for _ in range(TOOL_DISCOVERY_ATTEMPTS):
-                time.sleep(TOOL_DISCOVERY_RETRY_DELAY_SECONDS)
+            for _ in range(RETRY_ATTEMPTS):
+                time.sleep(RETRY_DELAY_SECONDS)
                 try:
-                    self.mcp_client = FastMCPClient(socket_path)
                     _try_connect()
                     break
                 except Exception as exc:
                     self.close()
                     last_error = exc
             else:
-                raise RuntimeError("Tool server did not return a valid tool list.") from last_error
+                raise RuntimeError("Failed to retrieve tool list.") from last_error
 
     def select_skills(self, user_message: str, ui: AgentEvents):
         loader = SkillsLoader()
@@ -201,7 +208,7 @@ class Runtime:
 
     def run_followup(self, user_message: str, *, clarification: bool = False) -> str:
         from cterm.core.agent import ToolAgent
-
+        self.ensure_mcp_server()
         text = self.followup_text(user_message)
         if not text:
             return self.result or ""
@@ -213,7 +220,7 @@ class Runtime:
         active_ui = self.ui
         if active_ui is None:
             raise RuntimeError("Runtime requires an active AgentEvents context at initialization.")
-        self.initialize_tools()
+
         # Followups retain the original prompt and its selected skill content.
         # Re-selecting here only produces duplicate "Available Skills" UI
         # output and cannot affect the already-persisted prompt.
@@ -256,6 +263,7 @@ class Runtime:
         active_ui = self.ui
         if active_ui is None:
             raise RuntimeError("Runtime requires an active AgentEvents context at initialization.")
+        self.ensure_mcp_server()
         self.initialize_tools()
         selected_skills, skills_prompt = self.select_skills(user_message, active_ui)
 

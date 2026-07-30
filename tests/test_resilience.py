@@ -65,14 +65,13 @@ class ResilienceTests(unittest.TestCase):
 
     def test_runtime_falls_back_when_user_systemd_is_unavailable(self):
         runtime = Runtime(model="main")
-        client = MagicMock()
-        client.list_tools = lambda: _async_value([MagicMock()])
-        with patch("cterm.core.runtime.FastMCPClient", side_effect=[
-            _DiscoveryFailure(ConnectionRefusedError("missing")), client,
-        ]), patch("cterm.core.runtime.subprocess.run", side_effect=subprocess_error()), \
+        socket_path = MagicMock()
+        socket_path.exists.side_effect = [False, True]
+        with patch("cterm.core.runtime.get_socket_path", return_value=socket_path), \
+             patch("cterm.core.runtime.subprocess.run", side_effect=subprocess_error()), \
              patch("cterm.core.runtime.subprocess.Popen") as popen, \
              patch("cterm.core.runtime.time.sleep"):
-            runtime.initialize_tools()
+            runtime.ensure_mcp_server()
         self.assertTrue(popen.called)
 
     def test_long_tool_termination_requires_explicit_model_schema(self):

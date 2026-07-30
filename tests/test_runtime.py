@@ -278,11 +278,24 @@ class RuntimeTests(unittest.TestCase):
             DiscoveryClient(tools),
         ]
 
-        with patch("cterm.core.runtime.FastMCPClient", side_effect=clients), \
+        with patch.object(runtime, "ensure_mcp_server", return_value="/tmp/cterm-test.sock"), \
+             patch("cterm.core.runtime.FastMCPClient", side_effect=clients), \
              patch("cterm.core.runtime.time.sleep"):
             runtime.initialize_tools()
 
         self.assertEqual(runtime.tools, tools)
+
+    
+    def test_create_mcp_client_only_constructs_transport(self):
+        runtime = Runtime(model="main")
+        client = object()
+
+        with patch("cterm.core.runtime.FastMCPClient", return_value=client) as constructor:
+            result = runtime.create_mcp_client("/tmp/cterm-test.sock")
+
+        constructor.assert_called_once_with("/tmp/cterm-test.sock")
+        self.assertIs(result, client)
+        self.assertIs(runtime.mcp_client, client)
 
     def test_initialize_tools_starts_service_then_retries_refused_socket(self):
         runtime = Runtime(model="main")
@@ -291,8 +304,12 @@ class RuntimeTests(unittest.TestCase):
             DiscoveryClient(ConnectionRefusedError("socket refused")),
             DiscoveryClient(tools),
         ]
+        socket_path = type("SocketPath", (), {})()
+        socket_states = iter([False, True, True])
+        socket_path.exists = lambda: next(socket_states)
 
-        with patch("cterm.core.runtime.FastMCPClient", side_effect=clients), \
+        with patch("cterm.core.runtime.get_socket_path", return_value=socket_path), \
+             patch("cterm.core.runtime.FastMCPClient", side_effect=clients), \
              patch("cterm.core.runtime.subprocess.run") as run_service, \
              patch("cterm.core.runtime.time.sleep"):
             runtime.initialize_tools()
