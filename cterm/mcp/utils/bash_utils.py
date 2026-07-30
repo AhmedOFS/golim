@@ -12,9 +12,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 
-from .privilege import add_privileged_binary, is_privileged_binary_allowed
-
-from .mcp_utils import _read_cterm_config
+from ..config import get_config
 
 from ..vars import (
     _BLOCKED_BINARIES,
@@ -211,7 +209,7 @@ def _build_cmd(tokens: list[str], results_ref: list, allow_privileged: bool = Fa
                 "error": f"Privileged wrapper not found: {PRIVILEGED_WRAPPER}. Run sudocterm.sh install.",
                 "results": results_ref,
             }
-        if not is_privileged_binary_allowed(resolved):
+        if not get_config().is_privileged_binary_allowed(resolved):
             if not allow_privileged:
                 return None, {
                     "ok": False,
@@ -221,7 +219,7 @@ def _build_cmd(tokens: list[str], results_ref: list, allow_privileged: bool = Fa
                     "binary": resolved,
                     "results": results_ref,
                 }
-            add_privileged_binary(resolved)
+            get_config().add_privileged_binary(resolved)
         return ["sudo", "--non-interactive", PRIVILEGED_WRAPPER, resolved] + args, None
 
     return [resolved] + args, None
@@ -331,7 +329,7 @@ def _run_pipeline(argv_list: list, cmd_str: str, timeout=None) -> dict:
 # ---------------------------------------------------------------------------
 
 def _is_bash_unrestricted() -> bool:
-    return bool(_read_cterm_config().get("attributes", {}).get("bash_unrestricted"))
+    return get_config().unrestricted_bash
 
 
 def _count_output_lines(results: list[dict]) -> int:
@@ -619,7 +617,7 @@ def _prepare_unrestricted(command: str, allow_privileged: bool) -> tuple[str | N
             continue
         if not (resolved := shutil.which(binary_token)):
             continue
-        if not is_privileged_binary_allowed(resolved):
+        if not get_config().is_privileged_binary_allowed(resolved):
             if not allow_privileged:
                 return None, {
                     "ok": False,
@@ -629,7 +627,7 @@ def _prepare_unrestricted(command: str, allow_privileged: bool) -> tuple[str | N
                     "binary": resolved,
                     "results": [],
                 }
-            add_privileged_binary(resolved)
+            get_config().add_privileged_binary(resolved)
         sudo_replacements.append((m.start(), m.end(), resolved))
 
     if sudo_replacements:

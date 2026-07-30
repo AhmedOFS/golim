@@ -14,7 +14,7 @@ from cterm.config import Config, get_config
 from cterm.api.chat_api import chat_with_model_api
 from cterm.core.mcp_client import FastMCPClient
 from cterm.core.utils import get_socket_path
-from cterm.skills_loader import SkillsLoader
+from cterm.core.skill_loader import SkillsLoader
 
 
 logger = logging.getLogger(__name__)

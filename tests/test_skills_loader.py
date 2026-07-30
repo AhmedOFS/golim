@@ -3,7 +3,7 @@ import tempfile
 from pathlib import Path
 import unittest
 
-from cterm.skills_loader import SkillsLoader
+from cterm.core.skill_loader import SkillsLoader
 
 
 class SkillsLoaderTests(unittest.TestCase):

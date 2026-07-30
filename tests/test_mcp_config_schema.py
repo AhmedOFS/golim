@@ -4,7 +4,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from cterm.mcp.utils.mcp_utils import _read_cterm_config
+from cterm.mcp.config import get_config
 
 
 class McpConfigSchemaTests(unittest.TestCase):
@@ -29,15 +29,15 @@ class McpConfigSchemaTests(unittest.TestCase):
         }
         path.write_text(json.dumps(schema))
 
-        self.assertEqual(_read_cterm_config(), schema)
-        self.assertNotIn("bash_unrestricted", _read_cterm_config().keys())
+        self.assertEqual(get_config().read(), schema)
+        self.assertNotIn("bash_unrestricted", get_config().read().keys())
 
     def test_reader_rejects_flat_config(self):
         path = Path(self.tmp.name) / "cterm" / "config.json"
         path.parent.mkdir()
         path.write_text(json.dumps({"bash_unrestricted": True}))
 
-        self.assertEqual(_read_cterm_config(), {})
+        self.assertEqual(get_config().read(), {})
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from cterm.mcp.tools import bash, read_file, _should_stream_with_pty
 from cterm.mcp.utils import bash_utils
+from cterm.mcp.vars import OUTPUT_LINE_LIMIT
 
 
 class BashParsingTests(unittest.TestCase):
@@ -128,7 +129,7 @@ class BashParsingTests(unittest.TestCase):
             }, None
 
         with patch("cterm.mcp.tools._is_bash_unrestricted", return_value=True), \
-             patch.object(bash_utils, "is_privileged_binary_allowed", return_value=True), \
+             patch.object(bash_utils.get_config(), "is_privileged_binary_allowed", return_value=True), \
              patch.object(bash_utils, "_stream_command_with_pty", fake_stream_command_with_pty):
             frames = list(bash("sudo apt install spotify", stream=True))
 
@@ -169,7 +170,7 @@ class BashParsingTests(unittest.TestCase):
         self.assertIn("not a boolean", result["error"])
 
     def test_approval_retry_exposes_only_unexecuted_chain_suffix(self):
-        with patch.object(bash_utils, "is_privileged_binary_allowed", return_value=False), \
+        with patch.object(bash_utils.get_config(), "is_privileged_binary_allowed", return_value=False), \
              patch.object(bash_utils.os.path, "isfile", return_value=True):
             result = bash("printf first && sudo echo second")
 
@@ -229,59 +230,66 @@ class BashParsingTests(unittest.TestCase):
         )
 
     def test_long_output_is_truncated_to_first_and_last_half(self):
+        line_count = OUTPUT_LINE_LIMIT + 10
+        half = OUTPUT_LINE_LIMIT // 2
         with tempfile.TemporaryDirectory() as tmp, \
              patch.dict(os.environ, {"HOME": tmp}):
-            result = bash("seq 1 60")
+            result = bash(f"seq 1 {line_count}")
 
             self.assertTrue(result["ok"], result)
             self.assertTrue(result["output_truncated"], result)
-            self.assertEqual(result["output_line_count"], 60)
-            self.assertEqual(result["output_limit"], 50)
+            self.assertEqual(result["output_line_count"], line_count)
+            self.assertEqual(result["output_limit"], OUTPUT_LINE_LIMIT)
             self.assertNotIn("output_file", result)
 
             lines = result["results"][0]["stdout"].splitlines()
-            # First 25 lines (1..25), a marker, then last 25 lines (36..60).
-            self.assertEqual(lines[:25], [str(i) for i in range(1, 26)])
-            self.assertIn("truncated", lines[25])
-            self.assertEqual(lines[26:], [str(i) for i in range(36, 61)])
+            self.assertEqual(lines[:half], [str(i) for i in range(1, half + 1)])
+            self.assertIn("truncated", lines[half])
+            self.assertEqual(lines[half + 1:], [
+                str(i) for i in range(line_count - half + 1, line_count + 1)
+            ])
 
     def test_short_output_is_not_truncated(self):
+        line_count = max(1, OUTPUT_LINE_LIMIT - 1)
         with tempfile.TemporaryDirectory() as tmp, \
              patch.dict(os.environ, {"HOME": tmp}):
-            result = bash("seq 1 30")
+            result = bash(f"seq 1 {line_count}")
 
             self.assertTrue(result["ok"], result)
             self.assertFalse(result["output_truncated"], result)
-            self.assertEqual(result["output_line_count"], 30)
+            self.assertEqual(result["output_line_count"], line_count)
             self.assertNotIn("output_file", result)
-            self.assertEqual(len(result["results"][0]["stdout"].splitlines()), 30)
+            self.assertEqual(len(result["results"][0]["stdout"].splitlines()), line_count)
 
     def test_long_find_output_is_truncated(self):
+        line_count = OUTPUT_LINE_LIMIT + 10
+        half = OUTPUT_LINE_LIMIT // 2
         with tempfile.TemporaryDirectory() as tmp, \
              patch.dict(os.environ, {"HOME": tmp}):
             root = Path(tmp) / "files"
             root.mkdir()
-            for idx in range(60):
+            for idx in range(line_count):
                 (root / f"file_{idx}.txt").write_text("x", encoding="utf-8")
 
             result = bash(f"find {root} -type f")
 
             self.assertTrue(result["ok"], result)
             self.assertTrue(result["output_truncated"], result)
-            self.assertGreaterEqual(result["output_line_count"], 60)
+            self.assertGreaterEqual(result["output_line_count"], line_count)
             self.assertNotIn("output_file", result)
 
             lines = result["results"][0]["stdout"].splitlines()
-            self.assertEqual(len(lines[:25]), 25)
-            self.assertIn("truncated", lines[25])
-            self.assertEqual(len(lines[26:]), 25)
+            self.assertEqual(len(lines[:half]), half)
+            self.assertIn("truncated", lines[half])
+            self.assertEqual(len(lines[half + 1:]), half)
 
     def test_long_du_output_is_truncated(self):
+        line_count = OUTPUT_LINE_LIMIT + 10
         with tempfile.TemporaryDirectory() as tmp, \
              patch.dict(os.environ, {"HOME": tmp}):
             root = Path(tmp) / "sizes"
             root.mkdir()
-            for idx in range(60):
+            for idx in range(line_count):
                 (root / f"file_{idx}.txt").write_text("x", encoding="utf-8")
 
             result = bash(f"du -a {root}")
@@ -291,34 +299,36 @@ class BashParsingTests(unittest.TestCase):
             self.assertNotIn("output_file", result)
 
     def test_streaming_emits_all_lines_and_truncates_final_result(self):
+        line_count = OUTPUT_LINE_LIMIT + 10
+        half = OUTPUT_LINE_LIMIT // 2
         with tempfile.TemporaryDirectory() as tmp, \
              patch.dict(os.environ, {"HOME": tmp}):
             root = Path(tmp) / "files"
             root.mkdir()
-            for idx in range(60):
+            for idx in range(line_count):
                 (root / f"file_{idx}.txt").write_text("x", encoding="utf-8")
 
             frames = list(bash(f"find {root} -type f", stream=True))
 
             stream_frames = [frame for frame in frames if frame.get("type") == "stream"]
-            # Streaming is not capped; all 60 lines are emitted live.
-            self.assertEqual(len(stream_frames), 60)
-            # The final result frame is truncated (first 25 + marker + last 25).
+            # Streaming is not capped; all lines are emitted live.
+            self.assertEqual(len(stream_frames), line_count)
             self.assertTrue(frames[-1]["output_truncated"], frames[-1])
             self.assertNotIn("output_file", frames[-1])
             result_lines = frames[-1]["results"][0]["stdout"].splitlines()
-            self.assertEqual(len(result_lines[:25]), 25)
-            self.assertIn("truncated", result_lines[25])
-            self.assertEqual(len(result_lines[26:]), 25)
+            self.assertEqual(len(result_lines[:half]), half)
+            self.assertIn("truncated", result_lines[half])
+            self.assertEqual(len(result_lines[half + 1:]), half)
 
     def test_streaming_short_output_is_not_truncated(self):
+        line_count = max(1, OUTPUT_LINE_LIMIT - 1)
         with tempfile.TemporaryDirectory() as tmp, \
              patch.dict(os.environ, {"HOME": tmp}):
-            frames = list(bash("seq 1 30", stream=True))
+            frames = list(bash(f"seq 1 {line_count}", stream=True))
 
             stream_frames = [frame for frame in frames if frame.get("type") == "stream"]
-            self.assertEqual(len(stream_frames), 30)
-            self.assertEqual(stream_frames[-1]["line"], "30")
+            self.assertEqual(len(stream_frames), line_count)
+            self.assertEqual(stream_frames[-1]["line"], str(line_count))
             self.assertFalse(frames[-1]["output_truncated"], frames[-1])
             self.assertNotIn("output_file", frames[-1])
 

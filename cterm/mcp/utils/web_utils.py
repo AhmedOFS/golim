@@ -1,8 +1,6 @@
-import os
-
 import requests
 
-from .mcp_utils import _read_cterm_config
+from ..config import get_config
 
 from ..vars import (
     EXA_MCP_URL,
@@ -101,22 +99,14 @@ def _parse_mcp_response(body: str) -> str | None:
 
 def _websearch_provider() -> str:
     """Return the configured web search provider, defaulting to 'exa'."""
-    config = _read_cterm_config()
-    provider = config.get("attributes", {}).get("websearch_provider", "exa")
-    if provider not in ("exa", "parallel"):
-        return "exa"
-    return provider
+    return get_config().websearch_provider
 
 
 def _exa_api_key() -> str | None:
     """Read Exa API key from config, then env var."""
-    config = _read_cterm_config()
-    key = config.get("attributes", {}).get("exa_api_key") or os.environ.get("EXA_API_KEY")
-    return key if key else None
+    return get_config().exa_api_key
 
 
 def _parallel_api_key() -> str | None:
     """Read Parallel API key from config, then env var."""
-    config = _read_cterm_config()
-    key = config.get("attributes", {}).get("parallel_api_key") or os.environ.get("PARALLEL_API_KEY")
-    return key if key else None
+    return get_config().parallel_api_key

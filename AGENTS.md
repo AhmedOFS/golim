@@ -14,22 +14,25 @@ The current architecture is a single action agent managed by a runtime object:
 - `cterm/core/agent_events.py`: common UI protocol consumed by `ToolAgent`. It includes status, message, tool-call, tool-output, privileged approval, Python approval/display, and thinking-trace hooks.
 - `cterm/core/mcp_client.py`: Unix-domain-socket JSON-RPC-ish client. Supports `tools/list`, `tools/call`, and streaming bash output via newline-delimited `"stream"` frames before the final result frame.
 - `cterm/core/utils.py`: shared helpers for socket paths, async bridging, output labels, thinking trace markers, final summary prompt, and Python-in-bash detection.
-- `cterm/config/config.py`: `Config` class reading/writing `~/.config/cterm/config.json` (or `$XDG_CONFIG_HOME/cterm/config.json`). Keys include `selected_model`, `small_model`, `bash_unrestricted`, `stream_thinking_traces`, `api_provider`, Ollama/OpenRouter/OpenAI-compatible model settings, `websearch_provider`, `exa_api_key`, and `parallel_api_key`.
+- `cterm/config/config.py`: client/UI `Config` class reading/writing `~/.config/cterm/config.json` (or `$XDG_CONFIG_HOME/cterm/config.json`) using nested `providers` and `attributes` objects. Runtime keys include `current_model`, `small_model`, `bash_unrestricted`, `thinking_traces`, `max_iteration_limit`, `api_provider`, `websearch_provider`, `exa_api_key`, and `parallel_api_key`.
 - `cterm/config/utils.py`: configuration helper functions used by init flows for provider setup and model selection.
 - `cterm/api/`: provider HTTP layer. `chat_api.py` dispatches based on `Config.api_provider`; `ollama.py`, `openrouter.py`, and `openai_compatible.py` implement provider calls; `utils.py` normalizes OpenAI-compatible messages/responses and streaming reasoning/tool-call chunks.
 - `cterm/mcp/server.py`: persistent MCP-like tool server over a Unix domain socket at `/tmp/cterm_mcp_{username}.sock` using `pwd.getpwuid(os.getuid()).pw_name` with `$USER` fallback. It has a 20-minute inactivity shutdown and emits newline-delimited JSON frames for streaming output.
 - `cterm/mcp/tools.py`: exposed MCP tool implementations. The registered tools are marked with `__mcp_tool__` and attached to the `mcp` object. Current exposed tool names include `finder`, `read_file`, `write_file`, `bash`, `exec` (backed by `exec_python`), `system_info`, and `websearch`. This is the source of truth; there is no `cterm/mcp/tools_mcp.py`.
 - `cterm/mcp/utils/bash_utils.py`: restricted/unrestricted bash parsing and execution helpers, including command parsing, pipelines, `&&`, glob/env expansion, streaming, PTY streaming for apt/snap-style commands, output finalization, and privileged command routing.
-- `cterm/mcp/utils/privilege.py`: shared privileged-command whitelist helpers. Default privileged binaries include `/usr/bin/apt`, `/usr/bin/apt-get`, `/usr/bin/tee`, and `/usr/bin/snap`. The whitelist path is `~/.config/cterm/privileged_whitelist`, overridable with `CTERM_PRIVILEGED_WHITELIST`.
+- `cterm/mcp/config.py`: MCP configuration singleton and privileged-command whitelist state. It reads the nested cterm config, exposes MCP attributes and web-search credentials, and owns whitelist reads/updates. The whitelist path is `~/.config/cterm/privileged_whitelist`, overridable with `CTERM_PRIVILEGED_WHITELIST`.
+- `cterm/mcp/vars.py`: MCP constants including `OUTPUT_LINE_LIMIT = 200`, file page size, wrapper path, parser restrictions, web-search endpoints, and server timeout.
 - `cterm/mcp/utils/web_utils.py`: Exa/Parallel web search helpers. Provider is selected by `websearch_provider`, defaulting to Exa. API keys come from config or `EXA_API_KEY` / `PARALLEL_API_KEY`.
 - `cterm/ui/basic/basic.py`: plain terminal UI used by one-shot chat mode. It owns terminal spinner output, tool rendering, thinking traces, approval prompts, and result formatting.
-- `cterm/ui/tui/tui.py`: default Textual interface. It renders a transcript, pending live tool output, expandable/collapsible thinking traces, approval prompts, prompt history, followups, interrupt handling, and prompt placeholder hints. It reuses one `Runtime` across TUI runs so followup context survives, but refreshes `Runtime.ui` for each worker run because each run has a new run id and cancellation event.
-- `cterm/ui/tui/config_tui.py`: Textual configuration wizard used by `cterm -i` / `cterm -init`.
-- `cterm/ui/tui/history.py`: prompt history helper for the TUI.
+- `cterm/ui/tui/app/app_tui.py`: default Textual interface. It renders a transcript, pending live tool output, expandable/collapsible thinking traces, approval prompts, prompt history, followups, interrupt handling, and prompt placeholder hints. It reuses one `Runtime` across TUI runs so followup context survives, but refreshes `Runtime.ui` for each worker run because each run has a new run id and cancellation event.
+- `cterm/ui/tui/app/agent_events_handler.py`: adapts `AgentEvents` to Textual rendering and writes visible progress through `TranscriptWriter`.
+- `cterm/ui/tui/app/transcript_writer.py`: creates and owns transcript files under `~/cterm/transcripts/`; diagnostic logs remain separate under `~/cterm/logs/`.
+- `cterm/ui/tui/config/config_tui.py`: Textual configuration wizard used by `cterm -i` / `cterm -init`.
+- `cterm/ui/tui/app/history.py`: prompt history helper for the TUI.
 - `cterm/ui/basic/basic_config.py`: older/basic configuration helpers kept for non-Textual-style flows.
 - `cterm/packaging/cterm-mcp.service`: systemd user service unit (`Type=simple`, `Restart=on-failure`) installed under `/usr/lib/systemd/user/`.
 - `cterm/packaging/sudocterm.sh`: installs/removes the privileged wrapper, sudoers file, and initial user-owned whitelist.
-- `cterm/skills_loader/`: markdown skill loading, strict skill selection, and prompt rendering.
+- `cterm/core/skill_loader.py`: markdown skill loading, strict skill selection, and prompt rendering.
 - `cterm/skills/`: built-in skill markdown files. Each skill must have non-empty `## When to use` and `## Skill` sections or the loader ignores it. Current skill files have empty `## Skill` sections, so they are not active until content is added.
 - `tests/`: stdlib `unittest` coverage for orchestration/runtime, skills, bash parsing, finder, exec, MCP client, tool approval, websearch, CLI/TUI entry behavior, provider thinking-stream normalization, thinking-trace UI/agent behavior, and TUI tool output rendering.
 
@@ -39,6 +42,8 @@ Removed or stale paths from older revisions:
 - There is no `cterm/config.py`; use `cterm/config/config.py` via `from cterm.config import Config`.
 - There is no `cterm/cterm_server.py`; use `cterm/mcp/server.py`.
 - There is no `cterm/mcp/tools_mcp.py`; use `cterm/mcp/tools.py`.
+- There is no `cterm/skills_loader/`; use `cterm/core/skill_loader.py`.
+- There is no `cterm/mcp/utils/mcp_utils.py` or `cterm/mcp/utils/privilege.py`; use the singleton in `cterm/mcp/config.py`.
 - There is no current `cterm/task_tool.py`, `create_new_task`, `_verify_history`, or `_build_worker_handoff` path.
 - There is no `cterm/llm_utils/`; current API and MCP helpers live under `cterm/api/` and `cterm/core/`.
 
@@ -66,6 +71,8 @@ python3 -m unittest tests.test_main_tui
 python3 -m unittest tests.test_tui_tool_outputs
 python3 -m unittest tests.test_chat_api_streaming
 python3 -m unittest tests.test_thinking_traces
+python3 -m unittest tests.test_transcript_writer
+python3 -m unittest tests.test_mcp_config_schema
 ```
 
 Useful manual CLI checks:
@@ -82,12 +89,12 @@ python3 -m cterm
 ## Architecture Rules
 
 - Preserve the current single-agent `ToolAgent` loop unless intentionally reworking orchestration. There is no separate planner, worker, delegation, or verifier layer.
-- `Runtime` is the owner of MCP client lifecycle, tool discovery, skill selection, interrupt state, and cross-run context for followups. Keep TUI-specific event handling in `cterm/ui/tui/tui.py`; keep model/tool-loop behavior in `cterm/core/agent.py`.
+- `Runtime` is the owner of MCP client lifecycle, tool discovery, skill selection, interrupt state, and cross-run context for followups. Keep Textual-specific event handling in `cterm/ui/tui/app/app_tui.py` and `cterm/ui/tui/app/agent_events_handler.py`; keep model/tool-loop behavior in `cterm/core/agent.py`.
 - Followups are part of the observable TUI behavior. A prompt beginning with `//` after a completed run should preserve previous `Runtime.messages` and `Runtime.execution_history` and append a `followup: ...` user message. A `//` prompt while a run is busy should queue a pending followup, interrupt the active run via `Runtime.interrupt()`, and continue with `clarification: ...`.
 - The TUI reuses one `Runtime` for context, but each worker run must refresh `Runtime.ui` to the current `TUIAgentEventsHandler` instance. Otherwise later runs can be treated as stale/cancelled by the old run id.
-- Diagnostic output is written to the per-run log files and is never rendered by either UI. When changing orchestration logging, update tests intentionally. Existing event names include legacy `planner_skills_selected` even though there is no planner.
+- Diagnostic output is written to per-run files under `~/cterm/logs/` and is never rendered by either UI. Visible transcript output is written separately by `TranscriptWriter` under `~/cterm/transcripts/`. When changing orchestration logging, update tests intentionally. Existing event names include legacy `planner_skills_selected` even though there is no planner.
 - Keep MCP server responses newline-delimited JSON. Streaming tool calls send zero or more `"stream"` frames followed by one final `"result"` frame.
-- Thinking traces are controlled by `Config.stream_thinking_traces`; keep config, `ToolAgent._chat_with_optional_thinking`, provider stream parsing, and both UI implementations in sync when changing this behavior.
+- Thinking traces are controlled by the client/UI `Config.stream_thinking_traces` property, backed by the `thinking_traces` attribute; keep config, `ToolAgent._chat_with_optional_thinking`, provider stream parsing, and both UI implementations in sync when changing this behavior.
 - Provider support is abstracted in `chat_with_model_api` in `cterm/api/chat_api.py`, dispatching to Ollama, OpenRouter, or OpenAI-compatible based on `Config.api_provider`. Keep `__main__.py` provider-specific model selection and `Config` keys in sync when changing provider setup.
 - For OpenRouter and OpenAI-compatible providers, preserve `normalize_messages_for_openai`, `normalize_openai_response`, and `normalize_openai_stream_response` semantics when changing tool calls, tool-result history, or streaming thinking traces. Streamed tool-call argument chunks must be reassembled before the response reaches `ToolAgent`.
 - Socket path logic exists in multiple places. `cterm/mcp/server.py` uses UID/pwd lookup; `cterm/core/utils.py` is used by the client/runtime. Keep them compatible when changing.
@@ -116,8 +123,8 @@ python3 -m cterm
 - Unrestricted mode runs commands through `/bin/bash -c` with normal shell syntax when `bash_unrestricted` is true. Before execution, unrestricted mode scans common `sudo <binary>` forms and returns `approval_required` when the resolved binary is not whitelisted.
 - Restricted and unrestricted paths both scan `_BLOCKED_BINARIES`; it is currently empty. Add entries intentionally with tests.
 - apt/snap-style privileged commands use PTY streaming where needed so commands that detect a TTY behave correctly.
-- For long `find` and `du` bash output only, visible output is capped at 50 lines and longer full result payloads are saved under `~/cterm/data/`, falling back to `/tmp/cterm/data/` if needed. Other commands keep full inline output unless changed intentionally.
-- Any change to parsing, return-code handling, streaming, timeout handling, output-file persistence, unrestricted mode, PTY behavior, or privileged routing needs focused coverage in `tests/test_bash_parsing.py`.
+- Bash final result output is capped at the current `cterm/mcp/vars.py:OUTPUT_LINE_LIMIT` (currently 200) lines, preserving the first and last halves with a truncation marker. Streaming frames remain uncapped; the final result is truncated inline and no output file is created by the current implementation.
+- Any change to parsing, return-code handling, streaming, timeout handling, output finalization, unrestricted mode, PTY behavior, or privileged routing needs focused coverage in `tests/test_bash_parsing.py`.
 - The test suite should not require root, package installation, external services, or real desktop mutation.
 
 ## Service and Privilege Notes
@@ -126,7 +133,7 @@ python3 -m cterm
 - The server has a 20-minute inactivity timeout and removes its socket on shutdown.
 - `cterm/packaging/sudocterm.sh` installs/removes the privileged wrapper, sudoers file, and initial user-owned whitelist at the cterm config path.
 - `cterm/packaging/cterm-mcp.service` is the systemd user service unit.
-- Privileged whitelist helpers live in `cterm/mcp/utils/privilege.py`.
+- Privileged whitelist state lives in the singleton in `cterm/mcp/config.py`.
 - The client owns user interaction for adding whitelist entries. The MCP service owns whitelist mutation and command execution after approval. The root-side wrapper checks the same whitelist again.
 - Avoid changing privileged command behavior unless the MCP check, wrapper check, tests, and docs are all updated together.
 
