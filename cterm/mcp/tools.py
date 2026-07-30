@@ -4,8 +4,15 @@ import os
 import subprocess
 import sys
 
-from .utils.bash_utils import (
+from .vars import (
+    EXA_MCP_URL,
+    MAX_NUM_RESULTS,
+    NO_RESULTS,
     OUTPUT_LINE_LIMIT,
+    PARALLEL_MCP_URL,
+    READ_FILE_PAGE_SIZE,
+)
+from .utils.bash_utils import (
     _is_bash_unrestricted,
     _requires_pty_streaming,
     _run_restricted,
@@ -14,10 +21,6 @@ from .utils.bash_utils import (
     _stream_unrestricted,
 )
 from .utils.web_utils import (
-    EXA_MCP_URL,
-    MAX_NUM_RESULTS,
-    NO_RESULTS,
-    PARALLEL_MCP_URL,
     _exa_api_key,
     _parallel_api_key,
     _websearch_mcp_call,
@@ -305,11 +308,11 @@ def finder(
 @tool
 def read_file(path: str, page: int = 1) -> dict:
     """
-    Reads one 50-line page from a file.
+    Reads one page from a file.
 
     Args:
         path: File path to read.
-        page: 1-based page number. Each page returns up to 50 lines.
+        page: 1-based page number. Each page returns up to READ_FILE_PAGE_SIZE (200) lines.
     """
     if not os.path.isfile(path):
         return {"ok": False, "error": f"File not found: {path}"}
@@ -321,7 +324,7 @@ def read_file(path: str, page: int = 1) -> dict:
         with open(path, "r", encoding="utf-8") as f:
             lines = f.read().splitlines()
 
-        page_size = OUTPUT_LINE_LIMIT
+        page_size = READ_FILE_PAGE_SIZE
         total_lines = len(lines)
         total_pages = max(1, (total_lines + page_size - 1) // page_size)
         start = (page - 1) * page_size

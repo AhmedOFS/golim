@@ -16,14 +16,15 @@ from .privilege import add_privileged_binary, is_privileged_binary_allowed
 
 from .mcp_utils import _read_cterm_config
 
-
-OUTPUT_LINE_LIMIT = 50
-PRIVILEGED_WRAPPER = "/usr/lib/cterm/cterm-privileged"
-FORBIDDEN_CHARS = set("><`\\'()")
-_BLOCKED_BINARIES = {}
-
-_PTY_BINARIES = {"apt", "apt-get", "snap"}
-_COMMAND_SEPARATORS = ("&&", "||", "|", ";", "&", "(", ")")
+from ..vars import (
+    _BLOCKED_BINARIES,
+    _COMMAND_SEPARATORS,
+    _PTY_BINARIES,
+    FORBIDDEN_CHARS,
+    OUTPUT_LINE_LIMIT,
+    PRIVILEGED_WRAPPER,
+    READ_FILE_PAGE_SIZE,
+)
 
 
 @dataclass(frozen=True)

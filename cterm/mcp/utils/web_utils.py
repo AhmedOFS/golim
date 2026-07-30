@@ -4,12 +4,13 @@ import requests
 
 from .mcp_utils import _read_cterm_config
 
-
-EXA_MCP_URL = "https://mcp.exa.ai/mcp"
-PARALLEL_MCP_URL = "https://search.parallel.ai/mcp"
-MAX_NUM_RESULTS = 20
-MAX_RESPONSE_BYTES = 256 * 1024
-NO_RESULTS = "No search results found. Please try a different query."
+from ..vars import (
+    EXA_MCP_URL,
+    MAX_NUM_RESULTS,
+    MAX_RESPONSE_BYTES,
+    NO_RESULTS,
+    PARALLEL_MCP_URL,
+)
 
 
 def _websearch_mcp_call(url: str, tool: str, args: dict, headers: dict | None = None) -> tuple[str | None, str | None]:

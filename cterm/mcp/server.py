@@ -15,11 +15,9 @@ from pathlib import Path
 import pwd
 
 from cterm.mcp.tools import mcp
+from cterm.mcp.vars import INACTIVITY_TIMEOUT_SECONDS
 
 logger = logging.getLogger(__name__)
-
-# 20 minutes of inactivity
-INACTIVITY_TIMEOUT_SECONDS = 1200
 
 def get_socket_path() -> Path:
     """Returns the UDS path based on the current user (using UID for robustness)."""

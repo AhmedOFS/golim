@@ -322,22 +322,22 @@ class BashParsingTests(unittest.TestCase):
             self.assertFalse(frames[-1]["output_truncated"], frames[-1])
             self.assertNotIn("output_file", frames[-1])
 
-    def test_read_file_returns_50_line_pages(self):
+    def test_read_file_returns_200_line_pages(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "sample.txt"
-            path.write_text("\n".join(str(i) for i in range(1, 121)), encoding="utf-8")
+            path.write_text("\n".join(str(i) for i in range(1, 421)), encoding="utf-8")
 
             result = read_file(str(path), page=2)
 
             self.assertTrue(result["ok"], result)
             self.assertEqual(result["page"], 2)
-            self.assertEqual(result["page_size"], 50)
-            self.assertEqual(result["total_lines"], 120)
+            self.assertEqual(result["page_size"], 200)
+            self.assertEqual(result["total_lines"], 420)
             self.assertEqual(result["total_pages"], 3)
             self.assertTrue(result["has_next_page"])
             self.assertEqual(result["next_page"], 3)
-            self.assertEqual(result["content"].splitlines()[0], "51")
-            self.assertEqual(result["content"].splitlines()[-1], "100")
+            self.assertEqual(result["content"].splitlines()[0], "201")
+            self.assertEqual(result["content"].splitlines()[-1], "400")
 
 
 if __name__ == "__main__":
