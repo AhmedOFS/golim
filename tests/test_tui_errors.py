@@ -5,7 +5,7 @@ from importlib.util import find_spec
 @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
 class TuiErrorRenderingTests(unittest.TestCase):
     def test_error_result_uses_error_text_not_markdown(self):
-        from cterm.ui.tui.app.tui import CtermApp
+        from cterm.ui.tui.app.app_tui import CtermApp
         from cterm.ui.tui.tui_style import STYLE_ERROR
 
         app = CtermApp("model", model="main")

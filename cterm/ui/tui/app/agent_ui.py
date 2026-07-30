@@ -42,6 +42,12 @@ def _sanitize_stream_text(text: str) -> str:
     return _CONTROL_RE.sub("", text)
 
 
+def _clean_output_lines(text: str) -> list[str]:
+    """Return captured shell output without terminal control sequences."""
+    clean = _sanitize_stream_text(str(text).rstrip("\n"))
+    return clean.splitlines() if clean else []
+
+
 def _format_nested(value, indent: int = 2) -> list[str]:
     lines: list[str] = []
     pad = " " * indent
@@ -291,17 +297,17 @@ class TextualAgentUI(AgentUI):
                         continue
                     stdout = entry.get("stdout")
                     if stdout:
-                        combined.extend(_resolve_carriage_returns(str(stdout).rstrip("\n")).splitlines())
+                        combined.extend(_clean_output_lines(stdout))
                     stderr = entry.get("stderr")
                     if stderr:
-                        combined.extend(_resolve_carriage_returns(str(stderr).rstrip("\n")).splitlines())
+                        combined.extend(_clean_output_lines(stderr))
             else:
                 stdout = result.get("stdout")
                 if stdout:
-                    combined.extend(_resolve_carriage_returns(str(stdout).rstrip("\n")).splitlines())
+                    combined.extend(_clean_output_lines(stdout))
                 stderr = result.get("stderr")
                 if stderr:
-                    combined.extend(_resolve_carriage_returns(str(stderr).rstrip("\n")).splitlines())
+                    combined.extend(_clean_output_lines(stderr))
 
         if not combined:
             for fd_name in ("stdout", "stderr"):
@@ -370,16 +376,17 @@ class TextualAgentUI(AgentUI):
                 continue
             stdout = entry.get("stdout")
             if stdout:
-                self._emit_capped(_resolve_carriage_returns(str(stdout).rstrip("\n")))
+                self._emit_capped(_sanitize_stream_text(stdout))
             stderr = entry.get("stderr")
             if stderr:
-                self._emit_capped(_resolve_carriage_returns(str(stderr).rstrip("\n")))
+                self._emit_capped(_sanitize_stream_text(stderr))
 
     def _emit_capped(self, text: str) -> None:
         lines = text.splitlines() or [text]
         self._emit_capped_lines(lines)
 
     def _emit_capped_lines(self, lines: list[str]) -> None:
+        lines = [clean for line in lines if (clean := _sanitize_stream_text(line))]
         if len(lines) <= MAX_TOOL_OUTPUT_LINES:
             for line in lines:
                 self._emit(line, STYLE_TOOL_OUTPUT)

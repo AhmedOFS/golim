@@ -28,7 +28,7 @@ class MainTuiTests(unittest.TestCase):
 
     @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
     def test_debug_logging_is_written_to_tui_transcript(self):
-        from cterm.ui.tui.app.tui import CtermApp
+        from cterm.ui.tui.app.app_tui import CtermApp
 
         app = CtermApp("model", model="main", debug=True)
         written = []
@@ -46,7 +46,7 @@ class MainTuiTests(unittest.TestCase):
 
     @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
     def test_reused_tui_runtime_refreshes_ui(self):
-        from cterm.ui.tui.app.tui import CtermApp
+        from cterm.ui.tui.app.app_tui import CtermApp
 
         first_ui = object()
         second_ui = object()
@@ -60,7 +60,7 @@ class MainTuiTests(unittest.TestCase):
 
     @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
     def test_tui_prompt_placeholder_changes_with_state(self):
-        from cterm.ui.tui.app.tui import CtermApp
+        from cterm.ui.tui.app.app_tui import CtermApp
         from cterm.ui.tui.app.widgets.prompt_line import (
             DONE_PROMPT_PLACEHOLDER,
             INITIAL_PROMPT_PLACEHOLDER,
@@ -123,7 +123,7 @@ class MainTuiTests(unittest.TestCase):
 
     @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
     def test_config_reload_updates_model_and_discards_runtime(self):
-        from cterm.ui.tui.app.tui import CtermApp
+        from cterm.ui.tui.app.app_tui import CtermApp
         from cterm.ui.tui.app.widgets.footer import Footer
 
         class FakeFooter:
@@ -170,7 +170,7 @@ class MainTuiTests(unittest.TestCase):
 
     @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
     def test_tab_opens_main_menu_while_prompt_is_focused(self):
-        from cterm.ui.tui.app.tui import CtermApp
+        from cterm.ui.tui.app.app_tui import CtermApp
 
         async def run_case():
             config = MagicMock()
@@ -191,7 +191,7 @@ class MainTuiTests(unittest.TestCase):
 
     @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
     def test_model_menu_arrow_keys_move_between_search_and_results(self):
-        from cterm.ui.tui.app.tui import CtermApp
+        from cterm.ui.tui.app.app_tui import CtermApp
 
         async def run_case():
             config = MagicMock()

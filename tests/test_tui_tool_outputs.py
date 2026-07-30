@@ -128,6 +128,27 @@ class TextualToolOutputTests(unittest.TestCase):
         self.assertEqual(app.lines, [("$ sudo snap install example", "bold #f3f3f3"), ("", "#f3f3f3")])
         self.assertTrue(app.discarded_pending)
 
+    def test_final_streamed_bash_result_does_not_reemit_terminal_controls(self):
+        ui, app = self.make_ui()
+        ui.tool_call("bash", {"command": "sudo snap remove example"})
+        ui.handle_tool_output(fd="stdout", line="progress", end="\n")
+        ui.handle_tool_output(result={
+            "ok": True,
+            "results": [{
+                "stdout": (
+                    "first line\nsecond line\n"
+                    "\033[0m\033[?25h\033[Kexample removed\n"
+                ),
+                "stderr": "",
+                "returncode": 0,
+            }],
+        })
+
+        summary, detail = app.expandables[-1]
+        self.assertNotIn("\033", _plain(summary))
+        self.assertNotIn("\033", _plain(detail))
+        self.assertIn("example removed", _plain(summary))
+
     def test_exec_tool_displays_code_with_running_script_title(self):
         ui, app = self.make_ui()
         ui.tool_call("exec", {"code": "print('hello')\nprint('world')"})

@@ -115,7 +115,7 @@ def _create_tui_log():
 def tui_command(binary: str = "ollama", debug: bool = False) -> int:
     """Open the default Textual interface."""
     init_config()
-    from .ui.tui.app.tui import CtermApp
+    from .ui.tui.app.app_tui import CtermApp
 
     config = get_config()
     provider = config.api_provider
