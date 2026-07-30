@@ -8,13 +8,13 @@ import sys
 from pathlib import Path
 from . import __version__
 from .config import Config, get_config, init_config
-from .logger import setup_root_logger
+from .logger import setup_root_logger, start_run_logging
 from .core.agent_ui import active_agent_ui
 from .core.runtime import Runtime
 from .ui.basic.basic import TerminalUI
 
 def _setup_session_log():
-    log_dir = Path.home() / "cterm" / "logs"
+    log_dir = Path.home() / "cterm" / "transcripts"
     log_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     log_path = log_dir / f"cterm_{timestamp}.log"
@@ -47,8 +47,11 @@ def chat_command(message: str, binary: str = "ollama", debug: bool = False) -> i
         return 1
 
     log_file, log_path, real_stderr = _setup_session_log()
+    run_logging = start_run_logging(log_path)
     try:
         ui = TerminalUI(model=model, binary=binary, small_model=small_model, debug=debug)
+        if debug:
+            ui.enable_debug_logging()
         token = active_agent_ui.set(ui)
         try:
             response = ui.run(message)
@@ -65,6 +68,9 @@ def chat_command(message: str, binary: str = "ollama", debug: bool = False) -> i
         print(f"Error: {e}", file=sys.stderr)
         return 1
     finally:
+        if "ui" in locals() and debug:
+            ui.disable_debug_logging()
+        run_logging.close()
         sys.stderr = real_stderr
         log_file.close()
         print(f"\n\033[2m(log: {log_path})\033[0m", file=sys.stderr)
@@ -99,7 +105,7 @@ def _resolve_chat_settings(binary: str = "ollama") -> tuple[str | None, str | No
 
 
 def _create_tui_log():
-    log_dir = Path.home() / "cterm" / "logs"
+    log_dir = Path.home() / "cterm" / "transcripts"
     log_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     log_path = log_dir / f"cterm_{timestamp}.log"

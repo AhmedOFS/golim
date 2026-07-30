@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import ctypes
-import json
 import re
 import threading
 from dataclasses import dataclass
@@ -11,6 +10,7 @@ from rich.syntax import Syntax
 from rich.text import Text
 
 from cterm.core.agent_ui import AgentUI
+from cterm.logger import log_diagnostic_section
 
 from cterm.ui.tui.tui_style import (
     STYLE_DIM,
@@ -113,36 +113,38 @@ class TextualAgentUI(AgentUI):
         self._stream_buffers: dict[str, list[str]] = {}
         self._current_tool: str | None = None
         self._code_shown_for_approval = False
-        self._log_file = None
+        self._transcript_file = None
 
-    def set_log_file(self, log_file) -> None:
-        self._log_file = log_file
+    def set_transcript_file(self, transcript_file) -> None:
+        self._transcript_file = transcript_file
 
-    def _write_log(self, text: str) -> None:
-        if self._log_file is None:
+    def _write_transcript(self, text: str, end: str = "\n") -> None:
+        if self._transcript_file is None:
             return
         try:
-            self._log_file.write(text)
-            if not text.endswith("\n"):
-                self._log_file.write("\n")
-            self._log_file.flush()
+            suffix = end if end in ("\n", "") else "\n"
+            self._transcript_file.write(f"{text}{suffix}")
+            self._transcript_file.flush()
         except Exception:
             pass
 
-    def _log_json_section(self, title: str, payload) -> None:
-        try:
-            body = json.dumps(payload, ensure_ascii=False, indent=2, default=str)
-        except TypeError:
-            body = repr(payload)
-        self._write_log(f"\n## {title}\n{body}\n")
+    def log_tool_call(self, tool_name, args):
+        log_diagnostic_section(f"tool_call {tool_name}", args or {})
 
-    def _log_text_section(self, title: str, text: str) -> None:
-        self._write_log(f"\n## {title}\n{text}\n")
+    def log_tool_result(self, tool_name, result):
+        log_diagnostic_section(f"tool_result {tool_name}", result)
 
-    def _log_stream_line(self, tool_name: str, fd: str, line: str, end: str) -> None:
-        clean = _sanitize_stream_text(str(line))
-        suffix = end if end in ("\n", "") else "\n"
-        self._write_log(f"[{tool_name} {fd}] {clean}{suffix}")
+    def log_tool_output(self, tool_name, fd, line, end="\n"):
+        log_diagnostic_section(
+            f"tool_output {tool_name} {fd}",
+            f"{line}{end}",
+        )
+
+    def log_thinking_trace(self, text):
+        log_diagnostic_section("thinking_trace", str(text or ""))
+
+    def log_summary(self, text):
+        log_diagnostic_section("summary", str(text or ""))
 
     def is_cancelled(self) -> bool:
         return self.cancel_event.is_set() or not self.app.is_run_active(self.run_id)
@@ -153,17 +155,21 @@ class TextualAgentUI(AgentUI):
 
     def _emit(self, text: str, style: str = STYLE_TEXT) -> None:
         self._ensure_active()
-        self.app.call_from_thread(self.app.append_line, text, style)
+        clean = _ANSI_RE.sub("", str(text))
+        self._write_transcript(clean)
+        self.app.call_from_thread(self.app.append_line, clean, style)
 
     def _reset_stream_state(self) -> None:
         self._last_stream.clear()
         self._stream_buffers.clear()
 
-    def _show_stream(self, fd: str, text: str, style: str) -> None:
+    def _show_stream(self, fd: str, text: str, style: str, end: str = "\n") -> None:
         self._ensure_active()
         text = _sanitize_stream_text(text)
         if not text:
             return
+        suffix = end if end in ("\n", "") else "\n"
+        self._write_transcript(f"[{self._current_tool} {fd}] {text}{suffix}", end="")
         self._stream_buffers.setdefault(fd, []).append(text)
         renderable = Text(text, style=style)
         self._last_stream[fd] = (renderable, style)
@@ -205,7 +211,7 @@ class TextualAgentUI(AgentUI):
         full_text = str(text or self._thinking_buffer).strip()
         self._thinking_buffer = ""
         if full_text:
-            self._log_text_section("thinking_trace", full_text)
+            self._write_transcript(f"▶ THINKING: {full_text}")
             self.app.call_from_thread(self.app.append_thinking_trace, full_text)
 
     def update_spinner(self, message):
@@ -224,12 +230,13 @@ class TextualAgentUI(AgentUI):
         self._reset_stream_state()
         self._current_tool = tool_name
         self._code_shown_for_approval = False
-        self._log_json_section(f"tool_call {tool_name}", args or {})
         if tool_name == "bash":
             self._emit(f"$ {args.get('command', '')}", STYLE_TOOL)
         elif tool_name in ("exec_python", "exec"):
             code = args.get("code") or args.get("script") or args.get("source") or ""
             self._ensure_active()
+            self._write_transcript("» running script")
+            self._write_transcript(code, end="" if str(code).endswith("\n") else "\n")
             self.app.call_from_thread(self.app.append_code, "» running script", code)
             self._code_shown_for_approval = True
         elif tool_name == "finder":
@@ -252,8 +259,6 @@ class TextualAgentUI(AgentUI):
 
     def handle_tool_output(self, fd=None, line="", end="\n", result=None):
         if result is not None:
-            if self._current_tool:
-                self._log_json_section(f"tool_result {self._current_tool}", result)
             if self._current_tool == "bash":
                 self._last_stream.clear()
                 self._ensure_active()
@@ -274,9 +279,7 @@ class TextualAgentUI(AgentUI):
         if fd is None:
             return
 
-        if self._current_tool:
-            self._log_stream_line(self._current_tool, fd, str(line), end)
-        self._show_stream(fd, str(line), STYLE_TOOL_OUTPUT)
+        self._show_stream(fd, str(line), STYLE_TOOL_OUTPUT, end=end)
 
     def _emit_bash_result_output(self, result) -> None:
         combined: list[str] = []
@@ -333,6 +336,7 @@ class TextualAgentUI(AgentUI):
         data = {k: v for k, v in result.items() if k != "ok"}
         summary = Text("✓ Done", style=STYLE_SUCCESS)
         detail_lines = [Text("✓ Done", style=STYLE_SUCCESS)]
+        self._write_transcript("✓ Done")
         for key, value in data.items():
             if isinstance(value, (dict, list)) and value:
                 detail_lines.append(Text(f"  {key}:", style=STYLE_SUCCESS))
@@ -348,6 +352,7 @@ class TextualAgentUI(AgentUI):
         count = result.get("total", 0)
         summary = Text(f"✓ {count} matches", style=STYLE_SUCCESS)
         detail_lines = [Text(f"✓ {count} matches", style=STYLE_SUCCESS)]
+        self._write_transcript(f"✓ {count} matches")
         for match in result.get("matches", []):
             detail_lines.append(Text(f"  {match}", style=STYLE_SUCCESS))
         self.app.call_from_thread(
@@ -357,9 +362,6 @@ class TextualAgentUI(AgentUI):
     def handle_shell_result_output(self, result):
         if not isinstance(result, dict):
             return
-        if self._current_tool:
-            self._log_json_section(f"tool_result {self._current_tool}", result)
-
         for fd_name in ("stdout", "stderr"):
             self._commit_stream(fd_name)
 
@@ -384,6 +386,9 @@ class TextualAgentUI(AgentUI):
             return
 
         self._ensure_active()
+        self._write_transcript("…")
+        for line in lines[-MAX_TOOL_OUTPUT_LINES:]:
+            self._write_transcript(line)
         summary_lines = [Text("…", style=STYLE_TOOL_OUTPUT)]
         summary_lines.extend(
             Text(line, style=STYLE_TOOL_OUTPUT) for line in lines[-MAX_TOOL_OUTPUT_LINES:]

@@ -13,6 +13,8 @@ class Spinner:
         self._idx = 0
         self._lock = threading.Lock()
         self._is_tty = sys.stderr.isatty()
+        self._above_line = ""
+        self._replace_above_line = False
 
     def _clear_line(self):
         sys.stderr.write("\r\033[K" if self._is_tty else "\r")
@@ -50,6 +52,7 @@ class Spinner:
             self.message = message
 
     def write_above(self, text, end="\n"):
+        text = str(text)
         if not self.reserve_above or not self._is_tty:
             sys.stderr.write(text + end)
             sys.stderr.flush()
@@ -58,10 +61,26 @@ class Spinner:
         with self._lock:
             self._clear_line()
             sys.stderr.write("\033[1A\r\033[K")
+
+            if self._replace_above_line:
+                self._above_line = ""
+
+            combined = self._above_line + text
             if end == "\r":
-                sys.stderr.write(text)
-                sys.stderr.write("\033[1B\r")
+                rendered = combined
+                self._above_line = ""
+                self._replace_above_line = True
             else:
-                sys.stderr.write(text + "\n")
+                rendered = combined + end
+                last_newline = rendered.rfind("\n")
+                self._above_line = rendered[last_newline + 1:] if last_newline >= 0 else rendered
+                self._replace_above_line = False
+
+            sys.stderr.write(rendered)
+            if rendered.endswith("\n"):
+                # Keep a fresh output line above the spinner so the next
+                # write does not erase the line just completed.
+                sys.stderr.write("\033[1L")
+            sys.stderr.write("\033[1B\r")
             self._draw_locked()
             sys.stderr.flush()

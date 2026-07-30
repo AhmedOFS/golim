@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import logging
 import shutil
 import threading
 from typing import Callable
@@ -56,6 +57,7 @@ from cterm.ui.tui.app.widgets.prompt_line import PromptLine
 from cterm.ui.tui.config.widgets.config_panel import ConfigPanel
 from cterm.ui.tui.menu.widgets import MenuPanel
 from cterm.config.utils import get_configured_model_choices
+from cterm.logger import start_run_logging
 
 from cterm.ui.tui.app.agent_ui import (
     _ANSI_RE,
@@ -65,6 +67,23 @@ from cterm.ui.tui.app.agent_ui import (
     RunCancelled,
     TextualAgentUI,
 )
+
+
+class _TranscriptLogHandler(logging.Handler):
+    def __init__(self, app):
+        super().__init__()
+        self._app = app
+
+    def emit(self, record):
+        try:
+            self._app.call_from_thread(
+                self._app.append_line,
+                self.format(record),
+                STYLE_TEXT,
+            )
+        except Exception:
+            self.handleError(record)
+
 
 class CtermApp(ConfigUIMixin, App[int]):
 
@@ -365,6 +384,41 @@ class CtermApp(ConfigUIMixin, App[int]):
         self._menu_page = "main"
         self._menu_labels: list[str] = []
         self._menu_choices: dict[str, tuple[str, str]] = {}
+        self._debug_handler = None
+        self._debug_previous_handlers = None
+        self._debug_previous_level = None
+
+    def _enable_debug_logging(self) -> None:
+        if not self.cterm_debug or self._debug_handler is not None:
+            return
+
+        root = logging.getLogger()
+        handler = _TranscriptLogHandler(self)
+        handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
+        self._debug_previous_handlers = [
+            existing for existing in root.handlers
+            if not getattr(existing, "_cterm_run_log", False)
+        ]
+        self._debug_previous_level = root.level
+        for existing in self._debug_previous_handlers:
+            root.removeHandler(existing)
+        root.addHandler(handler)
+        root.setLevel(logging.DEBUG)
+        self._debug_handler = handler
+
+    def _disable_debug_logging(self) -> None:
+        if self._debug_handler is None:
+            return
+
+        root = logging.getLogger()
+        root.removeHandler(self._debug_handler)
+        for previous in self._debug_previous_handlers or []:
+            root.addHandler(previous)
+        if self._debug_previous_level is not None:
+            root.setLevel(self._debug_previous_level)
+        self._debug_handler = None
+        self._debug_previous_handlers = None
+        self._debug_previous_level = None
 
     def _get_runtime(self, ui: AgentUI | None = None) -> Runtime | None:
         if self._model is None:
@@ -427,6 +481,7 @@ class CtermApp(ConfigUIMixin, App[int]):
         self.screen.set_class(dark, "-pitch-black")
 
     def on_mount(self) -> None:
+        self._enable_debug_logging()
         self.query_one("#query_bar", QueryBar).display = False
         self.update_prompt_placeholder()
         self.query_one(PromptLine).focus_input()
@@ -435,6 +490,7 @@ class CtermApp(ConfigUIMixin, App[int]):
         self._apply_dark_mode(self._config.dark_mode)
 
     def on_unmount(self) -> None:
+        self._disable_debug_logging()
         if self._runtime is not None:
             self._runtime.terminate()
 
@@ -947,10 +1003,12 @@ class CtermApp(ConfigUIMixin, App[int]):
         ui = TextualAgentUI(self, run_id, cancel_event)
         log_file = None
         log_path = None
+        run_logging = None
         try:
             if self.log_factory is not None:
                 log_file, log_path = self.log_factory()
-                ui.set_log_file(log_file)
+                run_logging = start_run_logging(log_path)
+                ui.set_transcript_file(log_file)
                 log_file.write(f"prompt: {message}\n")
 
             if self._runtime_error:
@@ -999,13 +1057,15 @@ class CtermApp(ConfigUIMixin, App[int]):
                 self.call_from_thread(self.append_markdown, result.text, result.ok)
                 self._has_completed_query = True
             if result.log_path:
-                self.call_from_thread(self.append_line, f"(log: {result.log_path})", STYLE_DIM)
+                self.call_from_thread(self.append_line, f"(transcript: {result.log_path})", STYLE_DIM)
         except RunCancelled:
             return
         except Exception as exc:
             if self.is_run_active(run_id):
                 self.call_from_thread(self.append_line, f"Error: {exc}", STYLE_ERROR)
         finally:
+            if run_logging is not None:
+                run_logging.close()
             if log_file is not None:
                 log_file.flush()
                 log_file.close()

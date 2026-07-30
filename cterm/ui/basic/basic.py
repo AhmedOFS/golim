@@ -1,13 +1,28 @@
 """Thin terminal UI layer for cterm client output."""
 
 import sys
+import logging
 from typing import Any, Protocol
 
 from cterm.core.agent_ui import AgentUI
 from cterm.config import Config, get_config
 from cterm.core.runtime import Runtime
 from cterm.core.utils import _clip_label
+from cterm.logger import log_diagnostic_section
 from cterm.ui.basic.spinner import Spinner
+
+
+class _SpinnerLogHandler(logging.Handler):
+    def __init__(self, ui):
+        super().__init__()
+        self._ui = ui
+
+    def emit(self, record):
+        try:
+            self._ui._write_output(self.format(record))
+        except Exception:
+            self.handleError(record)
+
 
 class TerminalUI(AgentUI):
     def __init__(
@@ -26,6 +41,9 @@ class TerminalUI(AgentUI):
         self._debug = debug
         self._spinner = None
         self._thinking_live = False
+        self._debug_handler = None
+        self._debug_previous_handlers = None
+        self._debug_previous_level = None
 
     def run(self, message: str) -> str:
         with Runtime(
@@ -49,52 +67,101 @@ class TerminalUI(AgentUI):
             self._spinner.stop()
             self._spinner = None
 
-    def message(self, text):
-        sys.stderr.write(f"{text}\n")
+    def enable_debug_logging(self):
+        if self._debug_handler is not None:
+            return
+
+        root = logging.getLogger()
+        handler = _SpinnerLogHandler(self)
+        handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
+        self._debug_previous_handlers = [
+            existing for existing in root.handlers
+            if not getattr(existing, "_cterm_run_log", False)
+        ]
+        self._debug_previous_level = root.level
+        for existing in self._debug_previous_handlers:
+            root.removeHandler(existing)
+        root.addHandler(handler)
+        root.setLevel(logging.DEBUG)
+        self._debug_handler = handler
+
+    def disable_debug_logging(self):
+        if self._debug_handler is None:
+            return
+
+        root = logging.getLogger()
+        root.removeHandler(self._debug_handler)
+        for previous in self._debug_previous_handlers or []:
+            root.addHandler(previous)
+        if self._debug_previous_level is not None:
+            root.setLevel(self._debug_previous_level)
+        self._debug_handler = None
+        self._debug_previous_handlers = None
+        self._debug_previous_level = None
+
+    def log_tool_call(self, tool_name, args):
+        log_diagnostic_section(f"tool_call {tool_name}", args or {})
+
+    def log_tool_result(self, tool_name, result):
+        log_diagnostic_section(f"tool_result {tool_name}", result)
+
+    def log_tool_output(self, tool_name, fd, line, end="\n"):
+        log_diagnostic_section(
+            f"tool_output {tool_name} {fd}",
+            f"{line}{end}",
+        )
+
+    def log_thinking_trace(self, text):
+        log_diagnostic_section("thinking_trace", str(text or ""))
+
+    def log_summary(self, text):
+        log_diagnostic_section("summary", str(text or ""))
+
+    def _write_output(self, text, end="\n"):
+        if self._spinner:
+            self._spinner.write_above(str(text), end=end)
+            return
+        sys.stderr.write(str(text) + end)
         sys.stderr.flush()
+
+    def message(self, text):
+        self._write_output(text)
 
     def thinking_trace_delta(self, text):
         if not text:
             return
+        if not self._thinking_live and self._spinner:
+            self.stop_spinner()
         prefix = "THINKING: " if not self._thinking_live else ""
         self._thinking_live = True
-        if self._spinner:
-            self._spinner.write_above(f"\033[38;5;248m{prefix}{text}\033[0m", end="")
-        else:
-            sys.stderr.write(f"\033[38;5;248m{prefix}{text}\033[0m")
-            sys.stderr.flush()
+        self._write_output(f"\033[38;5;248m{prefix}{text}\033[0m", end="")
 
     def thinking_trace_complete(self, text):
         if not text:
             return
         if self._thinking_live:
-            sys.stderr.write("\n")
-        collapsed = " ".join(str(text).split())
-        sys.stderr.write(f"\033[38;5;248m▶ THINKING: {_clip_label(collapsed, 120)}\033[0m\n")
-        sys.stderr.flush()
+            self._write_output("")
         self._thinking_live = False
 
 
     def tool_call(self, tool_name, args):
         if tool_name == "bash":
             label = _clip_label(args.get("command", ""), 120)
-            sys.stderr.write(f"$ {label}\n")
+            self._write_output(f"$ {label}")
         elif tool_name in ("exec_python", "exec"):
             code = args.get("code") or args.get("script") or args.get("source") or ""
             first_line = code.strip().split("\n")[0] if code else ""
-            sys.stderr.write(f"exec: {_clip_label(first_line, 80)}\n")
+            self._write_output(f"exec: {_clip_label(first_line, 80)}")
         else:
             formatted = self._format_tool_call(tool_name, args)
-            sys.stderr.write(f"{formatted}\n")
-        sys.stderr.flush()
+            self._write_output(formatted)
 
     def handle_tool_output(self, fd=None, line="", end="\n", result=None):
         if result is not None:
             formatted = self._format_tool_result(result)
             if formatted:
-                sys.stderr.write(f"{formatted}\n")
-            sys.stderr.write("\n")
-            sys.stderr.flush()
+                self._write_output(formatted)
+            self._write_output("")
         elif fd is not None and self._spinner:
             output = f"\033[33m{line}\033[0m" if fd == "stderr" else line
             self._spinner.write_above(output, end=end)
@@ -108,16 +175,15 @@ class TerminalUI(AgentUI):
                 continue
             stdout = entry.get("stdout")
             if stdout:
-                sys.stderr.write(str(stdout))
-                if not str(stdout).endswith("\n"):
-                    sys.stderr.write("\n")
+                stdout = str(stdout)
+                self._write_output(stdout, end="" if stdout.endswith("\n") else "\n")
             stderr = entry.get("stderr")
             if stderr:
                 text = str(stderr)
-                sys.stderr.write(f"\033[33m{text}\033[0m")
-                if not text.endswith("\n"):
-                    sys.stderr.write("\n")
-        sys.stderr.flush()
+                self._write_output(
+                    f"\033[33m{text}\033[0m",
+                    end="" if text.endswith("\n") else "\n",
+                )
 
     def approve_privileged_binary(self, binary):
     

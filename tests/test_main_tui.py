@@ -1,5 +1,6 @@
 import unittest
 import asyncio
+import logging
 from importlib.util import find_spec
 from unittest.mock import MagicMock, patch
 
@@ -24,6 +25,24 @@ class MainTuiTests(unittest.TestCase):
         self.assertEqual(result, 0)
         chat.assert_called_once_with("hello there", "ollama", debug=False)
         tui.assert_not_called()
+
+    @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
+    def test_debug_logging_is_written_to_tui_transcript(self):
+        from cterm.ui.tui.app.tui import CtermApp
+
+        app = CtermApp("model", model="main", debug=True)
+        written = []
+        app.append_line = lambda text, style: written.append((text, style))
+        app.call_from_thread = lambda func, *args: func(*args)
+        logger = logging.getLogger("tests.main_tui.debug")
+
+        app._enable_debug_logging()
+        try:
+            logger.debug("agent iteration=%s", 3)
+        finally:
+            app._disable_debug_logging()
+
+        self.assertEqual(written, [("DEBUG: agent iteration=3", "#f3f3f3")])
 
     @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
     def test_reused_tui_runtime_refreshes_ui(self):

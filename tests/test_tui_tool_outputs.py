@@ -1,4 +1,5 @@
 import threading
+import logging
 import unittest
 from io import StringIO
 from importlib.util import find_spec
@@ -133,34 +134,61 @@ class TextualToolOutputTests(unittest.TestCase):
 
         self.assertEqual(app.codes, [("» running script", "print('hello')\nprint('world')")])
 
+    def test_tui_transcript_records_visible_progress(self):
+        ui, _ = self.make_ui()
+        transcript = StringIO()
+        ui.set_transcript_file(transcript)
+
+        ui.message("Available Skills: Filesystem_Operations")
+        ui.message("\033[32m✓\033[0m Filesystem_Operations")
+        ui.tool_call("bash", {"command": "seq 1 4"})
+        ui.handle_tool_output(fd="stdout", line="live output", end="\n")
+        ui.handle_tool_output(result={
+            "ok": True,
+            "results": [{"stdout": "1\n2\n3\n4", "stderr": ""}],
+        })
+        ui.thinking_trace_complete("inspect the current system")
+
+        text = transcript.getvalue()
+        self.assertIn("Available Skills: Filesystem_Operations", text)
+        self.assertIn("✓ Filesystem_Operations", text)
+        self.assertIn("$ seq 1 4", text)
+        self.assertIn("[bash stdout] live output", text)
+        self.assertIn("…\n3\n4", text)
+        self.assertIn("▶ THINKING: inspect the current system", text)
+
     def test_tui_log_records_full_tool_output_and_thinking_trace(self):
         ui, _ = self.make_ui()
         log = StringIO()
-        ui.set_log_file(log)
+        from cterm.logger import DIAGNOSTIC_LOGGER
 
-        ui.tool_call("bash", {"command": "seq 1 3"})
-        ui.handle_tool_output(fd="stdout", line="1", end="\n")
-        ui.handle_tool_output(fd="stdout", line="2", end="\n")
-        ui.handle_tool_output(fd="stdout", line="3", end="\n")
-        ui.handle_tool_output(result={
-            "ok": True,
-            "results": [{
-                "command": "seq 1 3",
-                "stdout": "1\n2\n3",
-                "stderr": "",
-                "returncode": 0,
-            }],
-        })
-        ui.thinking_trace_complete("first line\nsecond line")
+        handler = logging.StreamHandler(log)
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        DIAGNOSTIC_LOGGER.addHandler(handler)
+        DIAGNOSTIC_LOGGER.setLevel(logging.DEBUG)
+
+        try:
+            ui.log_tool_call("bash", {"command": "seq 1 3"})
+            ui.log_tool_result("bash", {
+                "ok": True,
+                "results": [{
+                    "command": "seq 1 3",
+                    "stdout": "1\n2\n3",
+                    "stderr": "",
+                    "returncode": 0,
+                }],
+            })
+            ui.log_tool_output("bash", "stdout", "full streamed line")
+            ui.log_thinking_trace("first line\nsecond line")
+        finally:
+            DIAGNOSTIC_LOGGER.removeHandler(handler)
 
         text = log.getvalue()
         self.assertIn("## tool_call bash", text)
         self.assertIn('"command": "seq 1 3"', text)
-        self.assertIn("[bash stdout] 1\n", text)
-        self.assertIn("[bash stdout] 2\n", text)
-        self.assertIn("[bash stdout] 3\n", text)
         self.assertIn("## tool_result bash", text)
         self.assertIn('"stdout": "1\\n2\\n3"', text)
+        self.assertIn("full streamed line", text)
         self.assertIn("## thinking_trace\nfirst line\nsecond line", text)
 
 

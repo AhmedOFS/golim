@@ -1,7 +1,7 @@
 """Centralized constants for the cterm MCP package."""
 
 # bash_utils
-OUTPUT_LINE_LIMIT = 50
+OUTPUT_LINE_LIMIT = 200
 READ_FILE_PAGE_SIZE = 200
 PRIVILEGED_WRAPPER = "/usr/lib/cterm/cterm-privileged"
 FORBIDDEN_CHARS = set("><`\\'()")

@@ -82,6 +82,11 @@ class ToolAgent:
         suffix = f" {details}" if details else ""
         logger.debug("orchestration event=%s%s", event, suffix)
 
+    def _ui_log(self, method, *args):
+        callback = getattr(self.ui, method, None)
+        if callback is not None:
+            callback(*args)
+
     def _build_execution_summary(self, tool_history):
         if not tool_history:
             return "No tools have been used yet."
@@ -260,6 +265,7 @@ class ToolAgent:
         finally:
             if thinking_parts:
                 self._last_thinking_trace = "".join(thinking_parts)
+                self._ui_log("log_thinking_trace", self._last_thinking_trace)
                 self.ui.thinking_trace_complete(self._last_thinking_trace)
 
         if not self._last_thinking_trace and isinstance(response, dict):
@@ -398,6 +404,7 @@ class ToolAgent:
         retry_command = tool_result.get("retry_command")
         if retry_command:
             retry_args["command"] = retry_command
+        self._ui_log("log_tool_call", tool_name, retry_args)
         self.ui.tool_call(tool_name, retry_args)
         retried_result = self._call_tool_with_spinner(label, call_once, retry_args)
         if retry_command and isinstance(retried_result, dict):
@@ -423,11 +430,13 @@ class ToolAgent:
         is_exec = tool_name in ("exec_python", "exec")
         shell_stream_seen = False
         streamed_output = []
+        self._ui_log("log_tool_call", tool_name, args)
 
         def _on_shell_stream(fd, line, end="\n"):
             nonlocal shell_stream_seen
             shell_stream_seen = True
             streamed_output.append(str(line) + end)
+            self._ui_log("log_tool_output", tool_name, fd, line, end)
             self.ui.handle_tool_output(fd=fd, line=line, end=end)
 
         def _call_once(call_args):
@@ -442,6 +451,7 @@ class ToolAgent:
 
         label, tool_result = self._prepare_tool_call(tool_name, args, is_shell, is_exec)
         if tool_result is not None:
+            self._ui_log("log_tool_result", tool_name, tool_result)
             self._debug_tool_result(tool_name, args, tool_result)
             return tool_result
 
@@ -468,6 +478,7 @@ class ToolAgent:
                 self.ui.handle_shell_result_output(tool_result)
 
         self._debug_tool_result(tool_name, args, tool_result)
+        self._ui_log("log_tool_result", tool_name, tool_result)
         return tool_result
 
     def _reset_run_state(self):
@@ -565,6 +576,7 @@ class ToolAgent:
         return self.result
 
     def _debug_final_answer(self, content):
+        self._ui_log("log_summary", content)
         self._debug_agent_response(content)
         self._debug_orchestration("agent_final_answer", chars=len(content))
 
@@ -654,11 +666,6 @@ class ToolAgent:
         try:
             self._reset_run_state()
             selected_skills = selected_skills or []
-            self._debug_orchestration(
-                "planner_skills_selected",
-                skills=[s.name for s in selected_skills],
-            )
-
             system_prompt = system_prompt or self._agent_system_prompt(skills_prompt)
             self.system_prompt = system_prompt
             if initial_messages:
