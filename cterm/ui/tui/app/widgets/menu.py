@@ -1,21 +1,13 @@
-"""Standalone Tab-menu view; this is intentionally not a config wizard."""
-
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.widgets import Input, OptionList, Static
 from textual.widgets.option_list import Option
 
-from .main_menu import MainMenu
-from .model_selection import ModelSelection
-from .settings import SettingsMenu
-
 
 class MenuPanel(Vertical):
-    """Application menu with independent model-picker and settings pages."""
-
     def compose(self) -> ComposeResult:
-        yield MainMenu(id="menu_title")
+        yield Static(id="menu_title")
         yield Input(id="menu_input", classes="hidden")
         yield OptionList(id="menu_options")
         yield Static("↑/↓ move • Enter select • Esc close", id="menu_hint")
@@ -46,6 +38,3 @@ class MenuPanel(Vertical):
         options_widget.clear_options()
         options_widget.add_options(Option(label) for label in labels)
         options_widget.highlighted = 0 if labels else None
-
-    def title_widget(self, kind: str) -> type[Static]:
-        return {"main": MainMenu, "models": ModelSelection, "settings": SettingsMenu}[kind]

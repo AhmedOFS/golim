@@ -4,6 +4,8 @@ import unittest
 from io import StringIO
 from importlib.util import find_spec
 
+from cterm.ui.tui.app.transcript_writer import TranscriptWriter
+
 
 def _plain(renderable):
     if hasattr(renderable, "plain"):
@@ -15,7 +17,7 @@ def _plain(renderable):
 
 @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
 class TextualToolOutputTests(unittest.TestCase):
-    def make_ui(self):
+    def make_ui(self, transcript=None):
         from cterm.ui.tui.app.agent_events_handler import TUIAgentEventsHandler
 
         class FakeApp:
@@ -55,7 +57,7 @@ class TextualToolOutputTests(unittest.TestCase):
                 pass
 
         app = FakeApp()
-        ui = TUIAgentEventsHandler(app, 1, threading.Event())
+        ui = TUIAgentEventsHandler(app, 1, threading.Event(), transcript=transcript)
         return ui, app
 
     def test_system_info_done_expands_to_formatted_data(self):
@@ -156,9 +158,9 @@ class TextualToolOutputTests(unittest.TestCase):
         self.assertEqual(app.codes, [("» running script", "print('hello')\nprint('world')")])
 
     def test_tui_transcript_records_visible_progress(self):
-        ui, _ = self.make_ui()
-        transcript = StringIO()
-        ui.set_transcript_file(transcript)
+        transcript_file = StringIO()
+        tw = TranscriptWriter(transcript_file)
+        ui, _ = self.make_ui(transcript=tw)
 
         ui.message("Available Skills: Filesystem_Operations")
         ui.message("\033[32m✓\033[0m Filesystem_Operations")
@@ -170,7 +172,7 @@ class TextualToolOutputTests(unittest.TestCase):
         })
         ui.thinking_complete("inspect the current system")
 
-        text = transcript.getvalue()
+        text = transcript_file.getvalue()
         self.assertIn("Available Skills: Filesystem_Operations", text)
         self.assertIn("✓ Filesystem_Operations", text)
         self.assertIn("$ seq 1 4", text)

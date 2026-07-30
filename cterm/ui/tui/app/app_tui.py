@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 import shutil
 import threading
-from typing import Callable
 from rich.console import RenderableType
 from rich.markdown import Markdown
 from rich.syntax import Syntax
@@ -54,10 +53,11 @@ from cterm.ui.tui.app.widgets.query_bar import QueryBar
 from cterm.ui.tui.app.widgets.footer import Footer
 from cterm.ui.tui.app.widgets.prompt_line import PromptLine
 from cterm.ui.tui.config.widgets.config_panel import ConfigPanel
-from cterm.ui.tui.menu.widgets import MenuPanel
+from cterm.ui.tui.app.widgets.menu import MenuPanel
 from cterm.config.utils import get_configured_model_choices
 from cterm.logger import start_run_logging
 
+from cterm.ui.tui.app.transcript_writer import TranscriptWriter
 from cterm.ui.tui.app.agent_events_handler import (
     _ANSI_RE,
     _raise_in_thread,
@@ -334,7 +334,6 @@ class CtermApp(ConfigUIMixin, App[int]):
         binary: str = "ollama",
         small_model: str | None = None,
         runtime_error: str | None = None,
-        log_factory: Callable[[], tuple[object, object]] | None = None,
     ):
         super().__init__()
         self._config = config or get_config()
@@ -342,7 +341,6 @@ class CtermApp(ConfigUIMixin, App[int]):
         self._binary = binary
         self._small_model = small_model
         self._runtime_error = runtime_error
-        self.log_factory = log_factory
         self._runtime: Runtime | None = None
         self.model_label = model_label
         self._busy = False
@@ -942,20 +940,18 @@ class CtermApp(ConfigUIMixin, App[int]):
     ) -> None:
         self._chat_thread_id = threading.get_ident()
         cancel_event = self._active_cancel_event or threading.Event()
-        ui = TUIAgentEventsHandler(self, run_id, cancel_event)
-        log_file = None
+        transcript = None
         log_path = None
         run_logging = None
         try:
-            if self.log_factory is not None:
-                log_file, log_path = self.log_factory()
-                run_logging = start_run_logging(log_path)
-                ui.set_transcript_file(log_file)
-                log_file.write(f"prompt: {message}\n")
+            transcript = TranscriptWriter()
+            log_path = transcript.path
+            run_logging = start_run_logging(log_path) if log_path is not None else None
+            transcript.write(f"prompt: {message}")
+            ui = TUIAgentEventsHandler(self, run_id, cancel_event, transcript=transcript)
 
             if self._runtime_error:
-                if log_file is not None:
-                    log_file.write(f"error: {self._runtime_error}\n")
+                transcript.write(f"error: {self._runtime_error}")
                 result = ChatResult(False, self._runtime_error, str(log_path) if log_path else None)
             else:
                 token = active_agent_events_handler.set(ui)
@@ -963,8 +959,7 @@ class CtermApp(ConfigUIMixin, App[int]):
                     runtime = self._get_runtime(ui)
                     if runtime is None:
                         error = "Error: runtime is not available"
-                        if log_file is not None:
-                            log_file.write(f"error: {error}\n")
+                        transcript.write(f"error: {error}")
                         result = ChatResult(False, error, str(log_path) if log_path else None)
                     else:
                         current_message = message
@@ -984,8 +979,7 @@ class CtermApp(ConfigUIMixin, App[int]):
                             current_message, current_clarification = pending
                             self.call_from_thread(self.append_followup_query, current_message)
                             current_followup = True
-                        if log_file is not None:
-                            log_file.write(f"\nresponse: {response}\n")
+                        transcript.write(f"\nresponse: {response}")
                         ok = not str(response).startswith("Error:")
                         result = ChatResult(ok, response, str(log_path) if log_path else None)
                 finally:
@@ -1008,9 +1002,8 @@ class CtermApp(ConfigUIMixin, App[int]):
         finally:
             if run_logging is not None:
                 run_logging.close()
-            if log_file is not None:
-                log_file.flush()
-                log_file.close()
+            if transcript is not None:
+                transcript.close()
             if self._active_run_id == run_id:
                 self._chat_thread_id = None
                 self._chat_worker = None

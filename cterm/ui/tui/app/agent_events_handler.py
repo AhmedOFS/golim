@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+from io import StringIO
 import re
 import threading
 from dataclasses import dataclass
@@ -10,6 +11,7 @@ from rich.syntax import Syntax
 from rich.text import Text
 
 from cterm.core.agent_events import AgentEvents
+from cterm.ui.tui.app.transcript_writer import TranscriptWriter
 from cterm.ui.tui.tui_style import (
     STYLE_DIM,
     STYLE_ERROR,
@@ -107,30 +109,19 @@ MAX_EXPANDED_OUTPUT_LINES = 20
 class TUIAgentEventsHandler(AgentEvents):
     """Adapter used by ToolAgent to render progress inside the Textual app."""
 
-    def __init__(self, app, run_id: int, cancel_event: threading.Event):
+    def __init__(self, app, run_id: int, cancel_event: threading.Event, transcript: TranscriptWriter | None = None):
         self.app = app
         self.run_id = run_id
         self.cancel_event = cancel_event
+        # The app supplies the file-owning writer.  Keep direct handler use
+        # (including tests) side-effect free when no transcript is supplied.
+        self.transcript = transcript or TranscriptWriter(StringIO())
         self._spinner_message = ""
         self._thinking_buffer = ""
         self._last_stream: dict[str, tuple[Text, str]] = {}
         self._stream_buffers: dict[str, list[str]] = {}
         self._current_tool: str | None = None
         self._code_shown_for_approval = False
-        self._transcript_file = None
-
-    def set_transcript_file(self, transcript_file) -> None:
-        self._transcript_file = transcript_file
-
-    def _write_transcript(self, text: str, end: str = "\n") -> None:
-        if self._transcript_file is None:
-            return
-        try:
-            suffix = end if end in ("\n", "") else "\n"
-            self._transcript_file.write(f"{text}{suffix}")
-            self._transcript_file.flush()
-        except Exception:
-            pass
 
     def is_cancelled(self) -> bool:
         return self.cancel_event.is_set() or not self.app.is_run_active(self.run_id)
@@ -142,7 +133,7 @@ class TUIAgentEventsHandler(AgentEvents):
     def _emit(self, text: str, style: str = STYLE_TEXT) -> None:
         self._ensure_active()
         clean = _ANSI_RE.sub("", str(text))
-        self._write_transcript(clean)
+        self.transcript.write(clean)
         self.app.call_from_thread(self.app.append_line, clean, style)
 
     def _reset_stream_state(self) -> None:
@@ -155,7 +146,7 @@ class TUIAgentEventsHandler(AgentEvents):
         if not text:
             return
         suffix = end if end in ("\n", "") else "\n"
-        self._write_transcript(f"[{self._current_tool} {fd}] {text}{suffix}", end="")
+        self.transcript.write(f"[{self._current_tool} {fd}] {text}{suffix}", end="")
         self._stream_buffers.setdefault(fd, []).append(text)
         renderable = Text(text, style=style)
         self._last_stream[fd] = (renderable, style)
@@ -197,7 +188,7 @@ class TUIAgentEventsHandler(AgentEvents):
         full_text = str(text or self._thinking_buffer).strip()
         self._thinking_buffer = ""
         if full_text:
-            self._write_transcript(f"▶ THINKING: {full_text}")
+            self.transcript.write(f"▶ THINKING: {full_text}")
             self.app.call_from_thread(self.app.append_thinking_trace, full_text)
 
     def status(self, message):
@@ -221,8 +212,8 @@ class TUIAgentEventsHandler(AgentEvents):
         elif tool_name in ("exec_python", "exec"):
             code = args.get("code") or args.get("script") or args.get("source") or ""
             self._ensure_active()
-            self._write_transcript("» running script")
-            self._write_transcript(code, end="" if str(code).endswith("\n") else "\n")
+            self.transcript.write("» running script")
+            self.transcript.write(code, end="" if str(code).endswith("\n") else "\n")
             self.app.call_from_thread(self.app.append_code, "» running script", code)
             self._code_shown_for_approval = True
         elif tool_name == "finder":
@@ -322,7 +313,7 @@ class TUIAgentEventsHandler(AgentEvents):
         data = {k: v for k, v in result.items() if k != "ok"}
         summary = Text("✓ Done", style=STYLE_SUCCESS)
         detail_lines = [Text("✓ Done", style=STYLE_SUCCESS)]
-        self._write_transcript("✓ Done")
+        self.transcript.write("✓ Done")
         for key, value in data.items():
             if isinstance(value, (dict, list)) and value:
                 detail_lines.append(Text(f"  {key}:", style=STYLE_SUCCESS))
@@ -338,7 +329,7 @@ class TUIAgentEventsHandler(AgentEvents):
         count = result.get("total", 0)
         summary = Text(f"✓ {count} matches", style=STYLE_SUCCESS)
         detail_lines = [Text(f"✓ {count} matches", style=STYLE_SUCCESS)]
-        self._write_transcript(f"✓ {count} matches")
+        self.transcript.write(f"✓ {count} matches")
         for match in result.get("matches", []):
             detail_lines.append(Text(f"  {match}", style=STYLE_SUCCESS))
         self.app.call_from_thread(
@@ -373,9 +364,9 @@ class TUIAgentEventsHandler(AgentEvents):
             return
 
         self._ensure_active()
-        self._write_transcript("…")
+        self.transcript.write("…")
         for line in lines[-MAX_TOOL_OUTPUT_LINES:]:
-            self._write_transcript(line)
+            self.transcript.write(line)
         summary_lines = [Text("…", style=STYLE_TOOL_OUTPUT)]
         summary_lines.extend(
             Text(line, style=STYLE_TOOL_OUTPUT) for line in lines[-MAX_TOOL_OUTPUT_LINES:]

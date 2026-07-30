@@ -1,24 +1,19 @@
 #!/usr/bin/env python3
 """cterm - Main entry point"""
 import argparse
-import datetime
 import re
 import shutil
 import sys
-from pathlib import Path
 from . import __version__
 from .config import Config, get_config, init_config
 from .logger import setup_root_logger, start_run_logging
 from .core.agent_events import active_agent_events_handler
 from .core.runtime import Runtime
 from .ui.basic.basic import TerminalUI
+from .ui.tui.app.transcript_writer import TranscriptWriter
 
 def _setup_session_log():
-    log_dir = Path.home() / "cterm" / "transcripts"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_path = log_dir / f"cterm_{timestamp}.log"
-    log_file = open(log_path, "w", encoding="utf-8")
+    transcript = TranscriptWriter()
     _ansi_strip = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
     real_stderr = sys.stderr
 
@@ -27,16 +22,15 @@ def _setup_session_log():
             real_stderr.write(text)
             real_stderr.flush()
             if "\n" in text:
-                log_file.write(_ansi_strip.sub("", text))
-                log_file.flush()
+                transcript.write(_ansi_strip.sub("", text), end="")
         def flush(self):
             real_stderr.flush()
-            log_file.flush()
+            transcript.flush()
         def isatty(self):
             return real_stderr.isatty()
 
     sys.stderr = _Tee()
-    return log_file, log_path, real_stderr
+    return transcript, transcript.path, real_stderr
 
 def chat_command(message: str, binary: str = "ollama") -> int:
     """Send a message to the configured model."""
@@ -46,7 +40,7 @@ def chat_command(message: str, binary: str = "ollama") -> int:
         print(error)
         return 1
 
-    log_file, log_path, real_stderr = _setup_session_log()
+    transcript, log_path, real_stderr = _setup_session_log()
     run_logging = start_run_logging(log_path)
     try:
         ui = TerminalUI(model=model, binary=binary, small_model=small_model)
@@ -55,8 +49,7 @@ def chat_command(message: str, binary: str = "ollama") -> int:
             response = ui.run(message)
         finally:
             active_agent_events_handler.reset(token)
-        log_file.write(f"\nresponse: {response}\n")
-        log_file.flush()
+        transcript.write(f"\nresponse: {response}")
         print(response)
         return 0
     except KeyboardInterrupt:
@@ -68,7 +61,7 @@ def chat_command(message: str, binary: str = "ollama") -> int:
     finally:
         run_logging.close()
         sys.stderr = real_stderr
-        log_file.close()
+        transcript.close()
         print(f"\n\033[2m(log: {log_path})\033[0m", file=sys.stderr)
 
 
@@ -100,14 +93,6 @@ def _resolve_chat_settings(binary: str = "ollama") -> tuple[str | None, str | No
     return None, model, small_model
 
 
-def _create_tui_log():
-    log_dir = Path.home() / "cterm" / "transcripts"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_path = log_dir / f"cterm_{timestamp}.log"
-    return open(log_path, "w", encoding="utf-8"), log_path
-
-
 def tui_command(binary: str = "ollama") -> int:
     """Open the default Textual interface."""
     init_config()
@@ -132,7 +117,6 @@ def tui_command(binary: str = "ollama") -> int:
             binary=binary,
             small_model=small_model,
             runtime_error=error,
-            log_factory=_create_tui_log,
         ).run()
         return int(result or 0)
     except ImportError as exc:
