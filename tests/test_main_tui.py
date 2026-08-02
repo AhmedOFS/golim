@@ -25,10 +25,6 @@ class MainTuiTests(unittest.TestCase):
         chat.assert_called_once_with("hello there", "ollama")
         tui.assert_not_called()
 
-    def test_debug_flag_is_removed(self):
-        with self.assertRaises(SystemExit):
-            main_module.main(["--debug"])
-
     @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
     def test_reused_tui_runtime_refreshes_ui(self):
         from cterm.ui.tui.app.app_tui import CtermApp

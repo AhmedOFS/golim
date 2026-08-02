@@ -84,7 +84,7 @@ python3 -m cterm "your prompt"
 python3 -m cterm
 ```
 
-`tests/streaming.py` and `tests/real_cterm_prompts.py` are integration/smoke scripts. They can start the user systemd service, call real model APIs, run desktop commands, or install/remove software. Do not treat them as routine unit tests.
+The repository intentionally contains only deterministic unit tests; live prompt and desktop-mutation smoke scripts are not part of the test suite.
 
 ## Architecture Rules
 
@@ -175,5 +175,4 @@ Note: the current skill files have empty `## Skill` sections, so they are ignore
 ## Files to Avoid Treating as Source of Truth
 
 - Captured run logs such as `test_results.txt`, `new-logs.txt`, and ad hoc log files are diagnostic history only.
-- `tests/real_cterm_prompts.py` records real prompt behavior and writes log files. Do not run it casually.
-- `tests/streaming.py` is an integration/smoke script, not a routine unit test.
+- Live integration scripts are intentionally not kept in the repository because they can invoke real model APIs, systemd, or desktop mutations.

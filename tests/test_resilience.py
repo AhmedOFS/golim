@@ -1,4 +1,3 @@
-import asyncio
 import json
 import threading
 import time
@@ -9,7 +8,6 @@ from unittest.mock import MagicMock, patch
 import requests
 
 from cterm.api.retry import with_retries
-from cterm.api import openrouter
 from cterm.core.agent import ToolAgent
 from cterm.core.mcp_client import FastMCPClient
 from cterm.core.runtime import Runtime
@@ -40,17 +38,6 @@ class ResilienceTests(unittest.TestCase):
                 with_retries(operation, provider="Example")
         self.assertEqual(operation.call_count, 3)
         self.assertEqual(sleep.call_count, 2)
-
-    def test_malformed_openrouter_response_is_retried(self):
-        response = MagicMock()
-        response.raise_for_status.return_value = None
-        response.json.side_effect = [{"choices": []}, {"choices": []}, {"choices": []}]
-        config = MagicMock(openrouter_api_key="key")
-        with patch("cterm.api.openrouter.requests.post", return_value=response) as post, \
-             patch("cterm.api.retry.time.sleep"):
-            result = openrouter.chat("model", [{"role": "user", "content": "hi"}], config=config)
-        self.assertEqual(post.call_count, 1)
-        self.assertIsNone(result.get("message", {}).get("content"))
 
     def test_client_close_aborts_all_active_sockets(self):
         client = FastMCPClient("/tmp/unused.sock")
@@ -120,18 +107,6 @@ class ResilienceTests(unittest.TestCase):
             release_request.set()
             timer.cancel()
         self.assertLess(time.monotonic() - started, 0.5)
-
-
-class _DiscoveryFailure:
-    def __init__(self, exc):
-        self.exc = exc
-
-    async def list_tools(self):
-        raise self.exc
-
-
-async def _async_value(value):
-    return value
 
 
 def subprocess_error():

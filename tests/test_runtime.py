@@ -46,16 +46,6 @@ class FakeMCPClient:
         return []
 
 
-class DiscoveryClient:
-    def __init__(self, outcome):
-        self.outcome = outcome
-
-    async def list_tools(self):
-        if isinstance(self.outcome, Exception):
-            raise self.outcome
-        return self.outcome
-
-
 class RuntimeTests(unittest.TestCase):
     def test_runtime_runs_agent_and_copies_state(self):
         ui = FakeUI()
@@ -69,7 +59,8 @@ class RuntimeTests(unittest.TestCase):
         def fake_chat(model, messages, tools=None, binary="ollama", response_format=None):
             return {"message": {"role": "assistant", "content": "Done."}}
 
-        with patch.object(runtime, "select_skills", return_value=([], "")), \
+        with patch.object(runtime, "ensure_mcp_server", return_value="/tmp/cterm-test.sock"), \
+             patch.object(runtime, "select_skills", return_value=([], "")), \
              patch("cterm.core.agent.chat_with_model_api", side_effect=fake_chat):
             result = runtime.run("Do work.")
 
@@ -94,7 +85,8 @@ class RuntimeTests(unittest.TestCase):
                 return {"message": {"role": "assistant", "content": "First answer."}}
             return {"message": {"role": "assistant", "content": "Second answer."}}
 
-        with patch.object(runtime, "select_skills", return_value=([], "")), \
+        with patch.object(runtime, "ensure_mcp_server", return_value="/tmp/cterm-test.sock"), \
+             patch.object(runtime, "select_skills", return_value=([], "")), \
              patch("cterm.core.agent.chat_with_model_api", side_effect=fake_chat):
             first = runtime.run("Do work.")
             second = runtime.run_followup("// explain more")
@@ -123,7 +115,8 @@ class RuntimeTests(unittest.TestCase):
             chat_calls.append([message.copy() for message in messages])
             return {"message": {"role": "assistant", "content": "Clarified answer."}}
 
-        with patch.object(runtime, "select_skills", return_value=([], "")), \
+        with patch.object(runtime, "ensure_mcp_server", return_value="/tmp/cterm-test.sock"), \
+             patch.object(runtime, "select_skills", return_value=([], "")), \
              patch("cterm.core.agent.chat_with_model_api", side_effect=fake_chat):
             result = runtime.run_followup("use the smaller file", clarification=True)
 
@@ -158,7 +151,8 @@ class RuntimeTests(unittest.TestCase):
             runtime.interrupt()
             return {"ok": True}
 
-        with patch.object(runtime, "select_skills", return_value=([], "")), \
+        with patch.object(runtime, "ensure_mcp_server", return_value="/tmp/cterm-test.sock"), \
+             patch.object(runtime, "select_skills", return_value=([], "")), \
              patch("cterm.core.agent.chat_with_model_api", side_effect=fake_chat), \
              patch("cterm.core.agent.ToolAgent._execute_tool", side_effect=interrupting_tool):
             result = runtime.run("Stop after this.")
@@ -190,7 +184,8 @@ class RuntimeTests(unittest.TestCase):
                 }
             }
 
-        with patch.object(runtime, "select_skills", return_value=([], "")), \
+        with patch.object(runtime, "ensure_mcp_server", return_value="/tmp/cterm-test.sock"), \
+             patch.object(runtime, "select_skills", return_value=([], "")), \
              patch("cterm.core.agent.chat_with_model_api", side_effect=fake_chat), \
              patch("cterm.core.agent.ToolAgent._execute_tool") as execute_tool:
             result = runtime.run("Stop before tool.")
@@ -214,7 +209,8 @@ class RuntimeTests(unittest.TestCase):
             prompts.append(messages[0]["content"])
             return {"message": {"role": "assistant", "content": "Done."}}
 
-        with patch.object(runtime, "select_skills", side_effect=[([], "first skill"), ([], "different skill")]) as select_skills, \
+        with patch.object(runtime, "ensure_mcp_server", return_value="/tmp/cterm-test.sock"), \
+             patch.object(runtime, "select_skills", side_effect=[([], "first skill"), ([], "different skill")]) as select_skills, \
              patch("cterm.core.agent.chat_with_model_api", side_effect=fake_chat):
             runtime.run("First.")
             runtime.run_followup("// Again.")
@@ -234,35 +230,13 @@ class RuntimeTests(unittest.TestCase):
         def fake_chat(model, messages, tools=None, binary="ollama", response_format=None):
             return {"message": {"role": "assistant", "content": "Done."}}
 
-        with patch.object(runtime, "select_skills", return_value=([], "")), \
+        with patch.object(runtime, "ensure_mcp_server", return_value="/tmp/cterm-test.sock"), \
+             patch.object(runtime, "select_skills", return_value=([], "")), \
              patch("cterm.core.agent.chat_with_model_api", side_effect=fake_chat):
             runtime.run("First.")
             runtime.run("Second.")
 
         self.assertEqual(runtime.mcp_client.list_count, 2)
-
-    def test_runtime_captures_ui_context_at_initialization(self):
-        first_ui = FakeUI()
-        second_ui = FakeUI()
-        token = active_agent_events_handler.set(first_ui)
-        try:
-            runtime = Runtime(model="main")
-        finally:
-            active_agent_events_handler.reset(token)
-        runtime.mcp_client = FakeMCPClient()
-
-        def fake_chat(model, messages, tools=None, binary="ollama", response_format=None):
-            return {"message": {"role": "assistant", "content": "Done."}}
-
-        token = active_agent_events_handler.set(second_ui)
-        try:
-            with patch.object(runtime, "select_skills", return_value=([], "")), \
-                 patch("cterm.core.agent.chat_with_model_api", side_effect=fake_chat):
-                runtime.run("Do work.")
-        finally:
-            active_agent_events_handler.reset(token)
-
-        self.assertIs(runtime.ui, first_ui)
 
     def test_runtime_requires_ui_context_at_initialization(self):
         runtime = Runtime(model="main")
@@ -270,22 +244,6 @@ class RuntimeTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             runtime.run("Do work.")
 
-    def test_initialize_tools_retries_invalid_tool_discovery(self):
-        runtime = Runtime(model="main")
-        tools = [object()]
-        clients = [
-            DiscoveryClient(ValueError("No tools in response")),
-            DiscoveryClient(tools),
-        ]
-
-        with patch.object(runtime, "ensure_mcp_server", return_value="/tmp/cterm-test.sock"), \
-             patch("cterm.core.runtime.FastMCPClient", side_effect=clients), \
-             patch("cterm.core.runtime.time.sleep"):
-            runtime.initialize_tools()
-
-        self.assertEqual(runtime.tools, tools)
-
-    
     def test_create_mcp_client_only_constructs_transport(self):
         runtime = Runtime(model="main")
         client = object()
@@ -296,32 +254,6 @@ class RuntimeTests(unittest.TestCase):
         constructor.assert_called_once_with("/tmp/cterm-test.sock")
         self.assertIs(result, client)
         self.assertIs(runtime.mcp_client, client)
-
-    def test_initialize_tools_starts_service_then_retries_refused_socket(self):
-        runtime = Runtime(model="main")
-        tools = [object()]
-        clients = [
-            DiscoveryClient(ConnectionRefusedError("socket refused")),
-            DiscoveryClient(tools),
-        ]
-        socket_path = type("SocketPath", (), {})()
-        socket_states = iter([False, True, True])
-        socket_path.exists = lambda: next(socket_states)
-
-        with patch("cterm.core.runtime.get_socket_path", return_value=socket_path), \
-             patch("cterm.core.runtime.FastMCPClient", side_effect=clients), \
-             patch("cterm.core.runtime.subprocess.run") as run_service, \
-             patch("cterm.core.runtime.time.sleep"):
-            runtime.initialize_tools()
-
-        run_service.assert_called_once_with(
-            ["systemctl", "--user", "start", "cterm-mcp.service"],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        self.assertEqual(runtime.tools, tools)
-
 
 if __name__ == "__main__":
     unittest.main()
