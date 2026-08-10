@@ -1,6 +1,8 @@
 from datetime import datetime
 from pathlib import Path
 
+from cterm.app_home import get_app_home
+
 
 class TranscriptWriter:
     """Write the user-visible transcript for one run.
@@ -27,7 +29,7 @@ class TranscriptWriter:
     @staticmethod
     def _default_path() -> Path:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        return Path.home() / "cterm" / "transcripts" / f"cterm_{timestamp}.log"
+        return get_app_home() / "transcripts" / f"cterm_{timestamp}.log"
 
     def write(self, text: str, end: str = "\n") -> None:
         if self._file is None:

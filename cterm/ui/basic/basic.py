@@ -164,6 +164,28 @@ class TerminalUI(AgentEvents):
                 return False
         return answer.strip().lower() in {"y", "yes"}
 
+    def request_write_approval(self, path, content, mode):
+        if self._spinner:
+            self._spinner.stop()
+            self._spinner = None
+
+        mode_label = f" ({mode})" if mode != "overwrite" else ""
+        sys.stderr.write(f"\n\033[1mWriting file requires approval: {path}{mode_label}\033[0m\n")
+        self._show_python(content)
+
+        prompt = "Write this file? [Y/N] "
+        try:
+            with open("/dev/tty", "r+", encoding="utf-8") as tty:
+                tty.write(prompt)
+                tty.flush()
+                answer = tty.readline()
+        except OSError:
+            try:
+                answer = input(prompt)
+            except (EOFError, KeyboardInterrupt):
+                return False
+        return answer.strip().lower() in {"y", "yes"}
+
     def _format_tool_call(self, tool_name, args):
         if tool_name == "finder":
             return f"finder: {args.get('pattern', '')} in {args.get('path', '')}"

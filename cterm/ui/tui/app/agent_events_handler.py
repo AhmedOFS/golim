@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ctypes
 from io import StringIO
+import os
 import re
 import threading
 from dataclasses import dataclass
@@ -100,6 +101,31 @@ def _raise_in_thread(thread_id: int | None, exc_type: type[BaseException]) -> bo
         ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_ulong(thread_id), None)
         return False
     return result == 1
+
+
+def _language_for_path(path: str) -> str:
+    ext = os.path.splitext(str(path))[1].lower()
+    return {
+        ".py": "python",
+        ".js": "javascript",
+        ".ts": "typescript",
+        ".json": "json",
+        ".sh": "bash",
+        ".yaml": "yaml",
+        ".yml": "yaml",
+        ".toml": "toml",
+        ".md": "markdown",
+        ".html": "html",
+        ".css": "css",
+        ".sql": "sql",
+        ".c": "c",
+        ".cpp": "cpp",
+        ".rs": "rust",
+        ".go": "go",
+        ".rb": "ruby",
+        ".conf": "ini",
+        ".ini": "ini",
+    }.get(ext, "python")
 
 
 MAX_TOOL_OUTPUT_LINES = 2
@@ -221,6 +247,27 @@ class TUIAgentEventsHandler(AgentEvents):
                 f"⦾ finding: {args.get('pattern', '')} in {args.get('path', '')}",
                 STYLE_TOOL,
             )
+        elif tool_name == "read_file":
+            path = args.get("path", "")
+            page = args.get("page", 1)
+            page_label = f" (page {page})" if page and page != 1 else ""
+            self._emit(f"▤ reading: {path}{page_label}", STYLE_TOOL)
+        elif tool_name == "write_file":
+            path = args.get("path", "")
+            mode = args.get("mode", "overwrite")
+            mode_label = f" [{mode}]" if mode != "overwrite" else ""
+            content = args.get("content") or ""
+            self._ensure_active()
+            title = f"✎ writing: {path}{mode_label}"
+            self.transcript.write(title)
+            self.transcript.write(content, end="" if str(content).endswith("\n") else "\n")
+            self.app.call_from_thread(
+                self.app.append_code,
+                title,
+                content,
+                _language_for_path(path),
+            )
+            self._code_shown_for_approval = True
         elif tool_name == "websearch":
             self._emit(
                 f"🌐 searching the web for : {args.get('query', '')}",
@@ -330,8 +377,16 @@ class TUIAgentEventsHandler(AgentEvents):
         summary = Text(f"✓ {count} matches", style=STYLE_SUCCESS)
         detail_lines = [Text(f"✓ {count} matches", style=STYLE_SUCCESS)]
         self.transcript.write(f"✓ {count} matches")
-        for match in result.get("matches", []):
+        matches = result.get("matches", [])
+        for match in matches[:200]:
             detail_lines.append(Text(f"  {match}", style=STYLE_SUCCESS))
+        if len(matches) > 200:
+            detail_lines.append(
+                Text(
+                    f"  ... {len(matches) - 200} more matches omitted ...",
+                    style=STYLE_SUCCESS,
+                )
+            )
         self.app.call_from_thread(
             self.app.append_expandable_result, summary, Group(*detail_lines)
         )
@@ -408,6 +463,21 @@ class TUIAgentEventsHandler(AgentEvents):
         event = threading.Event()
         request = ApprovalRequest(self.run_id, "", event, code=code)
         self.app.call_from_thread(self.app.start_python_approval_prompt, request)
+        event.wait()
+        return bool(request.answer)
+
+    def request_write_approval(self, path, content, mode):
+        self._ensure_active()
+        if not self._code_shown_for_approval:
+            self.app.call_from_thread(
+                self.app.append_code,
+                f"✎ writing: {path}",
+                content,
+                _language_for_path(path),
+            )
+        event = threading.Event()
+        request = ApprovalRequest(self.run_id, "", event, code=content)
+        self.app.call_from_thread(self.app.start_write_approval_prompt, request)
         event.wait()
         return bool(request.answer)
 

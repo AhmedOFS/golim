@@ -57,6 +57,14 @@ class FakeUI:
         self.approval_prompts.append(binary)
         return self.approved
 
+    def request_python_approval(self, code):
+        self.approval_prompts.append(("python", code))
+        return self.approved
+
+    def request_write_approval(self, path, content, mode):
+        self.approval_prompts.append(("write", path, content, mode))
+        return self.approved
+
 
 class ToolApprovalTests(unittest.TestCase):
     def _agent_with_client(self, client, ui=None):
@@ -157,6 +165,65 @@ class ToolApprovalTests(unittest.TestCase):
         self.assertEqual(len(client.calls), 1)
         self.assertEqual(ui.approval_prompts, ["/usr/bin/chmod"])
         self.assertIn("not approved", result["error"])
+
+    def test_write_file_prompts_before_writing_in_restricted_mode(self):
+        client = FakeMCPClient([
+            {"ok": True, "path": "/home/ahmed/out.txt", "bytes_written": 5},
+        ])
+        ui = FakeUI(approved=True)
+        agent = self._agent_with_client(client, ui=ui)
+
+        with patch("cterm.core.agent.get_config") as get_config:
+            get_config.return_value.unrestricted_bash = False
+            result = agent._execute_tool("write_file", {
+                "path": "/home/ahmed/out.txt",
+                "content": "hello",
+                "mode": "overwrite",
+            })
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(
+            ui.approval_prompts,
+            [("write", "/home/ahmed/out.txt", "hello", "overwrite")],
+        )
+        self.assertEqual(client.calls[0][0], "write_file")
+
+    def test_write_file_denial_skips_execution(self):
+        client = FakeMCPClient([])
+        ui = FakeUI(approved=False)
+        agent = self._agent_with_client(client, ui=ui)
+
+        with patch("cterm.core.agent.get_config") as get_config:
+            get_config.return_value.unrestricted_bash = False
+            result = agent._execute_tool("write_file", {
+                "path": "/home/ahmed/out.txt",
+                "content": "hello",
+                "mode": "overwrite",
+            })
+
+        self.assertFalse(result["ok"], result)
+        self.assertEqual(len(client.calls), 0)
+        self.assertIn("not approved", result["error"])
+        self.assertFalse(ui.tool_results[0]["ok"])
+
+    def test_write_file_unrestricted_mode_skips_approval(self):
+        client = FakeMCPClient([
+            {"ok": True, "path": "/home/ahmed/out.txt", "bytes_written": 5},
+        ])
+        ui = FakeUI(approved=False)
+        agent = self._agent_with_client(client, ui=ui)
+
+        with patch("cterm.core.agent.get_config") as get_config:
+            get_config.return_value.unrestricted_bash = True
+            result = agent._execute_tool("write_file", {
+                "path": "/home/ahmed/out.txt",
+                "content": "hello",
+                "mode": "overwrite",
+            })
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(ui.approval_prompts, [])
+        self.assertEqual(len(client.calls), 1)
 
 
 if __name__ == "__main__":

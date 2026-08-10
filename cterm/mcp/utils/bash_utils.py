@@ -206,7 +206,10 @@ def _build_cmd(tokens: list[str], results_ref: list, allow_privileged: bool = Fa
         if not os.path.isfile(PRIVILEGED_WRAPPER):
             return None, {
                 "ok": False,
-                "error": f"Privileged wrapper not found: {PRIVILEGED_WRAPPER}. Run sudocterm.sh install.",
+                "error": (
+                    f"Privileged wrapper not found: {PRIVILEGED_WRAPPER}. "
+                    "Install the package's privileged integration first."
+                ),
                 "results": results_ref,
             }
         if not get_config().is_privileged_binary_allowed(resolved):

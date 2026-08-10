@@ -63,7 +63,7 @@ def tool(func):
 @tool
 def finder(
     path: str,
-    pattern: str | None = None,
+    pattern: str | None = "*",
     include: list[str] | None = None,
     exclude: list[str] | None = None,
     max_depth: int | None = None,
@@ -247,6 +247,8 @@ def finder(
                     base_root,
                 ).replace(os.sep, "/")
 
+                full = entry.path.replace(os.sep, "/")
+
                 if excluded(rel, name):
                     continue
 
@@ -262,7 +264,7 @@ def finder(
                         type_filter != "file"
                         and name_matches(name)
                     ):
-                        matches.append(rel)
+                        matches.append(full)
 
                     walk(
                         base_root,
@@ -277,7 +279,7 @@ def finder(
                     if not name_matches(name):
                         continue
 
-                    matches.append(rel)
+                    matches.append(full)
 
     for search_root in search_roots:
         walk(
@@ -321,6 +323,8 @@ def read_file(path: str, page: int = 1) -> dict:
         if page < 1:
             return {"ok": False, "error": "page must be greater than or equal to 1"}
 
+        path = os.path.abspath(os.path.expanduser(path))
+
         with open(path, "r", encoding="utf-8") as f:
             lines = f.read().splitlines()
 
@@ -350,7 +354,7 @@ def bash(command: str, stream: bool = False, allow_privileged: bool = False, tim
     """
     Executes command lines.
 
-    When `bash_unrestricted` is true in ~/.config/cterm/config.json the command
+    When `bash_unrestricted` is true in ~/.cterm/config/config.json the command
     is passed directly to /bin/bash -c, giving full shell access (pipes,
     redirections, subshells, here-docs, etc.). The only remaining restriction
     is cterm's sudo whitelist: any `sudo <binary>` call whose resolved path is

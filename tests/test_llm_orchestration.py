@@ -150,7 +150,7 @@ class OrchestrationTests(unittest.TestCase):
         agent.MAX_AGENT_ITERATIONS = 5
 
         with tempfile.TemporaryDirectory() as tmp, \
-             patch.dict(os.environ, {"XDG_CONFIG_HOME": tmp}), \
+             patch.dict(os.environ, {"HOME": tmp}), \
              patch.object(agent, "_execute_tool", return_value={"ok": True, "results": []}), \
              patch("cterm.core.agent.chat_with_model_api", side_effect=fake_chat):
             Config().set(Config.STREAM_THINKING_TRACES, True)
@@ -205,7 +205,7 @@ class OrchestrationTests(unittest.TestCase):
         agent.MAX_AGENT_ITERATIONS = 5
 
         with tempfile.TemporaryDirectory() as tmp, \
-             patch.dict(os.environ, {"XDG_CONFIG_HOME": tmp}), \
+             patch.dict(os.environ, {"HOME": tmp}), \
              patch.object(agent, "_execute_tool", return_value={"ok": True, "results": []}), \
              patch("cterm.core.agent.chat_with_model_api", side_effect=fake_chat):
             Config().set(Config.STREAM_THINKING_TRACES, True)

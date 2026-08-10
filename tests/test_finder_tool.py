@@ -6,11 +6,25 @@ from cterm.mcp.tools import finder
 
 
 class FinderToolTests(unittest.TestCase):
-    def test_requires_explicit_pattern(self):
+    def test_pattern_defaults_to_wildcard(self):
         with tempfile.TemporaryDirectory() as tmp:
             Path(tmp, "Resume.pdf").write_text("resume")
+            Path(tmp, "notes.txt").write_text("notes")
 
             result = finder(tmp)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(
+            result["matches"],
+            [
+                str(Path(tmp, "Resume.pdf")).replace("\\", "/"),
+                str(Path(tmp, "notes.txt")).replace("\\", "/"),
+            ],
+        )
+
+    def test_empty_pattern_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = finder(tmp, pattern="")
 
         self.assertFalse(result["ok"])
         self.assertIn("requires an explicit pattern", result["error"])
@@ -28,7 +42,10 @@ class FinderToolTests(unittest.TestCase):
             )
 
         self.assertTrue(result["ok"])
-        self.assertEqual(result["matches"], ["Resume.pdf"])
+        self.assertEqual(
+            result["matches"],
+            [str(Path(tmp, "Resume.pdf")).replace("\\", "/")],
+        )
 
     def test_accepts_include_as_json_list_string(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -43,7 +60,10 @@ class FinderToolTests(unittest.TestCase):
             )
 
         self.assertTrue(result["ok"])
-        self.assertEqual(result["matches"], ["Ahmed_CV.docx"])
+        self.assertEqual(
+            result["matches"],
+            [str(Path(tmp, "Ahmed_CV.docx")).replace("\\", "/")],
+        )
 
     def test_rejects_invalid_include_string(self):
         with tempfile.TemporaryDirectory() as tmp:

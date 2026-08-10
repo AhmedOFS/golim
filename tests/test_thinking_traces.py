@@ -21,7 +21,7 @@ class FakeUI:
 
 class ThinkingTraceTests(unittest.TestCase):
     def test_agent_streams_thinking_when_config_enabled(self):
-        with tempfile.TemporaryDirectory() as tmp, patch.dict("os.environ", {"XDG_CONFIG_HOME": tmp}):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict("os.environ", {"HOME": tmp}):
             Config().set(Config.STREAM_THINKING_TRACES, True)
             ui = FakeUI()
             agent = ToolAgent("model", ui=ui)
@@ -39,7 +39,7 @@ class ThinkingTraceTests(unittest.TestCase):
         self.assertEqual(ui.completed, ["one two"])
 
     def test_agent_does_not_stream_thinking_when_config_disabled(self):
-        with tempfile.TemporaryDirectory() as tmp, patch.dict("os.environ", {"XDG_CONFIG_HOME": tmp}):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict("os.environ", {"HOME": tmp}):
             Config().set(Config.STREAM_THINKING_TRACES, False)
             ui = FakeUI()
             agent = ToolAgent("model", ui=ui)

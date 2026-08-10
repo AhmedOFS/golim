@@ -5,6 +5,7 @@ import re
 import shutil
 import sys
 from . import __version__
+from .app_home import resolve_app_home
 from .config import Config, get_config, init_config
 from .logger import setup_root_logger, start_run_logging
 from .core.agent_events import active_agent_events_handler
@@ -134,6 +135,7 @@ def run_tui_command(binary: str = "ollama") -> int:
 
 def main(argv: list[str] | None = None) -> int:
     """Main entry point for cterm CLI."""
+    resolve_app_home()
     parser = argparse.ArgumentParser(
         prog="cterm",
         description="Terminal interface for LLMs (Ollama, OpenRouter, OpenAI-compatible)"

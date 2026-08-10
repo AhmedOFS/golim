@@ -71,13 +71,14 @@ class Transcript(ScrollView, can_focus=False):
         )
 
     _SCROLLBAR_WIDTH = 1
+    _RIGHT_GUTTER = 2
 
     @property
     def _thinking_entries(self) -> dict[int, dict[str, object]]:
         return self._expandable_entries
 
     def _content_width(self) -> int:
-        width = (self.size.width or 80) - self._SCROLLBAR_WIDTH
+        width = (self.size.width or 80) - self._SCROLLBAR_WIDTH - self._RIGHT_GUTTER
         return max(width, 1)
 
     def _render_to_strips(self, renderable: RenderableType, width: int) -> list[Strip]:
@@ -171,6 +172,7 @@ class Transcript(ScrollView, can_focus=False):
 
     def write_expandable(self, summary: RenderableType, detail: RenderableType) -> int:
         self._commit_pending()
+        was_at_bottom = self._was_at_bottom()
         entry_id = self._next_expandable_id
         self._next_expandable_id += 1
         self._expandable_entries[entry_id] = {
@@ -184,6 +186,8 @@ class Transcript(ScrollView, can_focus=False):
         self._renderable_log.append((summary, len(strips), entry_id))
         self.virtual_size = Size(self._content_width(), len(self._lines) + len(self._pending_strips))
         self.show_horizontal_scrollbar = False
+        if was_at_bottom:
+            self.scroll_end(animate=False)
         self.refresh()
         return entry_id
 
@@ -245,7 +249,11 @@ class Transcript(ScrollView, can_focus=False):
         self._pending_strips = []
         self._pending_renderable = None
 
+    def _was_at_bottom(self) -> bool:
+        return self.scroll_y >= max(self.max_scroll_y - 1, 0)
+
     def append_thinking_delta(self, text: str) -> None:
+        was_at_bottom = self._was_at_bottom()
         self._commit_pending()
         if self._live_thinking_id is None:
             thinking_id = self._next_expandable_id
@@ -263,7 +271,8 @@ class Transcript(ScrollView, can_focus=False):
             self._renderable_log.append((renderable, len(strips), thinking_id))
             self.virtual_size = Size(self._content_width(), len(self._lines))
             self.show_horizontal_scrollbar = False
-            self.scroll_end(animate=False)
+            if was_at_bottom:
+                self.scroll_end(animate=False)
             self.refresh()
             return
 
@@ -271,9 +280,11 @@ class Transcript(ScrollView, can_focus=False):
         if state is not None:
             state["text"] = text
             self._rebuild_committed_lines()
-            self.scroll_end(animate=False)
+            if was_at_bottom:
+                self.scroll_end(animate=False)
 
     def append_thinking_trace(self, text: str) -> None:
+        was_at_bottom = self._was_at_bottom()
         if self._live_thinking_id is not None:
             state = self._expandable_entries.get(self._live_thinking_id)
             if state is not None:
@@ -282,7 +293,8 @@ class Transcript(ScrollView, can_focus=False):
                 state["live"] = False
                 self._live_thinking_id = None
                 self._rebuild_committed_lines()
-                self.scroll_end(animate=False)
+                if was_at_bottom:
+                    self.scroll_end(animate=False)
                 return
             self._live_thinking_id = None
 
@@ -301,7 +313,8 @@ class Transcript(ScrollView, can_focus=False):
         self._renderable_log.append((renderable, len(strips), thinking_id))
         self.virtual_size = Size(self._content_width(), len(self._lines))
         self.show_horizontal_scrollbar = False
-        self.scroll_end(animate=False)
+        if was_at_bottom:
+            self.scroll_end(animate=False)
         self.refresh()
 
     def on_click(self, event) -> None:

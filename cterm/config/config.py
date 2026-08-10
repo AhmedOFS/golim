@@ -3,8 +3,9 @@ from __future__ import annotations
 
 import contextvars
 import json
-import os
 from pathlib import Path
+
+from cterm.app_home import get_app_home
 
 
 _config_context: contextvars.ContextVar[Config | None] = contextvars.ContextVar("_config_context", default=None)
@@ -74,15 +75,14 @@ class Config:
     }
 
     def __init__(self):
-        cfg_home = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
-        cfg_dir = Path(cfg_home) / "cterm"
+        cfg_dir = get_app_home() / "config"
         cfg_dir.mkdir(parents=True, exist_ok=True)
         self.path = cfg_dir / "config.json"
         self.data = self._load()
 
     @property
     def models_path(self) -> Path:
-        data_dir = Path.home() / "cterm" / "data"
+        data_dir = get_app_home() / "data"
         data_dir.mkdir(parents=True, exist_ok=True)
         return data_dir / "models.json"
 

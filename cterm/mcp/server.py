@@ -14,7 +14,6 @@ import json
 from pathlib import Path
 import pwd
 
-from cterm.mcp.tools import mcp
 from cterm.mcp.vars import INACTIVITY_TIMEOUT_SECONDS
 
 logger = logging.getLogger(__name__)
@@ -190,6 +189,13 @@ class MCPServer:
 
 def run_server():
     """Starts the MCP server on UDS with inactivity timeout."""
+    from cterm.app_home import resolve_app_home
+    from cterm.mcp.config import init_config
+
+    resolve_app_home()
+    init_config()
+    from cterm.mcp.tools import mcp
+
     print("Starting cterm MCP tool server...")
     
     mcp_loop = asyncio.new_event_loop()

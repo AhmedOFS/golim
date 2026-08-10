@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+from cterm.app_home import get_app_home
+
 
 class History:
     MAX_ITEMS = 10
@@ -12,7 +14,7 @@ class History:
 
     @property
     def _path(self) -> Path:
-        return Path.home() / "cterm" / "data" / "history.json"
+        return get_app_home() / "data" / "history.json"
 
     def _load(self):
         p = self._path

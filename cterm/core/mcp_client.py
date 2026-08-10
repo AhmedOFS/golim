@@ -56,13 +56,13 @@ class FastMCPClient:
         sock = self._open_socket()
         try:
             sock.sendall((json.dumps({"jsonrpc":"2.0","id":1,"method":method,"params":params or {}}) + "\n").encode())
-            buf, final_frame, TIMEOUT = b"", None, 120
+            buf, final_frame = b"", None
             while True:
-                readable, _, exceptional = _select.select([sock], [], [sock], TIMEOUT)
+                readable, _, exceptional = _select.select([sock], [], [sock])
                 if exceptional:
                     raise ConnectionError("Socket error while waiting for stream frames")
                 if not readable:
-                    raise TimeoutError(f"No data received from server after {TIMEOUT}s")
+                    continue
                 chunk = sock.recv(4096)
                 if not chunk:
                     break

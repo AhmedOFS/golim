@@ -6,22 +6,25 @@ import json
 import os
 from pathlib import Path
 
+from cterm.app_home import get_app_home
+
 
 class Config:
     """Own MCP configuration reads and privileged whitelist updates."""
 
+    def __init__(self):
+        self.app_home = get_app_home()
+
     @property
     def config_path(self) -> Path:
-        config_home = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
-        return Path(config_home) / "cterm" / "config.json"
+        return get_app_home() / "config" / "config.json"
 
     @property
     def whitelist_path(self) -> Path:
         override = os.environ.get("CTERM_PRIVILEGED_WHITELIST")
         if override:
             return Path(override)
-        config_home = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
-        return Path(config_home) / "cterm" / "privileged_whitelist"
+        return get_app_home() / "privileged_whitelist"
 
     def read(self) -> dict:
         path = self.config_path
@@ -91,8 +94,20 @@ class Config:
         tmp.replace(whitelist_path)
 
 
-config = Config()
+config: Config | None = None
+
+
+def init_config() -> Config:
+    """Create and bind the MCP config singleton for the current app home."""
+    global config
+    config = Config()
+    return config
 
 
 def get_config() -> Config:
+    global config
+    app_home = get_app_home()
+    if config is None or getattr(config, "app_home", None) != app_home:
+        config = Config()
+        config.app_home = app_home
     return config

@@ -12,16 +12,10 @@ from cterm.config.utils import get_configured_model_choices
 class ConfigSchemaTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.old_xdg = os.environ.get("XDG_CONFIG_HOME")
         self.old_home = os.environ.get("HOME")
-        os.environ["XDG_CONFIG_HOME"] = self.tmp.name
         os.environ["HOME"] = self.tmp.name
 
     def tearDown(self):
-        if self.old_xdg is None:
-            os.environ.pop("XDG_CONFIG_HOME", None)
-        else:
-            os.environ["XDG_CONFIG_HOME"] = self.old_xdg
         if self.old_home is None:
             os.environ.pop("HOME", None)
         else:
@@ -44,8 +38,8 @@ class ConfigSchemaTests(unittest.TestCase):
         self.assertTrue(config.is_complete())
 
     def test_missing_schema_attribute_requires_configuration(self):
-        path = Path(self.tmp.name) / "cterm" / "config.json"
-        path.parent.mkdir()
+        path = Path(self.tmp.name) / ".cterm" / "config" / "config.json"
+        path.parent.mkdir(parents=True)
         path.write_text(json.dumps({
             "providers": {"ollama": {"ollama_host": "http://localhost:11434"}},
             "attributes": {"api_provider": "ollama", "current_model": "model"},
@@ -54,8 +48,8 @@ class ConfigSchemaTests(unittest.TestCase):
         self.assertTrue(Config().is_complete())
 
     def test_legacy_flat_config_is_rejected(self):
-        path = Path(self.tmp.name) / "cterm" / "config.json"
-        path.parent.mkdir()
+        path = Path(self.tmp.name) / ".cterm" / "config" / "config.json"
+        path.parent.mkdir(parents=True)
         path.write_text(json.dumps({
             "api_provider": "openrouter",
             "openrouter_api_key": "key",
@@ -66,8 +60,8 @@ class ConfigSchemaTests(unittest.TestCase):
             Config()
 
     def test_schema_is_loaded_without_filling_missing_values(self):
-        path = Path(self.tmp.name) / "cterm" / "config.json"
-        path.parent.mkdir()
+        path = Path(self.tmp.name) / ".cterm" / "config" / "config.json"
+        path.parent.mkdir(parents=True)
         path.write_text(json.dumps({"providers": {}, "attributes": {}}))
 
         config = Config()

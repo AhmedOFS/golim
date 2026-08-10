@@ -8,6 +8,8 @@ from pathlib import Path
 import re
 from typing import Callable
 
+from cterm.app_home import get_app_home
+
 
 @dataclass(frozen=True)
 class Skill:
@@ -20,7 +22,6 @@ class Skill:
 class SkillsLoader:
     """Loads skills from markdown files and asks a small model to select matches."""
 
-    DEFAULT_SKILLS_DIR = Path(__file__).resolve().parents[1] / "skills"
     WHEN_HEADINGS = {"when to use", "when to use this skill", "usage"}
     CONTENT_HEADINGS = {"skill", "skill content", "content", "instructions"}
 
@@ -28,7 +29,7 @@ class SkillsLoader:
         self,
         skills_dir: str | Path | None = None,
     ):
-        self.skills_dir = Path(skills_dir) if skills_dir else self.DEFAULT_SKILLS_DIR
+        self.skills_dir = Path(skills_dir) if skills_dir else get_app_home() / "skills"
 
     def load(self) -> list[Skill]:
         if not self.skills_dir.exists():

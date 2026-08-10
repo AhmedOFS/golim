@@ -101,7 +101,7 @@ class CtermApp(ConfigUIMixin, App[int]):
     #frame {{
         height: 1fr;
         width: 100%;
-        padding: 1 2 0 2;
+        padding: 1 0 0 2;
     }}
 
     #query_bar {{
@@ -115,8 +115,6 @@ class CtermApp(ConfigUIMixin, App[int]):
     #body {{
         height: 1fr;
         width: 100%;
-        border-left: solid {WHITE};
-        padding-left: 1;
         margin-left: 2;
     }}
 
@@ -851,6 +849,18 @@ class CtermApp(ConfigUIMixin, App[int]):
         self._approval_request = request
         self.set_status("")
         self.append_line(f"Allow sudo access for {request.binary}? [Y/N]", STYLE_WARNING)
+        self.query_one(PromptLine).start_approval()
+
+    # -- File write approval -------------------------------------------------
+    def start_write_approval_prompt(self, request: ApprovalRequest) -> None:
+        if not self.is_run_active(request.run_id):
+            request.answer = False
+            request.event.set()
+            return
+        self._approval_request = request
+        self.set_status("")
+        self.append_line("The file above requires approval to write.", STYLE_WARNING)
+        self.append_line("Write this file? [Y/N]", STYLE_WARNING)
         self.query_one(PromptLine).start_approval()
 
     def finish_approval_prompt(self, text: str) -> None:

@@ -1,5 +1,5 @@
 # --- cterm-mcp.service ---
-# This file should be installed to /usr/lib/systemd/user/ by the .deb package.
+# Installed to /usr/lib/systemd/user/ by the .deb package.
 
 [Unit]
 Description=CTerm MCP Tool Server (UDS/Inactivity Shutdown)
@@ -10,10 +10,9 @@ Description=CTerm MCP Tool Server (UDS/Inactivity Shutdown)
 Type=simple
 # Standard user environment variables are passed to the service.
 Environment=PYTHONUNBUFFERED=1
-# Replace /usr/bin/cterm_server with the actual installation path of the script
-ExecStart=/usr/bin/python3 -m cterm_server
+ExecStart=/usr/lib/cterm/cterm-mcp
 # If the server exits successfully (due to inactivity timeout), we don't restart it.
-Restart=on-failure 
+Restart=on-failure
 # No timeout needed, as the server manages its own inactivity timeout and graceful exit.
 # This prevents systemd from automatically cleaning up the socket file.
 

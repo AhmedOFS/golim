@@ -115,11 +115,11 @@ class ToolAgent:
         lines.append(f"   path: {root}")
         lines.append(f"   total matches: {result.get('total', len(matches))}")
         lines.append(f"   truncated: {bool(result.get('truncated'))}")
-        for match in matches[:50]:
+        for match in matches[:200]:
             full_path = os.path.join(root, match) if root else match
             lines.append(f"   match: {full_path}")
-        if len(matches) > 50:
-            lines.append(f"   ... {len(matches) - 50} more matches omitted ...")
+        if len(matches) > 200:
+            lines.append(f"   ... {len(matches) - 200} more matches omitted ...")
 
     def _append_content_summary(self, lines, result):
         if result.get("path"):
@@ -283,7 +283,7 @@ class ToolAgent:
     def _python_denied_result(self):
         return dict(_PYTHON_DENIED_RESULT)
 
-    def _prepare_tool_call(self, tool_name, args, is_shell, is_exec):
+    def _prepare_tool_call(self, tool_name, args, is_shell, is_exec, is_write):
         if is_shell:
             return self._prepare_shell_tool_call(tool_name, args)
 
@@ -292,6 +292,17 @@ class ToolAgent:
             code = args.get("code") or args.get("script") or args.get("source") or ""
             if not self.ui.request_python_approval(code):
                 tool_result = self._python_denied_result()
+                self.ui.tool_output(result=tool_result)
+                return tool_name, tool_result
+        if is_write and not get_config().unrestricted_bash:
+            path = args.get("path", "")
+            content = args.get("content", "")
+            mode = args.get("mode", "overwrite")
+            if not self.ui.request_write_approval(path, content, mode):
+                tool_result = {
+                    "ok": False,
+                    "error": f"File write not approved by user: {path}",
+                }
                 self.ui.tool_output(result=tool_result)
                 return tool_name, tool_result
         return tool_name, None
@@ -413,6 +424,7 @@ class ToolAgent:
     def _execute_tool(self, tool_name, args):
         is_shell = tool_name == "bash"
         is_exec = tool_name in ("exec_python", "exec")
+        is_write = tool_name == "write_file"
         shell_stream_seen = False
         streamed_output = []
         log_diagnostic_section(f"tool_call {tool_name}", args or {})
@@ -437,7 +449,7 @@ class ToolAgent:
                 )
             )
 
-        label, tool_result = self._prepare_tool_call(tool_name, args, is_shell, is_exec)
+        label, tool_result = self._prepare_tool_call(tool_name, args, is_shell, is_exec, is_write)
         if tool_result is not None:
             log_diagnostic_section(f"tool_result {tool_name}", tool_result)
             self._log_tool_result(tool_name, args, tool_result)

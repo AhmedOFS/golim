@@ -58,3 +58,6 @@ class AgentEvents(Protocol):
 
     def request_python_approval(self, code: str) -> bool:
         ...
+
+    def request_write_approval(self, path: str, content: str, mode: str) -> bool:
+        ...

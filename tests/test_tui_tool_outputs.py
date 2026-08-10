@@ -41,8 +41,8 @@ class TextualToolOutputTests(unittest.TestCase):
             def append_expandable_result(self, summary, detail):
                 self.expandables.append((summary, detail))
 
-            def append_code(self, title, code):
-                self.codes.append((title, code))
+            def append_code(self, title, code, language="python"):
+                self.codes.append((title, code, language))
 
             def append_stream(self, renderable, replace_last, commit):
                 self.streams.append((renderable, replace_last, commit))
@@ -155,7 +155,41 @@ class TextualToolOutputTests(unittest.TestCase):
         ui, app = self.make_ui()
         ui.tool_call("exec", {"code": "print('hello')\nprint('world')"})
 
-        self.assertEqual(app.codes, [("» running script", "print('hello')\nprint('world')")])
+        self.assertEqual(app.codes, [("» running script", "print('hello')\nprint('world')", "python")])
+
+    def test_read_file_call_shows_target_path(self):
+        ui, app = self.make_ui()
+        ui.tool_call("read_file", {"path": "/home/ahmed/notes.md"})
+        ui.tool_output(result={
+            "ok": True,
+            "path": "/home/ahmed/notes.md",
+            "page": 1,
+            "total_pages": 2,
+            "content": "hello",
+        })
+
+        self.assertTrue(any(
+            "/home/ahmed/notes.md" in text for text, _ in app.lines
+        ))
+
+    def test_write_file_call_displays_path_and_code(self):
+        ui, app = self.make_ui()
+        ui.tool_call("write_file", {
+            "path": "/home/ahmed/app.py",
+            "content": "print('hi')\n",
+        })
+        ui.tool_output(result={
+            "ok": True,
+            "path": "/home/ahmed/app.py",
+            "bytes_written": 12,
+        })
+
+        self.assertEqual(app.codes, [
+            ("✎ writing: /home/ahmed/app.py", "print('hi')\n", "python")
+        ])
+        self.assertTrue(any(
+            "/home/ahmed/app.py" in text for text, _ in app.lines
+        ))
 
     def test_tui_transcript_records_visible_progress(self):
         transcript_file = StringIO()
