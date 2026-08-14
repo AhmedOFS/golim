@@ -3,6 +3,7 @@
 import os
 import subprocess
 import sys
+import time
 
 from .vars import (
     EXA_MCP_URL,
@@ -19,7 +20,9 @@ from .utils.bash_utils import (
     _run_unrestricted,
     _stream_restricted,
     _stream_unrestricted,
+    _terminate_process_group,
 )
+from .utils.cancellation import is_tool_cancelled
 from .utils.web_utils import (
     _exa_api_key,
     _parallel_api_key,
@@ -421,32 +424,49 @@ def exec_python(
             return {"ok": False, "error": f"Working directory not found: {cwd}"}
 
     try:
-        result = subprocess.run(
+        process = subprocess.Popen(
             [sys.executable, "-c", str(code)],
-            input="" if stdin is None else str(stdin),
+            stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            timeout=timeout,
             cwd=run_cwd,
+            start_new_session=True,
         )
+        started = time.monotonic()
+        input_data = "" if stdin is None else str(stdin)
+        sent_input = False
+        while True:
+            if is_tool_cancelled():
+                _terminate_process_group(process)
+                process.stdout.close()
+                process.stderr.close()
+                return {"ok": False, "error": "Tool execution cancelled"}
+            remaining = None if timeout is None else timeout - (time.monotonic() - started)
+            if remaining is not None and remaining <= 0:
+                _terminate_process_group(process)
+                process.stdout.close()
+                process.stderr.close()
+                return {"ok": False, "error": f"Python code timed out after {timeout}s"}
+            try:
+                stdout, stderr = process.communicate(
+                    input=input_data if not sent_input else None,
+                    timeout=0.1 if remaining is None else min(0.1, remaining),
+                )
+                sent_input = True
+                break
+            except subprocess.TimeoutExpired:
+                sent_input = True
+                continue
         response = {
-            "ok": result.returncode == 0,
-            "stdout": result.stdout,
-            "stderr": result.stderr,
-            "returncode": result.returncode,
+            "ok": process.returncode == 0,
+            "stdout": stdout,
+            "stderr": stderr,
+            "returncode": process.returncode,
         }
-        if result.returncode != 0:
+        if process.returncode != 0:
             response["error"] = "Python code failed"
         return response
-    except subprocess.TimeoutExpired as e:
-        return {
-            "ok": False,
-            "error": f"Python code timed out after {timeout}s",
-            "stdout": e.stdout or "",
-            "stderr": e.stderr or "",
-            "returncode": None,
-        }
     except Exception as e:
         return {"ok": False, "error": str(e)}
 

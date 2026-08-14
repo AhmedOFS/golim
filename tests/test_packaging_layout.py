@@ -6,7 +6,10 @@ from unittest.mock import patch
 
 from scripts.build.linux import build_runtime as linux_build
 from scripts.build.macos import build_runtime as macos_build
-from scripts.release.release_builder import remove_interpreter_tools
+from scripts.release.release_builder import (
+    compile_linux_launcher,
+    remove_interpreter_tools,
+)
 from scripts.release.linux.release import LINUX_RUNTIME
 from scripts.release.macos.release import MACOS_RUNTIME
 
@@ -30,6 +33,33 @@ class PackagingLayoutTests(unittest.TestCase):
                 self.assertEqual(
                     macos_build.standalone_target(), "aarch64-apple-darwin"
                 )
+
+    def test_linux_launcher_uses_rpath_not_runpath_over_library_path(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            runtime = Path(temporary)
+            (runtime / "include" / "python3.14").mkdir(parents=True)
+            (runtime / "lib").mkdir()
+            (runtime / "lib" / "libpython3.14.so").touch()
+            (runtime / "cterm").touch()
+            calls = []
+
+            def record_called_process(command, **kwargs):
+                calls.append(list(command))
+                return None
+
+            with patch("scripts.release.release_builder._compiler", return_value="cc"):
+                with patch(
+                    "scripts.release.release_builder.run", side_effect=record_called_process
+                ):
+                    compile_linux_launcher(runtime)
+
+            command = calls[0]
+            self.assertIn("-Wl,-rpath,$ORIGIN/lib", command)
+            self.assertIn("-Wl,--disable-new-dtags", command)
+            self.assertLess(
+                command.index("-Wl,-rpath,$ORIGIN/lib"),
+                command.index("-Wl,--disable-new-dtags"),
+            )
 
     def test_macos_release_keeps_only_python_interpreter_tools(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -3,6 +3,7 @@
 import sys
 
 from cterm.core.agent_events import AgentEvents
+from cterm.core.run_result import RunResult
 from cterm.config import Config, get_config
 from cterm.core.runtime import Runtime
 from cterm.core.utils import _clip_label
@@ -25,7 +26,7 @@ class TerminalUI(AgentEvents):
         self._spinner = None
         self._thinking_live = False
 
-    def run(self, message: str) -> str:
+    def run(self, message: str) -> RunResult:
         with Runtime(
             config=self._config,
             model=self._model,

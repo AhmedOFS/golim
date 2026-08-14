@@ -7,12 +7,14 @@ import pty
 import re
 import select
 import shlex
+import signal
 import shutil
 import subprocess
 import time
 from dataclasses import dataclass
 
 from ..config import get_config
+from .cancellation import is_tool_cancelled
 
 from ..vars import (
     _BLOCKED_BINARIES,
@@ -23,6 +25,9 @@ from ..vars import (
     PRIVILEGED_WRAPPER,
     READ_FILE_PAGE_SIZE,
 )
+
+
+SUBPROCESS_WAIT_TIMEOUT_SECONDS = 1.0
 
 
 @dataclass(frozen=True)
@@ -289,23 +294,42 @@ def _run_pipeline(argv_list: list, cmd_str: str, timeout=None) -> dict:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL if command.suppress_stderr else subprocess.PIPE,
                 text=True,
+                start_new_session=True,
             )
             if procs:
                 procs[-1].stdout.close()
             procs.append(proc)
 
         last = procs[-1]
-        try:
-            stdout_data, stderr_data = last.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            for p in procs:
-                p.kill()
-            for p in procs:
-                p.wait()
-            return {"ok": False, "error": f"Pipeline timed out: {cmd_str}"}
+        started = time.monotonic()
+        while True:
+            if is_tool_cancelled():
+                for p in procs:
+                    _terminate_process_group(p)
+                return {"ok": False, "error": "Tool execution cancelled"}
+            remaining = None if timeout is None else timeout - (time.monotonic() - started)
+            if remaining is not None and remaining <= 0:
+                for p in procs:
+                    _terminate_process_group(p)
+                return {"ok": False, "error": f"Pipeline timed out: {cmd_str}"}
+            try:
+                stdout_data, stderr_data = last.communicate(
+                    timeout=0.1 if remaining is None else min(0.1, remaining),
+                )
+                break
+            except subprocess.TimeoutExpired:
+                continue
 
         for p in procs[:-1]:
-            p.wait()
+            while p.poll() is None:
+                if is_tool_cancelled():
+                    for proc in procs:
+                        _terminate_process_group(proc)
+                    return {"ok": False, "error": "Tool execution cancelled"}
+                try:
+                    p.wait(timeout=0.1)
+                except subprocess.TimeoutExpired:
+                    continue
             if p.stderr:
                 p.stderr.close()
         for stream in (last.stdout, last.stderr):
@@ -421,6 +445,39 @@ def _append_stream_text(stream_name, text, pending, output_lines):
     return pending
 
 
+def _terminate_process_group(proc):
+    """Terminate a streamed command and its inherited child processes."""
+    if proc.poll() is not None:
+        return
+
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except (AttributeError, OSError):
+        try:
+            proc.terminate()
+        except OSError:
+            return
+
+    try:
+        proc.wait(timeout=SUBPROCESS_WAIT_TIMEOUT_SECONDS)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (AttributeError, OSError):
+        try:
+            proc.kill()
+        except OSError:
+            return
+
+    try:
+        proc.wait(timeout=SUBPROCESS_WAIT_TIMEOUT_SECONDS)
+    except (subprocess.TimeoutExpired, OSError):
+        pass
+
+
 def _stream_subprocess(argv, cmd_str, results, timeout, suppress_stderr, use_pty):
     output_lines = {"stdout": [], "stderr": []}
     pending = {"stdout": "", "stderr": ""}
@@ -428,6 +485,7 @@ def _stream_subprocess(argv, cmd_str, results, timeout, suppress_stderr, use_pty
     master_fd = None
     proc = None
     slave_fd = None
+    completed = False
 
     try:
         if use_pty:
@@ -438,6 +496,7 @@ def _stream_subprocess(argv, cmd_str, results, timeout, suppress_stderr, use_pty
                 stdout=slave_fd,
                 stderr=slave_fd if not suppress_stderr else subprocess.DEVNULL,
                 close_fds=True,
+                start_new_session=True,
             )
             os.close(slave_fd)
             slave_fd = None
@@ -450,6 +509,7 @@ def _stream_subprocess(argv, cmd_str, results, timeout, suppress_stderr, use_pty
                 stderr=subprocess.DEVNULL if suppress_stderr else subprocess.PIPE,
                 bufsize=0,
                 close_fds=True,
+                start_new_session=True,
             )
             fd_to_stream = {proc.stdout.fileno(): "stdout"}
             if not suppress_stderr:
@@ -467,6 +527,12 @@ def _stream_subprocess(argv, cmd_str, results, timeout, suppress_stderr, use_pty
 
     try:
         while fd_to_stream:
+            if is_tool_cancelled():
+                return None, {
+                    "ok": False,
+                    "error": "Tool execution cancelled",
+                    "results": results,
+                }
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 proc.kill()
@@ -503,12 +569,18 @@ def _stream_subprocess(argv, cmd_str, results, timeout, suppress_stderr, use_pty
             if chunk:
                 output_lines[stream_name].append(chunk)
                 yield {"type": "stream", "fd": stream_name, "line": chunk, "end": "\n"}
+        completed = True
 
     finally:
         if proc is not None:
             try:
-                proc.wait()
-            except Exception:
+                if not completed and proc.poll() is None:
+                    _terminate_process_group(proc)
+                elif proc.poll() is None:
+                    proc.wait(timeout=SUBPROCESS_WAIT_TIMEOUT_SECONDS)
+            except subprocess.TimeoutExpired:
+                _terminate_process_group(proc)
+            except OSError:
                 pass
             if proc.stdout:
                 proc.stdout.close()

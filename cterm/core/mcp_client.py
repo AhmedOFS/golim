@@ -24,6 +24,14 @@ class FastMCPClient:
         with self._socket_lock:
             self._active_sockets.discard(sock)
         try:
+            # ``close()`` from a different thread does not reliably wake a
+            # blocking ``select``/``recv`` on Linux.  Shutdown first so the
+            # server observes EOF and the client-side request thread wakes
+            # immediately during cancellation.
+            sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        try:
             sock.close()
         except OSError:
             pass

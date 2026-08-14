@@ -60,10 +60,8 @@ from cterm.logger import start_run_logging
 from cterm.ui.tui.app.transcript_writer import TranscriptWriter
 from cterm.ui.tui.app.agent_events_handler import (
     _ANSI_RE,
-    _raise_in_thread,
     ApprovalRequest,
     ChatResult,
-    RunCancelled,
     TUIAgentEventsHandler,
 )
 
@@ -361,7 +359,7 @@ class CtermApp(ConfigUIMixin, App[int]):
         self._menu_page = "main"
         self._menu_labels: list[str] = []
         self._menu_choices: dict[str, tuple[str, str]] = {}
-    def _get_runtime(self, ui: AgentEvents | None = None) -> Runtime | None:
+    def _get_runtime(self) -> Runtime | None:
         if self._model is None:
             return None
         if self._runtime is None:
@@ -371,8 +369,6 @@ class CtermApp(ConfigUIMixin, App[int]):
                 binary=self._binary,
                 small_model=self._small_model,
             )
-        if ui is not None:
-            self._runtime.ui = ui
         return self._runtime
 
     def _resolve_current_settings(self) -> tuple[str | None, str | None, str | None, str]:
@@ -894,10 +890,10 @@ class CtermApp(ConfigUIMixin, App[int]):
     def is_run_active(self, run_id: int) -> bool:
         return self._busy and self._active_run_id == run_id
 
-    def _cancel_active_run(self, *, force_thread: bool = True) -> None:
+    def _cancel_active_run(self, *, force: bool = True) -> None:
         if self._runtime is not None:
             self._runtime.interrupt()
-        if force_thread:
+        if force:
             if self._active_cancel_event is not None:
                 self._active_cancel_event.set()
             worker = self._chat_worker
@@ -906,7 +902,6 @@ class CtermApp(ConfigUIMixin, App[int]):
                     worker.cancel()
                 except Exception:
                     pass
-            _raise_in_thread(self._chat_thread_id, RunCancelled)
 
     def action_interrupt(self) -> None:
         if self._menu_active:
@@ -920,12 +915,12 @@ class CtermApp(ConfigUIMixin, App[int]):
             return
         if self._busy:
             # First Escape requests a cooperative interrupt so completed tool
-            # output can be recorded.  A second Escape is an explicit hard
-            # cancellation of the current request/thread.
+            # output can be recorded.  A second Escape requests cancellation
+            # of the current request via the run's cancellation signal.
             force = self._runtime is not None and self._runtime.should_interrupt()
             if force and self._runtime is not None:
                 self._runtime.hard_cancel()
-            self._cancel_active_run(force_thread=force)
+            self._cancel_active_run(force=force)
             if self._approval_request is not None:
                 self._approval_request.answer = False
                 self._approval_request.event.set()
@@ -966,7 +961,7 @@ class CtermApp(ConfigUIMixin, App[int]):
             else:
                 token = active_agent_events_handler.set(ui)
                 try:
-                    runtime = self._get_runtime(ui)
+                    runtime = self._get_runtime()
                     if runtime is None:
                         error = "Error: runtime is not available"
                         transcript.write(f"error: {error}")
@@ -977,6 +972,13 @@ class CtermApp(ConfigUIMixin, App[int]):
                         current_clarification = clarification
                         while True:
                             if current_followup:
+                                # Each followup is a fresh run: clear the UI
+                                # cancellation signal so a cancelled or
+                                # interrupted run cannot silence its followup.
+                                # This mirrors Runtime.run_followup clearing
+                                # the runtime interrupt flags.
+                                if self._active_cancel_event is not None:
+                                    self._active_cancel_event.clear()
                                 response = runtime.run_followup(
                                     current_message,
                                     clarification=current_clarification,
@@ -989,23 +991,29 @@ class CtermApp(ConfigUIMixin, App[int]):
                             current_message, current_clarification = pending
                             self.call_from_thread(self.append_followup_query, current_message)
                             current_followup = True
-                        transcript.write(f"\nresponse: {response}")
-                        ok = not str(response).startswith("Error:")
-                        result = ChatResult(ok, response, str(log_path) if log_path else None)
+                        response_text = str(response.get("LLM_response", ""))
+                        transcript.write(f"\nresponse: {response_text}")
+                        result = ChatResult(
+                            bool(response.get("ok")),
+                            response_text,
+                            str(log_path) if log_path else None,
+                        )
                 finally:
                     active_agent_events_handler.reset(token)
             if not self.is_run_active(run_id):
                 return
             self.call_from_thread(self.append_line, "")
-            if result.text == "Interrupted.":
-                self.call_from_thread(self.append_line, result.text, STYLE_WARNING)
-            else:
-                self.call_from_thread(self.append_markdown, result.text, result.ok)
+            if result.ok:
+                self.call_from_thread(self.append_markdown, result.text, True)
                 self._has_completed_query = True
+            else:
+                self.call_from_thread(
+                    self.append_line,
+                    result.text or "Request did not complete.",
+                    STYLE_WARNING,
+                )
             if result.log_path:
                 self.call_from_thread(self.append_line, f"(transcript: {result.log_path})", STYLE_DIM)
-        except RunCancelled:
-            return
         except Exception as exc:
             if self.is_run_active(run_id):
                 self.call_from_thread(self.append_line, f"Error: {exc}", STYLE_ERROR)

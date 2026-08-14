@@ -50,9 +50,10 @@ def chat_command(message: str, binary: str = "ollama") -> int:
             response = ui.run(message)
         finally:
             active_agent_events_handler.reset(token)
-        transcript.write(f"\nresponse: {response}")
-        print(response)
-        return 0
+        response_text = str(response.get("LLM_response", ""))
+        transcript.write(f"\nresponse: {response_text}")
+        print(response_text)
+        return 0 if response.get("ok") else 1
     except KeyboardInterrupt:
         print("\n\nInterrupted")
         return 130

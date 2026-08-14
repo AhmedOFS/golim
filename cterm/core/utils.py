@@ -50,6 +50,15 @@ def _clip_label(text, max_chars=80):
     return line[:max_chars] + "..."
 
 
+def _clip_text(text, limit=1200):
+    if not text:
+        return ""
+    text = str(text)
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "\n...<truncated>..."
+
+
 def get_socket_path() -> Path:
     """Return the same per-user socket path used by the MCP server.
 

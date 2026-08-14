@@ -77,7 +77,8 @@ def compile_linux_launcher(runtime: Path, *, output_name: str = "cterm", entry_m
         f'-DCTERM_ENTRY_MODULE="{entry_module}"',
         f'-DCTERM_ENTRY_FUNCTION="{entry_function}"',
         "-fPIE", "-I", str(include), str(LAUNCHER_SOURCE),
-        "-L", str(runtime / "lib"), "-Wl,-rpath,$ORIGIN/lib",
+        "-L", str(runtime / "lib"),
+        "-Wl,-rpath,$ORIGIN/lib", "-Wl,--disable-new-dtags",
         f"-l{python_lib.name.removeprefix('lib').removesuffix('.so')}",
         "-ldl", "-lm", "-lpthread", "-o", str(runtime / output_name),
     ])

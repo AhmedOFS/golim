@@ -1,4 +1,5 @@
 import asyncio
+import socket
 import unittest
 from unittest.mock import patch
 
@@ -27,6 +28,26 @@ class FakeListClient(FastMCPClient):
 
 
 class MCPClientTests(unittest.TestCase):
+    def test_close_shutdowns_inflight_socket_before_closing(self):
+        client = FastMCPClient("/tmp")
+        actions = []
+
+        class Socket:
+            def shutdown(self, how):
+                actions.append(("shutdown", how))
+
+            def close(self):
+                actions.append(("close",))
+
+        client._active_sockets.add(Socket())
+
+        client.close()
+
+        self.assertEqual(
+            actions,
+            [("shutdown", socket.SHUT_RDWR), ("close",)],
+        )
+
     def test_client_returns_privileged_approval_required_without_prompting(self):
         client = FakeClient([
             {

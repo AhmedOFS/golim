@@ -13,8 +13,11 @@ import socket
 import json
 from pathlib import Path
 import pwd
+import queue
+import types
 
 from cterm.mcp.vars import INACTIVITY_TIMEOUT_SECONDS
+from cterm.mcp.utils.cancellation import bind_tool_cancellation
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +39,124 @@ class MCPServer:
         """Update last activity timestamp"""
         self.last_activity = time.time()
     
-    async def handle_request(self, request_data: str, writer: asyncio.StreamWriter):
+    async def _wait_for_disconnect(self, reader: asyncio.StreamReader):
+        """Wait until the client half-closes or closes its connection."""
+        while True:
+            data = await reader.read(4096)
+            if not data:
+                return
+
+    @staticmethod
+    def _start_tool_worker(tool_func, arguments, events, cancel_event):
+        def run():
+            result = None
+            try:
+                with bind_tool_cancellation(cancel_event):
+                    result = tool_func(**arguments)
+                    if isinstance(result, types.GeneratorType):
+                        try:
+                            for chunk in result:
+                                events.put(("chunk", chunk))
+                        finally:
+                            result.close()
+                    else:
+                        events.put(("result", result))
+            except BaseException as exc:
+                events.put(("error", exc))
+
+        worker = threading.Thread(target=run, daemon=True)
+        worker.start()
+        return worker
+
+    async def _cancel_tool_worker(self, worker, cancel_event):
+        cancel_event.set()
+        # Do not block the event loop while a non-cooperative Python tool
+        # finishes. Subprocess-backed tools normally exit within this window.
+        deadline = time.monotonic() + 2.0
+        while worker.is_alive() and time.monotonic() < deadline:
+            await asyncio.sleep(0.01)
+
+    async def _run_tool_call(
+        self, tool_func, arguments, request_id, writer, reader=None,
+    ):
+        """Run one tool off-loop and cancel it when its client disconnects."""
+        events = queue.Queue()
+        cancel_event = threading.Event()
+        worker = self._start_tool_worker(tool_func, arguments, events, cancel_event)
+        worker_finished = False
+        disconnect_task = (
+            asyncio.create_task(self._wait_for_disconnect(reader))
+            if reader is not None else None
+        )
+
+        def send(obj: dict):
+            writer.write((json.dumps(obj) + "\n").encode("utf-8"))
+
+        try:
+            while True:
+                if disconnect_task is not None and disconnect_task.done():
+                    await self._cancel_tool_worker(worker, cancel_event)
+                    worker_finished = True
+                    return False
+
+                try:
+                    event_type, value = events.get_nowait()
+                except queue.Empty:
+                    await asyncio.sleep(0.01)
+                    continue
+
+                if event_type == "error":
+                    if isinstance(value, (BrokenPipeError, ConnectionResetError)):
+                        raise value
+                    send({
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "error": {"code": -32000, "message": f"Tool execution error: {value}"},
+                    })
+                    worker_finished = True
+                    return True
+
+                if event_type == "chunk":
+                    chunk = value
+                    if chunk.get("type") == "stream":
+                        send({
+                            "jsonrpc": "2.0",
+                            "id": request_id,
+                            "stream": {
+                                "fd": chunk["fd"],
+                                "line": chunk["line"],
+                                "end": chunk.get("end", "\n"),
+                            },
+                        })
+                        await writer.drain()
+                    elif chunk.get("type") == "result":
+                        payload = {k: v for k, v in chunk.items() if k != "type"}
+                        send({"jsonrpc": "2.0", "id": request_id, "result": payload})
+                        worker_finished = True
+                        return True
+                    continue
+
+                send({"jsonrpc": "2.0", "id": request_id, "result": value})
+                worker_finished = True
+                return True
+        except (BrokenPipeError, ConnectionResetError):
+            await self._cancel_tool_worker(worker, cancel_event)
+            worker_finished = True
+            raise
+        finally:
+            if not worker_finished and worker.is_alive():
+                await self._cancel_tool_worker(worker, cancel_event)
+            if disconnect_task is not None:
+                disconnect_task.cancel()
+                try:
+                    await disconnect_task
+                except asyncio.CancelledError:
+                    pass
+
+    async def handle_request(
+        self, request_data: str, writer: asyncio.StreamWriter,
+        reader: asyncio.StreamReader | None = None,
+    ):
         """
         Handle an MCP request and write response(s) to writer.
 
@@ -117,60 +237,9 @@ class MCPServer:
                     return
 
                 tool_func = getattr(self.mcp, tool_name)
-                try:
-                    result = tool_func(**arguments)
-                except Exception as e:
-                    send({
-                        "jsonrpc": "2.0",
-                        "id": request_id,
-                        "error": {"code": -32000, "message": f"Tool execution error: {str(e)}"},
-                    })
-                    return
-
-                # -------------------------------------------------------- #
-                #  Detect a streaming generator vs a plain dict result      #
-                # -------------------------------------------------------- #
-                import types
-                if isinstance(result, types.GeneratorType):
-                    # Drain the generator, forwarding stream frames live and
-                    # holding back the final "result" frame until the end so
-                    # we can wrap it in the jsonrpc envelope.
-                    final_result = None
-                    for chunk in result:
-                        if chunk.get("type") == "stream":
-                            # Live output line — send immediately so the
-                            # client can display it as it arrives.
-                            send({
-                                "jsonrpc": "2.0",
-                                "id": request_id,
-                                "stream": {
-                                    "fd":   chunk["fd"],
-                                    "line": chunk["line"],
-                                    "end":  chunk.get("end", "\n"),
-                                },
-                            })
-                            # Flush so bytes reach the client without waiting
-                            # for the write buffer to fill.
-                            await writer.drain()
-                        elif chunk.get("type") == "result":
-                            final_result = chunk
-                        # Unknown chunk types are silently ignored.
-
-                    # Send the final summary frame.
-                    if final_result is not None:
-                        payload = {k: v for k, v in final_result.items() if k != "type"}
-                        send({"jsonrpc": "2.0", "id": request_id, "result": payload})
-                    else:
-                        # Generator ended without a result frame — shouldn't
-                        # happen, but handle gracefully.
-                        send({
-                            "jsonrpc": "2.0",
-                            "id": request_id,
-                            "result": {"ok": True, "command": arguments.get("command", "")},
-                        })
-                else:
-                    # Plain dict — original single-frame behaviour.
-                    send({"jsonrpc": "2.0", "id": request_id, "result": result})
+                await self._run_tool_call(
+                    tool_func, arguments, request_id, writer, reader,
+                )
 
             else:
                 send({
@@ -182,6 +251,8 @@ class MCPServer:
         except json.JSONDecodeError:
             send({"jsonrpc": "2.0", "id": None,
                   "error": {"code": -32700, "message": "Parse error"}})
+        except (BrokenPipeError, ConnectionResetError):
+            raise
         except Exception as e:
             send({"jsonrpc": "2.0", "id": None,
                   "error": {"code": -32603, "message": f"Internal error: {str(e)}"}})
@@ -253,17 +324,22 @@ def run_server():
                 logger.debug("Received request: %s...", request_text[:100])
 
                 # Process the request, streaming frames directly to writer
-                await mcp_server.handle_request(request_text, writer)
+                await mcp_server.handle_request(request_text, writer, reader)
 
                 # Final drain to flush any buffered bytes
                 await writer.drain()
                 logger.debug("Response(s) sent.")
 
+            except (BrokenPipeError, ConnectionResetError) as exc:
+                logger.debug("MCP client disconnected while sending response: %s", exc)
             except Exception as e:
                 logger.exception("Error handling client: %s", e)
             finally:
                 writer.close()
-                await writer.wait_closed()
+                try:
+                    await writer.wait_closed()
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
         
         # Start the asyncio server
         logger.debug("Starting asyncio server...")

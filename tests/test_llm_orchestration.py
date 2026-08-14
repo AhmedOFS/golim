@@ -39,7 +39,10 @@ class OrchestrationTests(unittest.TestCase):
              patch("cterm.core.agent.chat_with_model_api", side_effect=fake_chat):
             result = agent._run_action_agent("Do work.", selected_skills=[])
 
-        self.assertEqual(result, "Final answer after three tool iterations.")
+        self.assertEqual(result, {
+            "ok": True,
+            "LLM_response": "Final answer after three tool iterations.",
+        })
         self.assertEqual(execute_tool.call_count, 3)
         self.assertEqual(len(chat_calls), 4)
 
@@ -71,7 +74,7 @@ class OrchestrationTests(unittest.TestCase):
              patch("cterm.core.agent.chat_with_model_api", side_effect=fake_chat):
             result = agent._run_action_agent("Do work.", selected_skills=[])
 
-        self.assertEqual(result, "Done.")
+        self.assertEqual(result, {"ok": True, "LLM_response": "Done."})
         self.assertEqual(len(chat_calls), 2)
         second_call = chat_calls[1]
         self.assertEqual(second_call[-2]["role"], "assistant")
@@ -91,7 +94,7 @@ class OrchestrationTests(unittest.TestCase):
              patch("cterm.core.agent.chat_with_model_api", side_effect=[tool_call, RuntimeError("summary unavailable")]):
             result = agent._run_action_agent("Do work.", selected_skills=[])
 
-        self.assertIn("summary unavailable", result)
+        self.assertIn("summary unavailable", result["LLM_response"])
         self.assertEqual(agent.execution_history[0]["tool"], "bash")
         self.assertEqual(agent.messages[-1]["role"], "tool")
 
@@ -118,7 +121,7 @@ class OrchestrationTests(unittest.TestCase):
                 initial_tool_history=[],
             )
 
-        self.assertEqual(result, "Followup answer.")
+        self.assertEqual(result, {"ok": True, "LLM_response": "Followup answer."})
         self.assertEqual(chat_calls[0][-2]["content"], "Original answer.")
         self.assertEqual(chat_calls[0][-1], {"role": "user", "content": "followup: Expand on that."})
 
@@ -156,7 +159,7 @@ class OrchestrationTests(unittest.TestCase):
             Config().set(Config.STREAM_THINKING_TRACES, True)
             result = agent._run_action_agent("Do work.", selected_skills=[])
 
-        self.assertEqual(result, "Done.")
+        self.assertEqual(result, {"ok": True, "LLM_response": "Done."})
         self.assertEqual(len(chat_calls), 2)
         assistant_history = chat_calls[1][-2]
         self.assertEqual(assistant_history["role"], "assistant")
@@ -211,7 +214,7 @@ class OrchestrationTests(unittest.TestCase):
             Config().set(Config.STREAM_THINKING_TRACES, True)
             result = agent._run_action_agent("Do work.", selected_skills=[])
 
-        self.assertEqual(result, "Done.")
+        self.assertEqual(result, {"ok": True, "LLM_response": "Done."})
         self.assertEqual(len(chat_calls), 3)
         third_call_text = "\n\n".join(str(message.get("content", "")) for message in chat_calls[2])
         self.assertIn("first content", third_call_text)

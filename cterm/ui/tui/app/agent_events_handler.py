@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ctypes
 from io import StringIO
 import os
 import re
@@ -86,23 +85,6 @@ class ApprovalRequest:
     code: str | None = None
 
 
-class RunCancelled(Exception):
-    """Raised inside the background chat worker when the active run is cancelled."""
-
-
-def _raise_in_thread(thread_id: int | None, exc_type: type[BaseException]) -> bool:
-    if thread_id is None:
-        return False
-    result = ctypes.pythonapi.PyThreadState_SetAsyncExc(
-        ctypes.c_ulong(thread_id),
-        ctypes.py_object(exc_type),
-    )
-    if result > 1:
-        ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_ulong(thread_id), None)
-        return False
-    return result == 1
-
-
 def _language_for_path(path: str) -> str:
     ext = os.path.splitext(str(path))[1].lower()
     return {
@@ -152,12 +134,18 @@ class TUIAgentEventsHandler(AgentEvents):
     def is_cancelled(self) -> bool:
         return self.cancel_event.is_set() or not self.app.is_run_active(self.run_id)
 
-    def _ensure_active(self) -> None:
-        if self.is_cancelled():
-            raise RunCancelled()
+    def _ensure_active(self) -> bool:
+        """Return True while the run may keep rendering.
+
+        A cancelled run simply stops emitting UI output.  It must not raise
+        into the agent or MCP client stacks, so in-flight tool calls finish
+        and are stopped only by the runtime's own cooperative signals.
+        """
+        return not self.is_cancelled()
 
     def _emit(self, text: str, style: str = STYLE_TEXT) -> None:
-        self._ensure_active()
+        if not self._ensure_active():
+            return
         clean = _ANSI_RE.sub("", str(text))
         self.transcript.write(clean)
         self.app.call_from_thread(self.app.append_line, clean, style)
@@ -167,7 +155,8 @@ class TUIAgentEventsHandler(AgentEvents):
         self._stream_buffers.clear()
 
     def _show_stream(self, fd: str, text: str, style: str, end: str = "\n") -> None:
-        self._ensure_active()
+        if not self._ensure_active():
+            return
         text = _sanitize_stream_text(text)
         if not text:
             return
@@ -187,7 +176,8 @@ class TUIAgentEventsHandler(AgentEvents):
         entry = self._last_stream.get(fd)
         if entry is None:
             return
-        self._ensure_active()
+        if not self._ensure_active():
+            return
         renderable, _ = entry
         self.app.call_from_thread(
             self.app.append_stream,
@@ -203,14 +193,16 @@ class TUIAgentEventsHandler(AgentEvents):
     def thinking_delta(self, text):
         if not text:
             return
-        self._ensure_active()
+        if not self._ensure_active():
+            return
         clean = _ANSI_RE.sub("", str(text))
         self._thinking_buffer += clean
         self.app.call_from_thread(self.app.append_thinking_delta, self._thinking_buffer)
         self.app.call_from_thread(self.app.set_status, f"Thinking: {' '.join(self._thinking_buffer.split())[:80]}")
 
     def thinking_complete(self, text):
-        self._ensure_active()
+        if not self._ensure_active():
+            return
         full_text = str(text or self._thinking_buffer).strip()
         self._thinking_buffer = ""
         if full_text:
@@ -218,7 +210,8 @@ class TUIAgentEventsHandler(AgentEvents):
             self.app.call_from_thread(self.app.append_thinking_trace, full_text)
 
     def status(self, message):
-        self._ensure_active()
+        if not self._ensure_active():
+            return
         self._spinner_message = str(message)
         self.app.call_from_thread(self.app.set_status, f"{self._spinner_message}...")
 
@@ -237,7 +230,8 @@ class TUIAgentEventsHandler(AgentEvents):
             self._emit(f"$ {args.get('command', '')}", STYLE_TOOL)
         elif tool_name in ("exec_python", "exec"):
             code = args.get("code") or args.get("script") or args.get("source") or ""
-            self._ensure_active()
+            if not self._ensure_active():
+                return
             self.transcript.write("» running script")
             self.transcript.write(code, end="" if str(code).endswith("\n") else "\n")
             self.app.call_from_thread(self.app.append_code, "» running script", code)
@@ -257,7 +251,8 @@ class TUIAgentEventsHandler(AgentEvents):
             mode = args.get("mode", "overwrite")
             mode_label = f" [{mode}]" if mode != "overwrite" else ""
             content = args.get("content") or ""
-            self._ensure_active()
+            if not self._ensure_active():
+                return
             title = f"✎ writing: {path}{mode_label}"
             self.transcript.write(title)
             self.transcript.write(content, end="" if str(content).endswith("\n") else "\n")
@@ -285,7 +280,8 @@ class TUIAgentEventsHandler(AgentEvents):
         if result is not None:
             if self._current_tool == "bash":
                 self._last_stream.clear()
-                self._ensure_active()
+                if not self._ensure_active():
+                    return
                 self.app.call_from_thread(self.app.discard_pending_stream)
                 self._emit_bash_result_output(result)
                 formatted, style = self._format_tool_result(result)
@@ -336,7 +332,8 @@ class TUIAgentEventsHandler(AgentEvents):
         self._emit_capped_lines(combined)
 
     def _emit_tool_result(self, result) -> None:
-        self._ensure_active()
+        if not self._ensure_active():
+            return
         if (
             self._current_tool == "system_info"
             and isinstance(result, dict)
@@ -418,7 +415,8 @@ class TUIAgentEventsHandler(AgentEvents):
                 self._emit(line, STYLE_TOOL_OUTPUT)
             return
 
-        self._ensure_active()
+        if not self._ensure_active():
+            return
         self.transcript.write("…")
         for line in lines[-MAX_TOOL_OUTPUT_LINES:]:
             self.transcript.write(line)
@@ -445,7 +443,8 @@ class TUIAgentEventsHandler(AgentEvents):
         return lines[:head_count] + ["…"] + lines[-tail_count:]
 
     def request_binary_approval(self, binary):
-        self._ensure_active()
+        if not self._ensure_active():
+            return False
         event = threading.Event()
         request = ApprovalRequest(self.run_id, binary, event)
         self.app.call_from_thread(self.app.start_approval_prompt, request)
@@ -453,11 +452,13 @@ class TUIAgentEventsHandler(AgentEvents):
         return bool(request.answer)
 
     def python_code(self, code):
-        self._ensure_active()
+        if not self._ensure_active():
+            return
         self.app.call_from_thread(self.app.append_code, "» python in bash", code)
 
     def request_python_approval(self, code):
-        self._ensure_active()
+        if not self._ensure_active():
+            return False
         if not self._code_shown_for_approval:
             self.app.call_from_thread(self.app.append_code, "» python in bash", code)
         event = threading.Event()
@@ -467,7 +468,8 @@ class TUIAgentEventsHandler(AgentEvents):
         return bool(request.answer)
 
     def request_write_approval(self, path, content, mode):
-        self._ensure_active()
+        if not self._ensure_active():
+            return False
         if not self._code_shown_for_approval:
             self.app.call_from_thread(
                 self.app.append_code,

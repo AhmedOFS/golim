@@ -2,6 +2,7 @@ __pycache__/
 /build/
 /dist/
 /release/
+/update.sh
 *.egg-info/
 
 # The scripts tree is source code, including directories named build/release.

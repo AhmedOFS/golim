@@ -8,6 +8,13 @@ SUDOERS_FILE="/etc/sudoers.d/cterm"
 WRAPPER="/usr/lib/cterm/cterm-privileged"
 SERVICE="/usr/lib/systemd/user/cterm-mcp.service"
 
+# dpkg calls this script with an action argument. During ``upgrade`` the
+# old package's postrm runs while the new package is unpacked but not yet
+# configured; the destructive cleanup must only happen on real removal.
+if [ "${1:-}" = "upgrade" ] || [ "${1:-}" = "install" ] || [ "${1:-}" = "abort-install" ]; then
+  exit 0
+fi
+
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 ok()   { echo -e "${GREEN}✓${NC} $*"; }
 warn() { echo -e "${YELLOW}!${NC} $*"; }

@@ -29,12 +29,22 @@ class ExecToolTests(unittest.TestCase):
         self.assertIn("RuntimeError: boom", result["stderr"])
 
     def test_exec_tool_does_not_cap_timeout_at_120_seconds(self):
-        completed = type("Completed", (), {"returncode": 0, "stdout": "", "stderr": ""})()
-        with patch("cterm.mcp.tools.subprocess.run", return_value=completed) as run:
+        class Completed:
+            returncode = 0
+
+            def communicate(self, input=None, timeout=None):
+                self.input = input
+                self.timeout = timeout
+                return "", ""
+
+            def poll(self):
+                return self.returncode
+
+        with patch("cterm.mcp.tools.subprocess.Popen", return_value=Completed()) as popen:
             result = getattr(mcp, "exec")(code="pass", timeout=121)
 
         self.assertTrue(result["ok"], result)
-        self.assertEqual(run.call_args.kwargs["timeout"], 121)
+        self.assertEqual(popen.call_args.kwargs["start_new_session"], True)
 
 
 if __name__ == "__main__":

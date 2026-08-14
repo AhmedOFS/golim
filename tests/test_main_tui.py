@@ -26,18 +26,16 @@ class MainTuiTests(unittest.TestCase):
         tui.assert_not_called()
 
     @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
-    def test_reused_tui_runtime_refreshes_ui(self):
+    def test_reused_tui_runtime_does_not_store_ui(self):
         from cterm.ui.tui.app.app_tui import CtermApp
 
-        first_ui = object()
-        second_ui = object()
         app = CtermApp("model", model="main")
 
-        runtime = app._get_runtime(first_ui)
-        same_runtime = app._get_runtime(second_ui)
+        runtime = app._get_runtime()
+        same_runtime = app._get_runtime()
 
         self.assertIs(same_runtime, runtime)
-        self.assertIs(runtime.ui, second_ui)
+        self.assertFalse(hasattr(runtime, "ui"))
 
     @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
     def test_tui_prompt_placeholder_changes_with_state(self):
