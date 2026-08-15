@@ -166,6 +166,17 @@ class WebSearchToolTests(unittest.TestCase):
 
     @patch("cterm.mcp.utils.web_utils.get_config")
     @patch("cterm.mcp.utils.web_utils.requests.post")
+    def test_unknown_provider_returns_an_error_instead_of_using_parallel(self, mock_post, mock_config):
+        mock_config.return_value = _config({"websearch_provider": "unknown"})
+
+        result = websearch("test query")
+
+        self.assertFalse(result["ok"])
+        self.assertIn("Unsupported web search provider", result["error"])
+        mock_post.assert_not_called()
+
+    @patch("cterm.mcp.utils.web_utils.get_config")
+    @patch("cterm.mcp.utils.web_utils.requests.post")
     def test_parallel_with_api_key(self, mock_post, mock_config):
         mock_config.return_value = _config({
             "websearch_provider": "parallel",

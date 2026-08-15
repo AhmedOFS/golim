@@ -5,6 +5,8 @@ import subprocess
 import sys
 import time
 
+from cterm import config
+
 from .vars import (
     EXA_MCP_URL,
     MAX_NUM_RESULTS,
@@ -538,7 +540,7 @@ def websearch(
 
     provider = _websearch_provider()
 
-    if provider == "exa":
+    if provider == config.Config.EXA:
         exa_key = _exa_api_key()
         url = EXA_MCP_URL
         if exa_key:
@@ -556,11 +558,11 @@ def websearch(
         text, _ = _websearch_mcp_call(url, "web_search_exa", exa_args)
         return {
             "ok": True,
-            "provider": "exa",
+            "provider": config.Config.EXA,
             "text": text or NO_RESULTS,
         }
 
-    else:
+    if provider == config.Config.PARALLEL:
         par_key = _parallel_api_key()
         headers = {"User-Agent": "cterm/1.0"}
         if par_key:
@@ -575,9 +577,14 @@ def websearch(
         text, _ = _websearch_mcp_call(PARALLEL_MCP_URL, "web_search", par_args, headers)
         return {
             "ok": True,
-            "provider": "parallel",
+            "provider": config.Config.PARALLEL,
             "text": text or NO_RESULTS,
         }
+
+    return {
+        "ok": False,
+        "error": f"Unsupported web search provider: {provider!r}",
+    }
 
 
 @tool

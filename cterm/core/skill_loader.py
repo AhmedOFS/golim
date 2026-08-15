@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 from typing import Callable
 
-from cterm.app_home import get_app_home
+from cterm.config.app_home import get_app_home
 
 
 @dataclass(frozen=True)

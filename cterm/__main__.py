@@ -2,11 +2,11 @@
 """cterm - Main entry point"""
 import argparse
 import re
-import shutil
 import sys
 from . import __version__
-from .app_home import resolve_app_home
-from .config import Config, get_config, init_config
+from .config.app_home import resolve_app_home
+from .config import get_config, init_config
+from .config.utils import resolve_provider_settings
 from .logger import setup_root_logger, start_run_logging
 from .core.agent_events import active_agent_events_handler
 from .core.runtime import Runtime
@@ -68,31 +68,8 @@ def chat_command(message: str, binary: str = "ollama") -> int:
 
 
 def _resolve_chat_settings(binary: str = "ollama") -> tuple[str | None, str | None, str | None]:
-    config = get_config()
-    model = config.selected_model
-    small_model = config.small_model
-    provider = config.api_provider
-
-    if provider == Config.OLLAMA:
-        if not shutil.which(binary):
-            return f"Error: {binary} is not installed", None, None
-        model = config.selected_model
-        small_model = config.small_model
-    elif provider in {Config.OPEN_ROUTER, "openrouter"}:
-        if not config.openrouter_api_key:
-            return "Error: OpenRouter API key not configured\nRun 'cterm -i' to set it up", None, None
-        model = config.selected_model
-        small_model = config.small_model
-    elif provider == Config.OPENAI_COMPATIBLE:
-        if not config.openai_compatible_server_url:
-            return "Error: OpenAI-compatible server URL not configured\nRun 'cterm -i' to set it up", None, None
-        model = config.selected_model
-        small_model = config.small_model
-
-    if not model:
-        return "Error: No model configured\nRun 'cterm -i' to initialize", None, None
-
-    return None, model, small_model
+    error, model, small_model, _ = resolve_provider_settings(get_config(), binary)
+    return error, model, small_model
 
 
 def tui_command(binary: str = "ollama") -> int:
@@ -101,15 +78,7 @@ def tui_command(binary: str = "ollama") -> int:
     from .ui.tui.app.app_tui import CtermApp
 
     config = get_config()
-    provider = config.api_provider
-    if provider in {Config.OPEN_ROUTER, "openrouter"}:
-        model_label = config.selected_model or "OpenRouter"
-    elif provider == Config.OPENAI_COMPATIBLE:
-        model_label = config.selected_model or "OpenAI-compatible"
-    else:
-        model_label = config.selected_model or "Ollama"
-
-    error, model, small_model = _resolve_chat_settings(binary)
+    error, model, small_model, model_label = resolve_provider_settings(config, binary)
 
     try:
         result = CtermApp(

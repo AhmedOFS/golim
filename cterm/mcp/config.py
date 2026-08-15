@@ -6,10 +6,11 @@ import json
 import os
 from pathlib import Path
 
-from cterm.app_home import get_app_home
+from cterm import config
+from cterm.config.app_home import get_app_home
 
 
-class Config:
+class ServerConfig:
     """Own MCP configuration reads and privileged whitelist updates."""
 
     def __init__(self):
@@ -34,31 +35,30 @@ class Config:
             data = {}
         if (
             not isinstance(data, dict)
-            or not isinstance(data.get("providers"), dict)
-            or not isinstance(data.get("attributes"), dict)
+            or not isinstance(data.get(config.Config.PROVIDERS), dict)
+            or not isinstance(data.get(config.Config.ATTRIBUTES), dict)
         ):
             data = {}
         return data
 
     def attribute(self, key: str, default=None):
-        return self.read().get("attributes", {}).get(key, default)
+        return self.read().get(config.Config.ATTRIBUTES, {}).get(key, default)
 
     @property
     def unrestricted_bash(self) -> bool:
-        return bool(self.attribute("bash_unrestricted"))
+        return bool(self.attribute(config.Config.BASH_UNRESTRICTED))
 
     @property
     def websearch_provider(self) -> str:
-        provider = self.attribute("websearch_provider", "exa")
-        return provider if provider in ("exa", "parallel") else "exa"
+        return self.attribute(config.Config.WEBSEARCH_PROVIDER, config.Config.EXA)
 
     @property
     def exa_api_key(self) -> str | None:
-        return self.attribute("exa_api_key") or os.environ.get("EXA_API_KEY") or None
+        return self.attribute(config.Config.EXA_API_KEY) or os.environ.get("EXA_API_KEY") or None
 
     @property
     def parallel_api_key(self) -> str | None:
-        return self.attribute("parallel_api_key") or os.environ.get("PARALLEL_API_KEY") or None
+        return self.attribute(config.Config.PARALLEL_API_KEY) or os.environ.get("PARALLEL_API_KEY") or None
 
     @staticmethod
     def _normalise_binary(binary: str) -> str:
@@ -94,20 +94,20 @@ class Config:
         tmp.replace(whitelist_path)
 
 
-config: Config | None = None
+_server_config: ServerConfig | None = None
 
 
-def init_config() -> Config:
+def init_config() -> ServerConfig:
     """Create and bind the MCP config singleton for the current app home."""
-    global config
-    config = Config()
-    return config
+    global _server_config
+    _server_config = ServerConfig()
+    return _server_config
 
 
-def get_config() -> Config:
-    global config
+def get_config() -> ServerConfig:
+    global _server_config
     app_home = get_app_home()
-    if config is None or getattr(config, "app_home", None) != app_home:
-        config = Config()
-        config.app_home = app_home
-    return config
+    if _server_config is None or getattr(_server_config, "app_home", None) != app_home:
+        _server_config = ServerConfig()
+        _server_config.app_home = app_home
+    return _server_config

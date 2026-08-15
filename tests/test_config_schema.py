@@ -3,10 +3,10 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from cterm.config import Config, ConfigSchemaError
-from cterm.config.utils import get_configured_model_choices
+from cterm.config.utils import get_configured_model_choices, resolve_provider_settings
 
 
 class ConfigSchemaTests(unittest.TestCase):
@@ -112,6 +112,20 @@ class ConfigSchemaTests(unittest.TestCase):
 
         self.assertEqual(labels, ["open_router: provider/selected"])
         self.assertEqual(choices, {"open_router: provider/selected": ("open_router", "provider/selected")})
+
+    def test_provider_settings_reject_noncanonical_provider_values(self):
+        config = MagicMock(
+            api_provider="openrouter",
+            selected_model="provider/model",
+            small_model=None,
+        )
+
+        error, model, small_model, label = resolve_provider_settings(config)
+
+        self.assertIn("Unsupported API provider", error)
+        self.assertIsNone(model)
+        self.assertIsNone(small_model)
+        self.assertEqual(label, "provider/model")
 
 
 if __name__ == "__main__":

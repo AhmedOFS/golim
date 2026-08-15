@@ -194,14 +194,29 @@ def _state_provider(config: Config, ui: ConfigPromptHandle, binary: str) -> str:
         "OpenAI-compatible (URL and optional API key)",
         "OpenRouter (cloud, requires API key)",
     ]
-    default = 0 if config.api_provider == Config.OLLAMA else 1 if config.api_provider == Config.OPENAI_COMPATIBLE else 2
+    provider_defaults = {
+        Config.OLLAMA: 0,
+        Config.OPENAI_COMPATIBLE: 1,
+        Config.OPEN_ROUTER: 2,
+    }
+    provider = config.api_provider
+    if provider is None:
+        default = 0
+    elif provider in provider_defaults:
+        default = provider_defaults[provider]
+    else:
+        ui.log(f"Error: Unsupported API provider: {provider!r}", STYLE_ERROR)
+        return "EXIT"
     ui.log("API provider setup", STYLE_ACCENT)
     idx = ui.select("Select API provider", options, default)
     if idx == 2:
         return "OPENROUTER_KEY_CHOICE" if config.openrouter_api_key else "OPENROUTER_KEY_INPUT"
     if idx == 1:
         return "OPENAI_COMPATIBLE_URL"
-    return "OLLAMA_INSTALL_CHECK"
+    if idx == 0:
+        return "OLLAMA_INSTALL_CHECK"
+    ui.log(f"Error: Unsupported provider selection: {idx!r}", STYLE_ERROR)
+    return "EXIT"
 
 
 # -- OpenRouter branch --------------------------------------------------

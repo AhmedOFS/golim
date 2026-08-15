@@ -1,8 +1,11 @@
 import json
 import unittest
+from unittest.mock import MagicMock, patch
 
+from cterm.api import chat_api
 from cterm.api import ollama as chat_api_ollama
 from cterm.api import utils as chat_api_utils
+from cterm.config import Config
 
 
 class FakeStreamResponse:
@@ -18,6 +21,44 @@ class FakeStreamResponse:
 
 
 class ChatApiStreamingTests(unittest.TestCase):
+    def test_dispatch_uses_the_canonical_openrouter_provider_name(self):
+        config = MagicMock(api_provider=Config.OPEN_ROUTER)
+        expected = {"message": {"content": "ok"}}
+
+        with patch.object(chat_api, "get_config", return_value=config), \
+             patch.object(chat_api.openrouter, "chat", return_value=expected) as openrouter:
+            result = chat_api.chat_with_model_api("model", [])
+
+        self.assertIs(result, expected)
+        openrouter.assert_called_once_with("model", [], None, None, config, None)
+
+    def test_dispatch_passes_args_in_canonical_order_for_all_providers(self):
+        # Guard against the provider chat() signatures drifting out of sync:
+        # all must be (model, messages, tools, response_format, config, on_thinking_delta).
+        for provider, module in [
+            (Config.OPEN_ROUTER, "openrouter"),
+            (Config.OPENAI_COMPATIBLE, "openai_compatible"),
+            (Config.OLLAMA, "ollama"),
+        ]:
+            with self.subTest(provider=provider):
+                config = MagicMock(api_provider=provider)
+                delta_cb = lambda _delta: None
+
+                with patch.object(chat_api, "get_config", return_value=config), \
+                     patch.object(getattr(chat_api, module), "chat", return_value={}) as mocked:
+                    chat_api.chat_with_model_api("m", [{"role": "user", "content": "hi"}], tools=["t"], response_format="json", on_thinking_delta=delta_cb)
+
+                # config is injected from get_config below, pushed into the slot that
+                # provider code expects it in; the trailing slot is on_thinking_delta.
+                mocked.assert_called_once_with("m", [{"role": "user", "content": "hi"}], ["t"], "json", config, delta_cb)
+
+    def test_noncanonical_provider_name_is_rejected(self):
+        config = MagicMock(api_provider="openrouter")
+
+        with patch.object(chat_api, "get_config", return_value=config):
+            with self.assertRaisesRegex(ValueError, "Unsupported API provider"):
+                chat_api.chat_with_model_api("model", [])
+
     def test_json_response_decodes_utf8_bytes_independent_of_response_charset(self):
         class Response:
             content = json.dumps({"content": "🌤️ — +32°C"}, ensure_ascii=False).encode("utf-8")

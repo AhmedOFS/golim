@@ -260,7 +260,7 @@ class MCPServer:
 
 def run_server():
     """Starts the MCP server on UDS with inactivity timeout."""
-    from cterm.app_home import resolve_app_home
+    from cterm.config.app_home import resolve_app_home
     from cterm.mcp.config import init_config
 
     resolve_app_home()

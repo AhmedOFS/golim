@@ -195,7 +195,7 @@ class Runtime:
             _try_connect()
 
         except Exception:
-            self.close()
+
             last_error = None
             for _ in range(RETRY_ATTEMPTS):
                 time.sleep(RETRY_DELAY_SECONDS)
@@ -203,7 +203,7 @@ class Runtime:
                     _try_connect()
                     break
                 except Exception as exc:
-                    self.close()
+
                     last_error = exc
             else:
                 raise RuntimeError("Failed to retrieve tool list.") from last_error

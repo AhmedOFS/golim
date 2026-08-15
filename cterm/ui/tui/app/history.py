@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from cterm.app_home import get_app_home
+from cterm.config.app_home import get_app_home
 
 
 class History:

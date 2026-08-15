@@ -17,8 +17,10 @@ def chat_with_model_api(
     config = get_config()
     provider = config.api_provider
 
-    if provider in {"open_router", "openrouter"}:
+    if provider == Config.OPEN_ROUTER:
         return openrouter.chat(model, messages, tools, response_format, config, on_thinking_delta)
-    if provider == "openai_compatible":
+    if provider == Config.OPENAI_COMPATIBLE:
         return openai_compatible.chat(model, messages, tools, response_format, config, on_thinking_delta)
-    return ollama.chat(model, messages, tools, response_format, on_thinking_delta, config)
+    if provider == Config.OLLAMA:
+        return ollama.chat(model, messages, tools, response_format, config, on_thinking_delta)
+    raise ValueError(f"Unsupported API provider: {provider!r}")

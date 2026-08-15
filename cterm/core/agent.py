@@ -342,7 +342,7 @@ class ToolAgent:
             ),
         }
         try:
-            response = self._chat_with_optional_thinking(
+            response = self._chat_with_hard_cancel(
                 self.model,
                 [*self._active_messages, prompt],
                 tools=None,
@@ -352,6 +352,11 @@ class ToolAgent:
             content = response.get("message", {}).get("content", "")
             decision = json.loads(content) if isinstance(content, str) else content
             return isinstance(decision, dict) and decision.get("action") == "terminate"
+        except InterruptedError:
+            if self._should_hard_cancel():
+                raise
+            logger.warning("long tool decision interrupted; keeping tool alive")
+            return False
         except Exception as exc:
             logger.warning("long tool decision unavailable; keeping tool alive: %s", exc)
             return False
@@ -387,13 +392,25 @@ class ToolAgent:
             except queue.Empty:
                 if remaining > 0:
                     continue
-                if self._long_tool_decision(tool_name, args, streamed_output):
+                try:
+                    should_terminate = self._long_tool_decision(
+                        tool_name, args, streamed_output,
+                    )
+                except InterruptedError:
+                    # The decision request can be in flight while the user
+                    # hard-cancels the run. Close the active request socket so
+                    # the MCP server cancels the child tool as well.
+                    if self.mcp_client is not None:
+                        self.mcp_client.close()
+                    raise
+                if should_terminate:
                     # Closing active MCP sockets unblocks the server request;
                     # its partial streamed output is already in the prompt.
                     if self.mcp_client is not None:
                         self.mcp_client.close()
                     deadline = float("inf")
                 else:
+                    self.ui.status(f"Continuing {label}")
                     # A keep-waiting decision applies only to this interval;
                     # ask again if the same tool is still running later.
                     deadline = time.monotonic() + self.LONG_TOOL_NOTICE_SECONDS
@@ -517,36 +534,45 @@ class ToolAgent:
         self.messages = []
         self.execution_history = []
 
+    def _chat_with_hard_cancel(self, *args, **kwargs):
+        """Run a model request while allowing the agent to release promptly."""
+        if self._should_hard_cancel():
+            raise InterruptedError("LLM request hard-cancelled")
+
+        # ``requests`` has no safe cross-thread cancellation primitive. Keep
+        # the provider request in a daemon worker and poll the hard
+        # cancellation signal. Any late response is discarded and never
+        # enters conversation history.
+        outcome = queue.Queue(maxsize=1)
+
+        def _request_model():
+            try:
+                outcome.put((True, self._chat_with_optional_thinking(*args, **kwargs)))
+            except BaseException as exc:
+                outcome.put((False, exc))
+
+        request_thread = threading.Thread(target=_request_model, daemon=True)
+        request_thread.start()
+        while True:
+            if self._should_hard_cancel():
+                raise InterruptedError("LLM request hard-cancelled")
+            try:
+                ok, value = outcome.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            if ok:
+                return value
+            raise value
+
     def _chat_for_next_action(self, messages):
         self.ui.status("Thinking")
         try:
-            # ``requests`` has no safe cross-thread cancellation primitive.
-            # Keep the provider request in a daemon worker and poll the hard
-            # cancellation signal so a second Escape immediately releases the
-            # agent/UI.  Any late response is discarded and never enters
-            # conversation history.
-            outcome = queue.Queue(maxsize=1)
-
-            def _request_model():
-                try:
-                    outcome.put((True, self._chat_with_optional_thinking(
-                        self.model, messages, tools=self.tools, binary=self.binary,
-                    )))
-                except BaseException as exc:
-                    outcome.put((False, exc))
-
-            request_thread = threading.Thread(target=_request_model, daemon=True)
-            request_thread.start()
-            while True:
-                if self._should_hard_cancel():
-                    raise InterruptedError("LLM request hard-cancelled")
-                try:
-                    ok, value = outcome.get(timeout=0.1)
-                except queue.Empty:
-                    continue
-                if ok:
-                    return value
-                raise value
+            return self._chat_with_hard_cancel(
+                self.model,
+                messages,
+                tools=self.tools,
+                binary=self.binary,
+            )
         finally:
             self.ui.clear_status()
 

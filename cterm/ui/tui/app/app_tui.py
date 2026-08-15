@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import shutil
 import threading
 from rich.console import RenderableType
 from rich.markdown import Markdown
@@ -54,7 +53,7 @@ from cterm.ui.tui.app.widgets.footer import Footer
 from cterm.ui.tui.app.widgets.prompt_line import PromptLine
 from cterm.ui.tui.config.widgets.config_panel import ConfigPanel
 from cterm.ui.tui.app.widgets.menu import MenuPanel
-from cterm.config.utils import get_configured_model_choices
+from cterm.config.utils import get_configured_model_choices, resolve_provider_settings
 from cterm.logger import start_run_logging
 
 from cterm.ui.tui.app.transcript_writer import TranscriptWriter
@@ -372,25 +371,7 @@ class CtermApp(ConfigUIMixin, App[int]):
         return self._runtime
 
     def _resolve_current_settings(self) -> tuple[str | None, str | None, str | None, str]:
-        config = self._config
-        provider = config.api_provider
-        if provider in {Config.OPEN_ROUTER, "openrouter"}:
-            label = config.selected_model or "OpenRouter"
-            if not config.openrouter_api_key:
-                return "Error: OpenRouter API key not configured\nRun 'cterm -i' to set it up", None, None, label
-            return None, config.selected_model, config.small_model, label
-        if provider == Config.OPENAI_COMPATIBLE:
-            label = config.selected_model or "OpenAI-compatible"
-            if not config.openai_compatible_server_url:
-                return "Error: OpenAI-compatible server URL not configured\nRun 'cterm -i' to set it up", None, None, label
-            return None, config.selected_model, config.small_model, label
-
-        label = config.selected_model or "Ollama"
-        if not shutil.which(self._binary):
-            return f"Error: {self._binary} is not installed", None, None, label
-        if not config.selected_model:
-            return "Error: No model configured\nRun 'cterm -i' to initialize", None, None, label
-        return None, config.selected_model, config.small_model, label
+        return resolve_provider_settings(self._config, self._binary)
 
     def _reload_config_settings(self) -> None:
         self._config.reload()

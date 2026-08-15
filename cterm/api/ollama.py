@@ -9,7 +9,7 @@ from cterm.api.retry import with_retries
 logger = logging.getLogger(__name__)
 
 
-def chat(model, messages, tools=None, response_format=None, on_thinking_delta=None, config=None):
+def chat(model, messages, tools=None, response_format=None, config=None, on_thinking_delta=None):
     payload = {"model": model, "messages": messages, "stream": bool(on_thinking_delta)}
     if tools:
         payload["tools"] = tools

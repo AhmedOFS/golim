@@ -135,7 +135,7 @@ class MainTuiTests(unittest.TestCase):
 
         app.query_one = fake_query_one
 
-        with patch("cterm.ui.tui.app.app_tui.shutil.which", return_value="/usr/bin/ollama"):
+        with patch("cterm.config.utils.is_ollama_installed", return_value=True):
             app._reload_config_settings()
 
         self.assertEqual(app.model_label, "new-model")

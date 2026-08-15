@@ -168,6 +168,33 @@ class ResilienceTests(unittest.TestCase):
         self.assertEqual(agent._long_tool_decision.call_count, 2)
         agent.mcp_client.close.assert_called_once()
 
+    def test_long_tool_policy_updates_status_after_keep_decision(self):
+        ui = MagicMock()
+        agent = ToolAgent("model", ui=ui)
+        agent.LONG_TOOL_NOTICE_SECONDS = 0
+        release_tool = threading.Event()
+
+        def blocked_tool(_args):
+            release_tool.wait(1)
+            return {"ok": True}
+
+        def keep_waiting(*_args):
+            release_tool.set()
+            return False
+
+        agent._long_tool_decision = MagicMock(side_effect=keep_waiting)
+        label = "$ sudo apt install example"
+        result = agent._call_tool_with_long_running_policy(
+            label,
+            blocked_tool,
+            {"command": "sudo apt install example"},
+            "bash",
+            [],
+        )
+
+        self.assertTrue(result["ok"])
+        ui.status.assert_any_call(f"Continuing {label}")
+
     def test_hard_cancel_releases_agent_while_llm_request_is_blocked(self):
         hard_cancel = threading.Event()
         release_request = threading.Event()
@@ -188,6 +215,74 @@ class ResilienceTests(unittest.TestCase):
             release_request.set()
             timer.cancel()
         self.assertLess(time.monotonic() - started, 0.5)
+
+    def test_hard_cancel_releases_long_tool_decision_while_llm_request_is_blocked(self):
+        hard_cancel = threading.Event()
+        decision_started = threading.Event()
+        release_request = threading.Event()
+        agent = ToolAgent("model", ui=_UI(), should_hard_cancel=hard_cancel.is_set)
+
+        def blocked_chat(*_args, **_kwargs):
+            decision_started.set()
+            release_request.wait(2)
+            return {"message": {"role": "assistant", "content": '{"action":"keep"}'}}
+
+        def cancel_when_decision_starts():
+            if decision_started.wait(1):
+                hard_cancel.set()
+
+        cancel_thread = threading.Thread(target=cancel_when_decision_starts, daemon=True)
+        cancel_thread.start()
+        started = time.monotonic()
+        try:
+            with patch.object(agent, "_chat_with_optional_thinking", side_effect=blocked_chat):
+                with self.assertRaises(InterruptedError):
+                    agent._long_tool_decision("bash", {"command": "sleep 60"}, [])
+        finally:
+            release_request.set()
+            cancel_thread.join(timeout=1)
+        self.assertLess(time.monotonic() - started, 0.5)
+
+    def test_hard_cancel_during_long_tool_decision_closes_mcp_transport(self):
+        hard_cancel = threading.Event()
+        decision_started = threading.Event()
+        release_request = threading.Event()
+        release_tool = threading.Event()
+        agent = ToolAgent("model", ui=_UI(), should_hard_cancel=hard_cancel.is_set)
+        agent.LONG_TOOL_NOTICE_SECONDS = 0
+        agent.mcp_client = MagicMock()
+
+        def blocked_chat(*_args, **_kwargs):
+            decision_started.set()
+            release_request.wait(2)
+            return {"message": {"role": "assistant", "content": '{"action":"keep"}'}}
+
+        def blocked_tool(_args):
+            release_tool.wait(2)
+            return {"ok": True}
+
+        def cancel_when_decision_starts():
+            if decision_started.wait(1):
+                hard_cancel.set()
+
+        cancel_thread = threading.Thread(target=cancel_when_decision_starts, daemon=True)
+        cancel_thread.start()
+        try:
+            with patch.object(agent, "_chat_with_optional_thinking", side_effect=blocked_chat):
+                with self.assertRaises(InterruptedError):
+                    agent._call_tool_with_long_running_policy(
+                        "tool",
+                        blocked_tool,
+                        {},
+                        "tool",
+                        [],
+                    )
+        finally:
+            release_request.set()
+            release_tool.set()
+            cancel_thread.join(timeout=1)
+
+        agent.mcp_client.close.assert_called_once()
 
     def test_hard_cancel_releases_agent_while_tool_call_is_blocked(self):
         hard_cancel = threading.Event()

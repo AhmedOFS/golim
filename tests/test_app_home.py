@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from cterm.app_home import get_app_home, resolve_app_home
+from cterm.config.app_home import get_app_home, resolve_app_home
 
 
 class AppHomeTests(unittest.TestCase):

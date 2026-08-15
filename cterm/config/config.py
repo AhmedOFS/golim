@@ -5,7 +5,7 @@ import contextvars
 import json
 from pathlib import Path
 
-from cterm.app_home import get_app_home
+from cterm.config.app_home import get_app_home
 
 
 _config_context: contextvars.ContextVar[Config | None] = contextvars.ContextVar("_config_context", default=None)
@@ -13,8 +13,11 @@ _config_context: contextvars.ContextVar[Config | None] = contextvars.ContextVar(
 
 def get_config() -> Config:
     config = _config_context.get()
-    if config is None:
+    app_home = get_app_home()
+    if config is None or getattr(config, "app_home", None) != app_home:
         config = Config()
+        config.app_home = app_home
+        _config_context.set(config)
     return config
 
 
@@ -48,6 +51,8 @@ class Config:
     WEBSEARCH_PROVIDER = "websearch_provider"
     EXA_API_KEY = "exa_api_key"
     PARALLEL_API_KEY = "parallel_api_key"
+    EXA = "exa"
+    PARALLEL = "parallel"
 
     OLLAMA = "ollama"
     OPENAI_COMPATIBLE = "openai_compatible"
@@ -64,7 +69,7 @@ class Config:
         BASH_UNRESTRICTED: False,
         MAX_ITERATION_LIMIT: 50,
         DARK_MODE: False,
-        WEBSEARCH_PROVIDER: "exa",
+        WEBSEARCH_PROVIDER: EXA,
         EXA_API_KEY: None,
         PARALLEL_API_KEY: None,
     }
@@ -155,7 +160,9 @@ class Config:
             return bool(values.get(self.PROVIDER_API_KEY))
         if provider == self.OPENAI_COMPATIBLE:
             return bool(values.get(self.OPENAI_COMPATIBLE_SERVER_URL))
-        return bool(values.get(self.OLLAMA_SERVER_URL))
+        if provider == self.OLLAMA:
+            return bool(values.get(self.OLLAMA_SERVER_URL))
+        return False
 
     def recent_models(self) -> list[dict[str, str]]:
         try:

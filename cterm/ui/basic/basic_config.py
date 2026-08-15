@@ -20,17 +20,30 @@ def choose_provider(config: Config) -> str | None:
     print(f"  1. Ollama (local, default)")
     print(f"  2. OpenRouter (cloud, requires API key)")
     print(f"  3. OpenAI-compatible (URL and optional API key)")
-    default = "1" if config.api_provider == Config.OLLAMA else "2" if config.api_provider == Config.OPEN_ROUTER else "3"
+    if config.api_provider == Config.OLLAMA:
+        default = "1"
+    elif config.api_provider == Config.OPEN_ROUTER:
+        default = "2"
+    elif config.api_provider == Config.OPENAI_COMPATIBLE:
+        default = "3"
+    elif config.api_provider is None:
+        default = "1"
+    else:
+        print(f"Error: Unsupported API provider: {config.api_provider!r}")
+        return None
     try:
         choice = input(f"Select provider [1-3, default {default}]: ").strip() or default
     except (KeyboardInterrupt, EOFError):
         print()
         return None
+    if choice == "1":
+        return Config.OLLAMA
     if choice == "2":
         return Config.OPEN_ROUTER
     if choice == "3":
         return Config.OPENAI_COMPATIBLE
-    return Config.OLLAMA
+    print("Error: provider selection must be 1, 2, or 3")
+    return None
 
 
 def init_openrouter(config: Config) -> int:
@@ -282,12 +295,15 @@ def init_command(binary: str = "ollama") -> int:
             result = init_openai_compatible(config)
             if result != 0:
                 return result
-        else:
+        elif provider == Config.OLLAMA:
             result = init_ollama(config, binary)
             if result == 2:
                 continue  # go back to provider selection
             if result != 0:
                 return result
+        else:
+            print(f"Error: Unsupported API provider: {provider!r}")
+            return 1
 
         break  # ollama succeeded
 
