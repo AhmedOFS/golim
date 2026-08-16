@@ -31,14 +31,14 @@ class McpConfigSchemaTests(unittest.TestCase):
                 },
             },
             config.Config.ATTRIBUTES: {
-                config.Config.BASH_UNRESTRICTED: True,
+                config.Config.UNRESTRICTED_MODE: True,
                 config.Config.EXA_API_KEY: "key",
             },
         }
         path.write_text(json.dumps(schema))
 
         self.assertEqual(get_config().read(), schema)
-        self.assertNotIn(config.Config.BASH_UNRESTRICTED, get_config().read().keys())
+        self.assertNotIn(config.Config.UNRESTRICTED_MODE, get_config().read().keys())
 
     def test_reader_uses_the_client_schema_keys_and_values(self):
         path = Path(self.tmp.name) / ".cterm" / "config" / "config.json"
@@ -46,20 +46,20 @@ class McpConfigSchemaTests(unittest.TestCase):
         path.write_text(json.dumps({
             config.Config.PROVIDERS: {},
             config.Config.ATTRIBUTES: {
-                config.Config.BASH_UNRESTRICTED: True,
+                config.Config.UNRESTRICTED_MODE: True,
                 config.Config.WEBSEARCH_PROVIDER: config.Config.PARALLEL,
             },
         }))
 
         server_config = get_config()
 
-        self.assertTrue(server_config.unrestricted_bash)
+        self.assertTrue(server_config.unrestricted_mode)
         self.assertEqual(server_config.websearch_provider, config.Config.PARALLEL)
 
     def test_reader_rejects_flat_config(self):
         path = Path(self.tmp.name) / ".cterm" / "config" / "config.json"
         path.parent.mkdir(parents=True)
-        path.write_text(json.dumps({config.Config.BASH_UNRESTRICTED: True}))
+        path.write_text(json.dumps({config.Config.UNRESTRICTED_MODE: True}))
 
         self.assertEqual(get_config().read(), {})
 

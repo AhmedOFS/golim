@@ -279,13 +279,13 @@ class ToolAgent:
             return self._prepare_shell_tool_call(tool_name, args)
 
         self.ui.tool_call(tool_name, args)
-        if is_exec and not get_config().unrestricted_bash:
+        if is_exec and not get_config().unrestricted_mode:
             code = args.get("code") or args.get("script") or args.get("source") or ""
             if not self.ui.request_python_approval(code):
                 tool_result = self._python_denied_result()
                 self.ui.tool_output(result=tool_result)
                 return tool_name, tool_result
-        if is_write and not get_config().unrestricted_bash:
+        if is_write and not get_config().unrestricted_mode:
             path = args.get("path", "")
             content = args.get("content", "")
             mode = args.get("mode", "overwrite")
@@ -309,7 +309,7 @@ class ToolAgent:
         display_args["command"] = command.replace(py_code, "<python>")
         self.ui.tool_call(tool_name, display_args)
 
-        if get_config().unrestricted_bash:
+        if get_config().unrestricted_mode:
             self.ui.python_code(py_code)
         elif not self.ui.request_python_approval(py_code):
             tool_result = self._python_denied_result()

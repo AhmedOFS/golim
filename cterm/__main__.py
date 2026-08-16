@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """cterm - Main entry point"""
 import argparse
+import json
 import re
 import sys
 from . import __version__
 from .config.app_home import resolve_app_home
-from .config import get_config, init_config
+from .config import ConfigSchemaError, get_config, init_config
 from .config.utils import resolve_provider_settings
 from .logger import setup_root_logger, start_run_logging
 from .core.agent_events import active_agent_events_handler
@@ -103,6 +104,17 @@ def run_tui_command(binary: str = "ollama") -> int:
     return tui_command(binary)
 
 
+def _print_config_schema_error(exc: ConfigSchemaError) -> int:
+    """Report a broken config file and point at the offending location."""
+    cause = exc.__cause__
+    detail = ""
+    if isinstance(cause, json.JSONDecodeError):
+        detail = f" (line {cause.lineno}, column {cause.colno})"
+    print(f"Error: {exc}{detail}", file=sys.stderr)
+    print("Fix or remove the config file, then run 'cterm -i' to reconfigure it.", file=sys.stderr)
+    return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     """Main entry point for cterm CLI."""
     resolve_app_home()
@@ -144,18 +156,21 @@ def main(argv: list[str] | None = None) -> int:
         print(f"cterm {__version__}")
         return 0
 
-    if args.init:
-        init_config()
-        from .ui.tui.config.config_tui import init_command_tui
+    try:
+        if args.init:
+            init_config()
+            from .ui.tui.config.config_tui import init_command_tui
 
-        return init_command_tui(args.binary)
-    
-    # Chat mode
-    if not args.message:
-        return tui_command(args.binary)
-    
-    message = " ".join(args.message)
-    return chat_command(message, args.binary)
+            return init_command_tui(args.binary)
+
+        # Chat mode
+        if not args.message:
+            return tui_command(args.binary)
+
+        message = " ".join(args.message)
+        return chat_command(message, args.binary)
+    except ConfigSchemaError as exc:
+        return _print_config_schema_error(exc)
 
 
 if __name__ == "__main__":

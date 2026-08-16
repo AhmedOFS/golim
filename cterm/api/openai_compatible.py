@@ -10,13 +10,14 @@ from cterm.api.utils import (
     parse_utf8_json_response,
 )
 from cterm.api.retry import with_retries
+from cterm.config.utils import normalize_openai_compatible_url
 
 logger = logging.getLogger(__name__)
 
 
 def chat(model, messages, tools=None, response_format=None, config=None, on_thinking_delta=None):
     server_url = config.openai_compatible_server_url if config else None
-    url = server_url.rstrip("/") + "/v1/chat/completions"
+    url = normalize_openai_compatible_url(server_url or "") + "/v1/chat/completions"
 
     normalized_messages = normalize_messages_for_openai(messages)
 

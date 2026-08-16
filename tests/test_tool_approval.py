@@ -174,7 +174,7 @@ class ToolApprovalTests(unittest.TestCase):
         agent = self._agent_with_client(client, ui=ui)
 
         with patch("cterm.core.agent.get_config") as get_config:
-            get_config.return_value.unrestricted_bash = False
+            get_config.return_value.unrestricted_mode = False
             result = agent._execute_tool("write_file", {
                 "path": "/home/ahmed/out.txt",
                 "content": "hello",
@@ -194,7 +194,7 @@ class ToolApprovalTests(unittest.TestCase):
         agent = self._agent_with_client(client, ui=ui)
 
         with patch("cterm.core.agent.get_config") as get_config:
-            get_config.return_value.unrestricted_bash = False
+            get_config.return_value.unrestricted_mode = False
             result = agent._execute_tool("write_file", {
                 "path": "/home/ahmed/out.txt",
                 "content": "hello",
@@ -214,7 +214,7 @@ class ToolApprovalTests(unittest.TestCase):
         agent = self._agent_with_client(client, ui=ui)
 
         with patch("cterm.core.agent.get_config") as get_config:
-            get_config.return_value.unrestricted_bash = True
+            get_config.return_value.unrestricted_mode = True
             result = agent._execute_tool("write_file", {
                 "path": "/home/ahmed/out.txt",
                 "content": "hello",

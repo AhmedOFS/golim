@@ -1,12 +1,18 @@
 import json
 import os
-from pathlib import Path
 import tempfile
 import unittest
+from importlib.util import find_spec
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from cterm.config import Config, ConfigSchemaError
-from cterm.config.utils import get_configured_model_choices, resolve_provider_settings
+from cterm.config.utils import (
+    get_configured_model_choices,
+    get_openai_compatible_models,
+    normalize_openai_compatible_url,
+    resolve_provider_settings,
+)
 
 
 class ConfigSchemaTests(unittest.TestCase):
@@ -126,6 +132,97 @@ class ConfigSchemaTests(unittest.TestCase):
         self.assertIsNone(model)
         self.assertIsNone(small_model)
         self.assertEqual(label, "provider/model")
+
+    def test_normalize_openai_compatible_url_strips_v1_scheme_and_slashes(self):
+        cases = {
+            "http://host:8000/v1": "http://host:8000",
+            "http://host:8000/v1/": "http://host:8000",
+            "host:8000/v1": "http://host:8000",
+            "host:8000": "http://host:8000",
+            "https://host:8443/v1": "https://host:8443",
+            "http://host:8000/": "http://host:8000",
+        }
+        for raw, expected in cases.items():
+            with self.subTest(raw=raw):
+                self.assertEqual(normalize_openai_compatible_url(raw), expected)
+
+        self.assertIsNone(normalize_openai_compatible_url(None))
+        self.assertEqual(normalize_openai_compatible_url(""), "")
+        self.assertEqual(normalize_openai_compatible_url("v1"), "http://v1")
+
+    def test_get_openai_compatible_models_appends_v1_once(self):
+        response = MagicMock()
+        response.json.return_value = {"data": [{"id": "local-model"}]}
+
+        with patch("cterm.config.utils.requests.get", return_value=response) as get:
+            models = get_openai_compatible_models("host:8000/v1", "key")
+
+        self.assertEqual(models, ["local-model"])
+        get.assert_called_once_with(
+            "http://host:8000/v1/models",
+            headers={"Authorization": "Bearer key"},
+            timeout=10.0,
+        )
+
+
+@unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
+class OpenAiCompatibleUrlWizardTests(unittest.TestCase):
+    def test_url_state_normalizes_scheme_and_v1(self):
+        from cterm.ui.tui.config.config_tui import _state_openai_compatible_url
+
+        config = _FakeUrlConfig(current="http://host:8000/v1")
+        ui = _FakeUrlUI(["http://host:8000/v1", ""])
+
+        next_state = _state_openai_compatible_url(config, ui, "ollama")
+
+        self.assertEqual(next_state, "OPENAI_COMPATIBLE_CONNECT")
+        self.assertEqual(config.values[Config.OPENAI_COMPATIBLE_SERVER_URL], "http://host:8000")
+
+    def test_url_state_requires_a_url(self):
+        from cterm.ui.tui.config.config_tui import _state_openai_compatible_url
+
+        config = _FakeUrlConfig(current="")
+        ui = _FakeUrlUI([""])
+
+        next_state = _state_openai_compatible_url(config, ui, "ollama")
+
+        self.assertEqual(next_state, "OPENAI_COMPATIBLE_URL")
+        self.assertNotIn(Config.OPENAI_COMPATIBLE_SERVER_URL, config.values)
+
+    def test_connect_state_validates_v1_models(self):
+        from cterm.ui.tui.config.config_tui import _state_openai_compatible_connect
+
+        config = _FakeUrlConfig(current="http://host:8000/v1")
+
+        with patch("cterm.ui.tui.config.config_tui.get_openai_compatible_models", return_value=["m"]):
+            self.assertEqual(_state_openai_compatible_connect(config, _FakeUrlUI([]), "ollama"), "OPENAI_COMPATIBLE_MODEL")
+
+        with patch("cterm.ui.tui.config.config_tui.get_openai_compatible_models", return_value=[]):
+            self.assertEqual(_state_openai_compatible_connect(config, _FakeUrlUI([]), "ollama"), "OPENAI_COMPATIBLE_URL")
+
+
+class _FakeUrlConfig:
+    def __init__(self, current):
+        self.openai_compatible_server_url = current
+        self.openai_compatible_api_key = "key"
+        self.values = {}
+
+    def set(self, key, value):
+        self.values[key] = value
+
+    def set_provider_value(self, provider, key, value):
+        pass
+
+
+class _FakeUrlUI:
+    def __init__(self, answers):
+        self.answers = list(answers)
+
+    def input(self, title, default="", placeholder="", hint=""):
+        return self.answers.pop(0)
+
+    def log(self, text, style=""):
+        pass
 
 
 if __name__ == "__main__":

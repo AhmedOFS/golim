@@ -45,8 +45,8 @@ class ServerConfig:
         return self.read().get(config.Config.ATTRIBUTES, {}).get(key, default)
 
     @property
-    def unrestricted_bash(self) -> bool:
-        return bool(self.attribute(config.Config.BASH_UNRESTRICTED))
+    def unrestricted_mode(self) -> bool:
+        return bool(self.attribute(config.Config.UNRESTRICTED_MODE))
 
     @property
     def websearch_provider(self) -> str:

@@ -41,7 +41,10 @@ from cterm.config import Config, get_config
 from cterm.config.utils import (
     is_ollama_installed,
     get_models,
+    get_openai_compatible_models,
     get_openrouter_models,
+    validate_openrouter_key,
+    normalize_openai_compatible_url,
     _ollama_server_running,
 )
 from cterm.ui.tui.config.mixin import (
@@ -229,7 +232,7 @@ def _state_openrouter_key_choice(config: Config, ui: ConfigPromptHandle, binary:
     idx = ui.select("Change API key?", ["Keep existing key", "Enter a new key"], 0)
     if idx == 1:
         return "OPENROUTER_KEY_INPUT"
-    return "OPENROUTER_MODEL"
+    return "OPENROUTER_CONNECT"
 
 
 def _state_openrouter_key_input(config: Config, ui: ConfigPromptHandle, binary: str) -> str:
@@ -240,7 +243,14 @@ def _state_openrouter_key_input(config: Config, ui: ConfigPromptHandle, binary: 
             continue
         config.set_provider_value(Config.OPEN_ROUTER, Config.PROVIDER_API_KEY, api_key)
         ui.log("✓ API key saved", STYLE_SUCCESS)
+        return "OPENROUTER_CONNECT"
+
+
+def _state_openrouter_connect(config: Config, ui: ConfigPromptHandle, binary: str) -> str:
+    if validate_openrouter_key(config.openrouter_api_key):
         return "OPENROUTER_MODEL"
+    ui.log("Could not validate the OpenRouter API key. Check your key and connection.", STYLE_ERROR)
+    return "OPENROUTER_KEY_INPUT"
 
 
 def _state_openrouter_model(config: Config, ui: ConfigPromptHandle, binary: str) -> str:
@@ -371,18 +381,30 @@ def _state_ollama_small_model(config: Config, ui: ConfigPromptHandle, binary: st
 
 
 def _state_openai_compatible_url(config: Config, ui: ConfigPromptHandle, binary: str) -> str:
-    url = ui.input("OpenAI-compatible server URL (required)", default="", placeholder="http://your-server:port")
+    current = normalize_openai_compatible_url(config.openai_compatible_server_url or "")
+    url = ui.input(
+        "OpenAI-compatible server URL (required)",
+        default=current,
+        placeholder="http://your-server:port",
+    )
     if not url:
         ui.log("Error: server URL is required", STYLE_ERROR)
         return "OPENAI_COMPATIBLE_URL"
-    config.set(Config.OPENAI_COMPATIBLE_SERVER_URL, url)
+    config.set(Config.OPENAI_COMPATIBLE_SERVER_URL, normalize_openai_compatible_url(url))
     api_key = ui.input(
         "OpenAI-compatible API key (optional)",
         default=config.openai_compatible_api_key or "",
         placeholder="Leave blank when not required",
     )
     config.set_provider_value(Config.OPENAI_COMPATIBLE, Config.PROVIDER_API_KEY, api_key)
-    return "OPENAI_COMPATIBLE_MODEL"
+    return "OPENAI_COMPATIBLE_CONNECT"
+
+
+def _state_openai_compatible_connect(config: Config, ui: ConfigPromptHandle, binary: str) -> str:
+    if get_openai_compatible_models(config.openai_compatible_server_url, config.openai_compatible_api_key):
+        return "OPENAI_COMPATIBLE_MODEL"
+    ui.log("Could not connect to the OpenAI-compatible server or list its models.", STYLE_WARNING)
+    return "OPENAI_COMPATIBLE_URL"
 
 
 def _state_openai_compatible_model(config: Config, ui: ConfigPromptHandle, binary: str) -> str:
@@ -426,17 +448,17 @@ def _provider_complete_state(ui: ConfigPromptHandle) -> str:
 
 
 def _state_common_bash(config: Config, ui: ConfigPromptHandle, binary: str) -> str:
-    current_unrestricted = config.unrestricted_bash
+    current_unrestricted = config.unrestricted_mode
     enable = ui.confirm(
-        f"Enable unrestricted bash mode?{' (currently enabled)' if current_unrestricted else ''}",
+        f"Enable unrestricted mode?{' (currently enabled)' if current_unrestricted else ''}",
         default_yes=current_unrestricted,
     )
     if enable and not current_unrestricted:
-        config.set(Config.BASH_UNRESTRICTED, True)
-        ui.log("✓ Unrestricted bash mode enabled", STYLE_SUCCESS)
+        config.set(Config.UNRESTRICTED_MODE, True)
+        ui.log("✓ Unrestricted mode enabled", STYLE_SUCCESS)
     elif not enable and current_unrestricted:
-        config.set(Config.BASH_UNRESTRICTED, False)
-        ui.log("✓ Unrestricted bash mode disabled", STYLE_SUCCESS)
+        config.set(Config.UNRESTRICTED_MODE, False)
+        ui.log("✓ Unrestricted mode disabled", STYLE_SUCCESS)
     return "COMMON_THINKING"
 
 
@@ -459,6 +481,7 @@ STATE_HANDLERS: dict[str, Callable[[Config, ConfigPromptHandle, str], str]] = {
     "PROVIDER": _state_provider,
     "OPENROUTER_KEY_CHOICE": _state_openrouter_key_choice,
     "OPENROUTER_KEY_INPUT": _state_openrouter_key_input,
+    "OPENROUTER_CONNECT": _state_openrouter_connect,
     "OPENROUTER_MODEL": _state_openrouter_model,
     "OPENROUTER_SMALL_MODEL": _state_openrouter_small_model,
     "OLLAMA_INSTALL_CHECK": _state_ollama_install_check,
@@ -467,6 +490,7 @@ STATE_HANDLERS: dict[str, Callable[[Config, ConfigPromptHandle, str], str]] = {
     "OLLAMA_MODEL": _state_ollama_model,
     "OLLAMA_SMALL_MODEL": _state_ollama_small_model,
     "OPENAI_COMPATIBLE_URL": _state_openai_compatible_url,
+    "OPENAI_COMPATIBLE_CONNECT": _state_openai_compatible_connect,
     "OPENAI_COMPATIBLE_MODEL": _state_openai_compatible_model,
     "OPENAI_COMPATIBLE_SMALL_MODEL": _state_openai_compatible_small_model,
     "COMMON_BASH": _state_common_bash,
@@ -476,6 +500,8 @@ STATE_HANDLERS: dict[str, Callable[[Config, ConfigPromptHandle, str], str]] = {
 _NON_INTERACTIVE_STATES = frozenset({
     "OLLAMA_CONNECT",
     "OLLAMA_INSTALL_CHECK",
+    "OPENAI_COMPATIBLE_CONNECT",
+    "OPENROUTER_CONNECT",
 })
 
 

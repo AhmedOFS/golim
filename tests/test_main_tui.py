@@ -25,6 +25,44 @@ class MainTuiTests(unittest.TestCase):
         chat.assert_called_once_with("hello there", "ollama")
         tui.assert_not_called()
 
+    def test_broken_config_prints_diagnostic_instead_of_crashing(self):
+        from cterm.config import ConfigSchemaError
+        from cterm.config.config import Config
+
+        error = ConfigSchemaError("Invalid cterm configuration at /bad/path")
+        with patch.object(main_module, "setup_root_logger"), \
+             patch.object(Config, "_load", side_effect=error), \
+             patch("sys.stderr") as stderr:
+            for argv in ([], ["hello"], ["-i"]):
+                result = main_module.main(argv)
+                self.assertEqual(result, 1)
+
+        output = "".join(call.args[0] for call in stderr.write.call_args_list)
+        self.assertIn("Invalid cterm configuration", output)
+        self.assertIn("cterm -i", output)
+
+    def test_config_schema_error_reports_json_line_and_column(self):
+        import json as _json
+
+        from cterm.config import ConfigSchemaError
+        from cterm.config.config import Config
+
+        try:
+            _json.loads('{\n    "providers": ')
+        except _json.JSONDecodeError as exc:
+            json_error = exc
+            schema_error = ConfigSchemaError("Invalid cterm configuration at /bad/path")
+            schema_error.__cause__ = json_error
+
+        with patch.object(main_module, "setup_root_logger"), \
+             patch.object(Config, "_load", side_effect=schema_error), \
+             patch("sys.stderr") as stderr:
+            result = main_module.main(["hello"])
+
+        self.assertEqual(result, 1)
+        output = "".join(call.args[0] for call in stderr.write.call_args_list)
+        self.assertIn(f"line {json_error.lineno}, column {json_error.colno}", output)
+
     @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
     def test_reused_tui_runtime_does_not_store_ui(self):
         from cterm.ui.tui.app.app_tui import CtermApp

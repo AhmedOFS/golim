@@ -16,7 +16,7 @@ from .vars import (
     READ_FILE_PAGE_SIZE,
 )
 from .utils.bash_utils import (
-    _is_bash_unrestricted,
+    _is_unrestricted_mode,
     _requires_pty_streaming,
     _run_restricted,
     _run_unrestricted,
@@ -359,14 +359,14 @@ def bash(command: str, stream: bool = False, allow_privileged: bool = False, tim
     """
     Executes command lines.
 
-    When `bash_unrestricted` is true in ~/.cterm/config/config.json the command
+    When `unrestricted_mode` is true in ~/.cterm/config/config.json the command
     is passed directly to /bin/bash -c, giving full shell access (pipes,
     redirections, subshells, here-docs, etc.). The only remaining restriction
     is cterm's sudo whitelist: any `sudo <binary>` call whose resolved path is
     not on the whitelist is rejected and an approval_required result is
     returned, exactly as in the restricted path.
 
-    When `bash_unrestricted` is false (the default) the original safe argv
+    When `unrestricted_mode` is false (the default) the original safe argv
     parser is used. It supports unquoted `&&` chaining, unquoted `|` pipelines,
     quoted arguments, environment-variable and `~` expansion, glob expansion,
     and `2>/dev/null` stderr suppression. Other redirection and shell-only
@@ -378,7 +378,7 @@ def bash(command: str, stream: bool = False, allow_privileged: bool = False, tim
     timeout, timeout_error = _coerce_bash_timeout(timeout)
     if timeout_error:
         return timeout_error
-    if _is_bash_unrestricted():
+    if _is_unrestricted_mode():
         runner, streamer = _run_unrestricted, _stream_unrestricted
     else:
         runner, streamer = _run_restricted, _stream_restricted

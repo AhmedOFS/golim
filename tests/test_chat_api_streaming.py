@@ -97,6 +97,24 @@ class ChatApiStreamingTests(unittest.TestCase):
             {"command": "pwd"},
         )
 
+    def test_openai_compatible_chat_appends_v1_once_with_or_without_v1(self):
+        from cterm.api import openai_compatible
+
+        for stored_url in ("http://host:8000/v1", "http://host:8000"):
+            with self.subTest(stored_url=stored_url):
+                config = MagicMock(
+                    openai_compatible_server_url=stored_url,
+                    openai_compatible_api_key="key",
+                )
+                response = MagicMock()
+                response.content = json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode("utf-8")
+
+                with patch("cterm.api.openai_compatible.requests.post", return_value=response) as post:
+                    result = openai_compatible.chat("model", [{"role": "user", "content": "hi"}], config=config)
+
+                self.assertEqual(result["message"]["content"], "ok")
+                self.assertEqual(post.call_args.args[0], "http://host:8000/v1/chat/completions")
+
     def test_openai_stream_reconstructs_reasoning_content_and_tool_args(self):
         deltas = []
         response = FakeStreamResponse([

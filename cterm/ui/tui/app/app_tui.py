@@ -613,7 +613,7 @@ class CtermApp(ConfigUIMixin, App[int]):
         self._menu_page = "settings"
         self.query_one("#menu_panel", MenuPanel).show_options("Settings", [
             f"Thinking traces: {'on' if config.stream_thinking_traces else 'off'}",
-            f"Unrestricted bash: {'on' if config.unrestricted_bash else 'off'}",
+            f"Unrestricted mode: {'on' if config.unrestricted_mode else 'off'}",
             f"Max iteration limit: {config.max_iteration_limit}",
             f"Dark mode: {'on' if config.dark_mode else 'off'}",
             "Back",
@@ -648,7 +648,7 @@ class CtermApp(ConfigUIMixin, App[int]):
             if index == 0:
                 config.set(Config.STREAM_THINKING_TRACES, not config.stream_thinking_traces)
             elif index == 1:
-                config.set(Config.BASH_UNRESTRICTED, not config.unrestricted_bash)
+                config.set(Config.UNRESTRICTED_MODE, not config.unrestricted_mode)
             elif index == 2:
                 self._menu_page = "max_iterations"
                 panel = self.query_one("#menu_panel", MenuPanel)

@@ -2,11 +2,34 @@
 import shutil
 import subprocess
 import time
+from urllib.parse import urlparse, urlunparse
 
 import requests
 
 
 OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
+OPENROUTER_KEY_URL = "https://openrouter.ai/api/v1/key"
+
+
+def normalize_openai_compatible_url(url: str | None) -> str:
+    """Normalize an OpenAI-compatible server URL to its base form.
+
+    OpenAI-compatible servers expose ``/v1/models`` and
+    ``/v1/chat/completions``, so a configured base URL may or may not already
+    end in ``/v1``.  This injects an ``http://`` scheme when the user omits
+    one and strips a trailing ``/v1`` so downstream callers can append
+    ``/v1/...`` without producing ``/v1/v1``.  Empty input is returned as-is.
+    """
+    if not url:
+        return url
+    url = url.strip()
+    if not url.startswith("http://") and not url.startswith("https://"):
+        url = "http://" + url
+    parsed = urlparse(url)
+    path = parsed.path.rstrip("/")
+    if path == "/v1":
+        path = ""
+    return urlunparse((parsed.scheme, parsed.netloc, path, "", "", "")).rstrip("/")
 
 
 def is_ollama_installed(binary: str = "ollama") -> bool:
@@ -86,6 +109,25 @@ def get_models(binary: str) -> list[str]:
     return []
 
 
+def validate_openrouter_key(api_key: str | None) -> bool:
+    """Return whether an OpenRouter API key is valid.
+
+    The current-key endpoint returns 401 for an invalid or missing token and
+    200 with the key details for a valid token.  The credits endpoint is not
+    used here because it requires a management key, not a regular API key.
+    """
+    if not api_key:
+        return False
+    headers = {"Authorization": f"Bearer {api_key}"}
+    try:
+        response = requests.get(OPENROUTER_KEY_URL, headers=headers, timeout=10.0)
+        response.raise_for_status()
+        payload = response.json()
+    except (requests.RequestException, ValueError):
+        return False
+    return isinstance(payload, dict) and "data" in payload
+
+
 def get_openrouter_models(api_key: str | None) -> list[str]:
     """Return the model identifiers advertised by OpenRouter.
 
@@ -117,7 +159,7 @@ def get_openai_compatible_models(url: str, api_key: str | None) -> list[str]:
         return []
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     try:
-        response = requests.get(url.rstrip("/") + "/v1/models", headers=headers, timeout=10.0)
+        response = requests.get(normalize_openai_compatible_url(url) + "/v1/models", headers=headers, timeout=10.0)
         response.raise_for_status()
         payload = response.json()
     except (requests.RequestException, ValueError):

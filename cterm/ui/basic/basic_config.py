@@ -7,6 +7,8 @@ from ...config import Config, get_config
 from ...config.utils import (
     is_ollama_installed,
     get_models,
+    validate_openrouter_key,
+    normalize_openai_compatible_url,
     _ollama_server_running,
     select_model,
     select_optional_model,
@@ -59,17 +61,24 @@ def init_openrouter(config: Config) -> int:
         if change in ("y", "yes"):
             api_key = None
 
-    if not api_key:
-        try:
-            api_key = input("Enter your OpenRouter API key: ").strip()
-        except (KeyboardInterrupt, EOFError):
-            print()
-            return 1
+    while True:
         if not api_key:
-            print("Error: API key is required")
-            return 1
-        config.set_provider_value(Config.OPEN_ROUTER, Config.PROVIDER_API_KEY, api_key)
-        print("✓ API key saved")
+            try:
+                api_key = input("Enter your OpenRouter API key: ").strip()
+            except (KeyboardInterrupt, EOFError):
+                print()
+                return 1
+            if not api_key:
+                print("Error: API key is required")
+                return 1
+        print("Checking OpenRouter API key...")
+        if validate_openrouter_key(api_key):
+            break
+        print("Could not validate the OpenRouter API key. Check your key and connection.\n")
+        api_key = ""
+
+    config.set_provider_value(Config.OPEN_ROUTER, Config.PROVIDER_API_KEY, api_key)
+    print("✓ API key saved")
 
     saved_model = config.selected_model
     print("\nOpenRouter model (e.g. anthropic/claude-3.5-sonnet,")
@@ -230,7 +239,7 @@ def init_openai_compatible(config: Config) -> int:
     if not url:
         print("Error: server URL is required")
         return 1
-    config.set(Config.OPENAI_COMPATIBLE_SERVER_URL, url)
+    config.set(Config.OPENAI_COMPATIBLE_SERVER_URL, normalize_openai_compatible_url(url))
 
     api_key = config.openai_compatible_api_key
     prompt = f"OpenAI-compatible API key [{api_key or 'optional'}]: "
@@ -307,10 +316,10 @@ def init_command(binary: str = "ollama") -> int:
 
         break  # ollama succeeded
 
-    # Unrestricted bash (common to both providers)
-    current_unrestricted = config.unrestricted_bash
+    # Unrestricted mode (common to both providers)
+    current_unrestricted = config.unrestricted_mode
     prompt = (
-        f"Enable unrestricted bash mode? [y/N]"
+        f"Enable unrestricted mode? [y/N]"
         f"{' (currently enabled)' if current_unrestricted else ''}: "
     )
     try:
@@ -319,12 +328,12 @@ def init_command(binary: str = "ollama") -> int:
         choice = ""
     if choice in ("y", "yes"):
         if not current_unrestricted:
-            config.set(Config.BASH_UNRESTRICTED, True)
-            print("✓ Unrestricted bash mode enabled")
+            config.set(Config.UNRESTRICTED_MODE, True)
+            print("✓ Unrestricted mode enabled")
     else:
         if current_unrestricted:
-            config.set(Config.BASH_UNRESTRICTED, False)
-            print("✓ Unrestricted bash mode disabled")
+            config.set(Config.UNRESTRICTED_MODE, False)
+            print("✓ Unrestricted mode disabled")
 
     current_thinking = config.stream_thinking_traces
     prompt = (

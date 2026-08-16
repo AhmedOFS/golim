@@ -44,7 +44,7 @@ class Config:
     API_PROVIDER = "api_provider"
     SELECTED_MODEL = "current_model"
     SMALL_MODEL = "small_model"
-    BASH_UNRESTRICTED = "bash_unrestricted"
+    UNRESTRICTED_MODE = "unrestricted_mode"
     STREAM_THINKING_TRACES = "thinking_traces"
     MAX_ITERATION_LIMIT = "max_iteration_limit"
     DARK_MODE = "dark_mode"
@@ -66,7 +66,7 @@ class Config:
         SELECTED_MODEL: None,
         SMALL_MODEL: None,
         STREAM_THINKING_TRACES: False,
-        BASH_UNRESTRICTED: False,
+        UNRESTRICTED_MODE: False,
         MAX_ITERATION_LIMIT: 50,
         DARK_MODE: False,
         WEBSEARCH_PROVIDER: EXA,
@@ -183,7 +183,7 @@ class Config:
     @property
     def small_model(self): return self.get(self.SMALL_MODEL)
     @property
-    def unrestricted_bash(self): return bool(self.get(self.BASH_UNRESTRICTED))
+    def unrestricted_mode(self): return bool(self.get(self.UNRESTRICTED_MODE))
     @property
     def stream_thinking_traces(self): return bool(self.get(self.STREAM_THINKING_TRACES))
     @property

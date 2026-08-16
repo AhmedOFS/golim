@@ -11,7 +11,7 @@ from cterm.mcp.vars import OUTPUT_LINE_LIMIT
 
 class BashParsingTests(unittest.TestCase):
     def setUp(self):
-        self.unrestricted_patch = patch("cterm.mcp.tools._is_bash_unrestricted", return_value=False)
+        self.unrestricted_patch = patch("cterm.mcp.tools._is_unrestricted_mode", return_value=False)
         self.unrestricted_patch.start()
 
     def tearDown(self):
@@ -128,7 +128,7 @@ class BashParsingTests(unittest.TestCase):
                 "returncode": 0,
             }, None
 
-        with patch("cterm.mcp.tools._is_bash_unrestricted", return_value=True), \
+        with patch("cterm.mcp.tools._is_unrestricted_mode", return_value=True), \
              patch.object(bash_utils.get_config(), "is_privileged_binary_allowed", return_value=True), \
              patch.object(bash_utils, "_stream_command_with_pty", fake_stream_command_with_pty):
             frames = list(bash("sudo apt install spotify", stream=True))

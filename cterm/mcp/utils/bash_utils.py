@@ -355,8 +355,8 @@ def _run_pipeline(argv_list: list, cmd_str: str, timeout=None) -> dict:
 #  Config & output finalization
 # ---------------------------------------------------------------------------
 
-def _is_bash_unrestricted() -> bool:
-    return get_config().unrestricted_bash
+def _is_unrestricted_mode() -> bool:
+    return get_config().unrestricted_mode
 
 
 def _count_output_lines(results: list[dict]) -> int:
