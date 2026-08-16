@@ -12,6 +12,24 @@ class FastMCPClient:
         self.socket_path = socket_path
         self._active_sockets = set()
         self._socket_lock = threading.Lock()
+        self.on_approval_request = None
+
+    def _handle_approval_request(self, approval):
+        """Ask the wired-in user UI for a binary approval decision.
+
+        The approval exchange stays in the transport layer: the model never
+        receives the approval request or an approval-required tool result.
+        """
+        callback = self.on_approval_request
+        if callback is None:
+            return False
+        return bool(callback(approval))
+
+    def _send_approval_response(self, approval_id, approved):
+        self._send_request("approval/respond", {
+            "approval_id": approval_id,
+            "approved": bool(approved),
+        })
 
     def _open_socket(self):
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -52,6 +70,11 @@ class FastMCPClient:
                     if not line:
                         continue
                     frame = json.loads(line.decode())
+                    if "approval_request" in frame:
+                        approval = frame["approval_request"]
+                        approved = self._handle_approval_request(approval)
+                        self._send_approval_response(approval.get("approval_id"), approved)
+                        continue
                     if "stream" not in frame:
                         return frame
             if not buf.strip():
@@ -81,6 +104,12 @@ class FastMCPClient:
                     if not line:
                         continue
                     frame = json.loads(line.decode())
+
+                    if "approval_request" in frame:
+                        approval = frame["approval_request"]
+                        approved = self._handle_approval_request(approval)
+                        self._send_approval_response(approval.get("approval_id"), approved)
+                        continue
 
                     if "stream" in frame:
                         if on_stream:

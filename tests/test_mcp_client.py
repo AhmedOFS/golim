@@ -1,6 +1,10 @@
 import asyncio
+import json
 import socket
+import tempfile
+import threading
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from cterm.core.mcp_client import FastMCPClient
@@ -28,6 +32,77 @@ class FakeListClient(FastMCPClient):
 
 
 class MCPClientTests(unittest.TestCase):
+    @staticmethod
+    def _run_fake_server(socket_path, behaviors, received):
+        """Serve a fixed per-connection script over a UDS socket.
+
+        Each behavior is a list of actions: ("recv",) records one JSON
+        request, ("send", frame) writes one JSON frame, ("close",) ends the
+        connection.
+        """
+        server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        server.bind(str(socket_path))
+        server.listen(8)
+
+        def serve():
+            try:
+                for behavior in behaviors:
+                    conn, _ = server.accept()
+                    try:
+                        for action in behavior:
+                            if action[0] == "recv":
+                                data = conn.recv(65536)
+                                if data:
+                                    received.append(json.loads(data.decode().strip()))
+                            elif action[0] == "send":
+                                conn.sendall((json.dumps(action[1]) + "\n").encode())
+                            elif action[0] == "close":
+                                break
+                    finally:
+                        try:
+                            conn.close()
+                        except OSError:
+                            pass
+            finally:
+                server.close()
+
+        thread = threading.Thread(target=serve, daemon=True)
+        thread.start()
+        return thread
+
+    @staticmethod
+    def _approval_server_behaviors():
+        stream_frame = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "stream": {"fd": "stdout", "line": "live", "end": "\n"},
+        }
+        approval_frame = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "approval_request": {
+                "approval_id": "1:0",
+                "approval_kind": "privileged_whitelist",
+                "binary": "/usr/bin/apt",
+                "command": "sudo apt update",
+            },
+        }
+        final_frame = {"jsonrpc": "2.0", "id": 1, "result": {"ok": True, "results": []}}
+        return [
+            [
+                ("recv",),
+                ("send", stream_frame),
+                ("send", approval_frame),
+                ("send", final_frame),
+                ("close",),
+            ],
+            [
+                ("recv",),
+                ("send", {"jsonrpc": "2.0", "id": 2, "result": {"resolved": True}}),
+                ("close",),
+            ],
+        ]
+
     def test_close_shutdowns_inflight_socket_before_closing(self):
         client = FastMCPClient("/tmp")
         actions = []
@@ -48,40 +123,93 @@ class MCPClientTests(unittest.TestCase):
             [("shutdown", socket.SHUT_RDWR), ("close",)],
         )
 
-    def test_client_returns_privileged_approval_required_without_prompting(self):
-        client = FakeClient([
-            {
-                "result": {
-                    "ok": False,
-                    "approval_required": True,
-                    "approval_kind": "privileged_whitelist",
-                    "binary": "/usr/bin/systemctl",
-                },
-            },
-        ])
+    def test_approval_decision_defaults_to_deny_without_callback(self):
+        client = FastMCPClient("/tmp")
 
-        result = asyncio.run(client.call_tool("bash", {"command": "sudo systemctl status"}))
+        self.assertFalse(client._handle_approval_request({
+            "binary": "/usr/bin/apt",
+        }))
 
-        self.assertFalse(result["ok"], result)
-        self.assertTrue(result["approval_required"], result)
-        self.assertEqual(client.calls[0][1], {"command": "sudo systemctl status"})
+    def test_approval_decision_uses_callback_when_set(self):
+        client = FastMCPClient("/tmp")
+        client.on_approval_request = lambda approval: approval["binary"] == "/usr/bin/apt"
 
-    def test_client_passes_explicit_privileged_approval_to_service(self):
-        client = FakeClient([
-            {"result": {"ok": True, "results": []}},
-        ])
+        self.assertTrue(client._handle_approval_request({"binary": "/usr/bin/apt"}))
+        self.assertFalse(client._handle_approval_request({"binary": "/usr/bin/chmod"}))
 
-        result = asyncio.run(client.call_tool(
-            "bash",
-            {"command": "sudo systemctl status", "allow_privileged": True},
-        ))
+    def test_stream_request_handles_approval_round_trip(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            socket_path = Path(tmp) / "mcp.sock"
+            received = []
+            approvals = []
+            thread = self._run_fake_server(
+                socket_path, self._approval_server_behaviors(), received,
+            )
+            client = FastMCPClient(socket_path)
+            client.on_approval_request = lambda approval: approvals.append(approval) or True
+            streams = []
 
-        self.assertTrue(result["ok"], result)
-        self.assertEqual(len(client.calls), 1)
+            frame = client._stream_request(
+                "tools/call",
+                {"name": "bash", "arguments": {"command": "sudo apt update"}},
+                on_stream=lambda fd, line, end: streams.append((fd, line, end)),
+            )
+            thread.join(5)
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(frame["result"], {"ok": True, "results": []})
+        self.assertEqual(streams, [("stdout", "live", "\n")])
+        self.assertEqual(approvals[0]["binary"], "/usr/bin/apt")
         self.assertEqual(
-            client.calls[0][1],
-            {"command": "sudo systemctl status", "allow_privileged": True},
+            received[1],
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "approval/respond",
+                "params": {"approval_id": "1:0", "approved": True},
+            },
         )
+
+    def test_stream_request_denies_approval_without_callback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            socket_path = Path(tmp) / "mcp.sock"
+            received = []
+            thread = self._run_fake_server(
+                socket_path, self._approval_server_behaviors(), received,
+            )
+            client = FastMCPClient(socket_path)
+
+            frame = client._stream_request(
+                "tools/call",
+                {"name": "bash", "arguments": {"command": "sudo apt update"}},
+            )
+            thread.join(5)
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(frame["result"], {"ok": True, "results": []})
+        self.assertEqual(received[1]["method"], "approval/respond")
+        self.assertFalse(received[1]["params"]["approved"])
+
+    def test_send_request_handles_approval_frame(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            socket_path = Path(tmp) / "mcp.sock"
+            received = []
+            thread = self._run_fake_server(
+                socket_path, self._approval_server_behaviors(), received,
+            )
+            client = FastMCPClient(socket_path)
+            client.on_approval_request = lambda approval: True
+
+            frame = client._send_request(
+                "tools/call",
+                {"name": "bash", "arguments": {"command": "sudo apt update"}},
+            )
+            thread.join(5)
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(frame["result"], {"ok": True, "results": []})
+        self.assertEqual(received[1]["method"], "approval/respond")
+        self.assertTrue(received[1]["params"]["approved"])
 
     def test_make_tool_uses_supplied_schema(self):
         client = FastMCPClient("/tmp")

@@ -54,11 +54,15 @@ class BashParsingTests(unittest.TestCase):
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["results"][0]["stdout"], "a|b")
 
-    def test_sudo_returns_approval_required_when_binary_is_not_whitelisted(self):
+    def test_sudo_returns_approval_required_even_when_binary_is_whitelisted(self):
         with tempfile.TemporaryDirectory() as tmp:
             wrapper = Path(tmp) / "cterm-privileged"
             wrapper.write_text("#!/bin/sh\n", encoding="utf-8")
             whitelist = Path(tmp) / "privileged_whitelist"
+            whitelist.write_text(
+                f"{bash_utils.shutil.which('test')}\n",
+                encoding="utf-8",
+            )
 
             with patch.dict(os.environ, {"CTERM_PRIVILEGED_WHITELIST": str(whitelist)}), \
                  patch.object(bash_utils, "PRIVILEGED_WRAPPER", str(wrapper)):
@@ -70,7 +74,44 @@ class BashParsingTests(unittest.TestCase):
         self.assertEqual(err["approval_kind"], "privileged_whitelist")
         self.assertIn("Privileged command requires approval", err["error"])
 
-    def test_sudo_allow_privileged_updates_whitelist_and_routes_to_wrapper(self):
+    def test_sudo_approval_callback_runs_command_after_whitelist_update(self):
+        calls = []
+        approvals = []
+
+        def fake_stream_command(argv, cmd_str, results, timeout, suppress_stderr):
+            calls.append(argv)
+            return {"command": cmd_str, "stdout": "ok", "stderr": "", "returncode": 0}, None
+            yield
+
+        def approve(info):
+            approvals.append(info)
+            bash_utils.get_config().add_privileged_binary(info["binary"])
+            return True
+
+        with tempfile.TemporaryDirectory() as tmp:
+            wrapper = Path(tmp) / "cterm-privileged"
+            wrapper.write_text("#!/bin/sh\n", encoding="utf-8")
+            whitelist = Path(tmp) / "privileged_whitelist"
+
+            with patch.dict(os.environ, {"CTERM_PRIVILEGED_WHITELIST": str(whitelist)}), \
+                 patch.object(bash_utils, "PRIVILEGED_WRAPPER", str(wrapper)), \
+                 patch.object(bash_utils, "_stream_command", fake_stream_command):
+                result = bash_utils._run_restricted(
+                    "sudo test -d /",
+                    approve_privileged=approve,
+                )
+                whitelist_lines = whitelist.read_text(encoding="utf-8").splitlines()
+
+        resolved_test = bash_utils.shutil.which("test")
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(approvals[0]["binary"], resolved_test)
+        self.assertEqual(
+            calls[0],
+            ["sudo", "--non-interactive", str(wrapper), resolved_test, "-d", "/"],
+        )
+        self.assertIn(resolved_test, whitelist_lines)
+
+    def test_sudo_denial_returns_not_approved_error(self):
         with tempfile.TemporaryDirectory() as tmp:
             wrapper = Path(tmp) / "cterm-privileged"
             wrapper.write_text("#!/bin/sh\n", encoding="utf-8")
@@ -78,19 +119,15 @@ class BashParsingTests(unittest.TestCase):
 
             with patch.dict(os.environ, {"CTERM_PRIVILEGED_WHITELIST": str(whitelist)}), \
                  patch.object(bash_utils, "PRIVILEGED_WRAPPER", str(wrapper)):
-                parsed, err = bash_utils._parse_command_part(
+                result = bash_utils._run_restricted(
                     "sudo test -d /",
-                    [],
-                    allow_privileged=True,
+                    approve_privileged=lambda info: False,
                 )
+                whitelist_exists = whitelist.exists()
 
-            self.assertIsNone(err)
-            resolved_test = bash_utils.shutil.which("test")
-            self.assertEqual(
-                parsed.argv_list[0].argv,
-                ["sudo", "--non-interactive", str(wrapper), resolved_test, "-d", "/"],
-            )
-            self.assertIn(resolved_test, whitelist.read_text(encoding="utf-8").splitlines())
+        self.assertFalse(result["ok"], result)
+        self.assertIn("not approved", result["error"])
+        self.assertFalse(whitelist_exists)
 
     def test_privileged_snap_and_apt_stream_with_pty(self):
         wrapper = bash_utils.PRIVILEGED_WRAPPER
@@ -169,14 +206,32 @@ class BashParsingTests(unittest.TestCase):
         self.assertFalse(result["ok"], result)
         self.assertIn("not a boolean", result["error"])
 
-    def test_approval_retry_exposes_only_unexecuted_chain_suffix(self):
-        with patch.object(bash_utils.get_config(), "is_privileged_binary_allowed", return_value=False), \
-             patch.object(bash_utils.os.path, "isfile", return_value=True):
+    def test_chain_sudo_denial_preserves_earlier_results(self):
+        with patch.object(bash_utils.os.path, "isfile", return_value=True):
             result = bash("printf first && sudo echo second")
 
-        self.assertTrue(result["approval_required"], result)
-        self.assertEqual(result["retry_command"], "sudo echo second")
+        self.assertFalse(result["ok"], result)
+        self.assertIn("not approved", result["error"])
+        self.assertNotIn("retry_command", result)
         self.assertEqual(result["results"][0]["stdout"], "first")
+
+    def test_chain_sudo_approval_executes_remaining_links(self):
+        calls = []
+
+        def fake_stream_command(argv, cmd_str, results, timeout, suppress_stderr):
+            calls.append(cmd_str)
+            return {"command": cmd_str, "stdout": "x", "stderr": "", "returncode": 0}, None
+            yield
+
+        with patch.object(bash_utils.os.path, "isfile", return_value=True), \
+             patch.object(bash_utils, "_stream_command", fake_stream_command):
+            result = bash_utils._run_restricted(
+                "printf first && sudo echo second",
+                approve_privileged=lambda info: True,
+            )
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(calls, ["printf first", "sudo echo second"])
 
     def test_expands_home_variable_without_shell(self):
         result = bash("test -d $HOME")

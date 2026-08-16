@@ -187,7 +187,7 @@ def _check_blocked_binary(resolved: str, results_ref: list) -> dict | None:
 #  Restricted command parsing
 # ---------------------------------------------------------------------------
 
-def _build_cmd(tokens: list[str], results_ref: list, allow_privileged: bool = False):
+def _build_cmd(tokens: list[str], results_ref: list, privileged_approved: bool = False):
     privileged = tokens[0] == "sudo"
     if privileged:
         tokens = tokens[1:]
@@ -217,23 +217,21 @@ def _build_cmd(tokens: list[str], results_ref: list, allow_privileged: bool = Fa
                 ),
                 "results": results_ref,
             }
-        if not get_config().is_privileged_binary_allowed(resolved):
-            if not allow_privileged:
-                return None, {
-                    "ok": False,
-                    "error": f"Privileged command requires approval: {resolved}",
-                    "approval_required": True,
-                    "approval_kind": "privileged_whitelist",
-                    "binary": resolved,
-                    "results": results_ref,
-                }
-            get_config().add_privileged_binary(resolved)
+        if not privileged_approved:
+            return None, {
+                "ok": False,
+                "error": f"Privileged command requires approval: {resolved}",
+                "approval_required": True,
+                "approval_kind": "privileged_whitelist",
+                "binary": resolved,
+                "results": results_ref,
+            }
         return ["sudo", "--non-interactive", PRIVILEGED_WRAPPER, resolved] + args, None
 
     return [resolved] + args, None
 
 
-def _build_pipe_procs(pipe_segments: list[str], results_ref: list, allow_privileged: bool = False):
+def _build_pipe_procs(pipe_segments: list[str], results_ref: list, privileged_approved: bool = False):
     commands = []
     for seg in pipe_segments:
         seg = seg.strip()
@@ -246,17 +244,17 @@ def _build_pipe_procs(pipe_segments: list[str], results_ref: list, allow_privile
         if not tokens:
             return [], {"ok": False, "error": "Empty pipe segment after parsing", "results": results_ref}
         tokens, suppress_stderr = _strip_supported_redirection(tokens)
-        cmd, err = _build_cmd(tokens, results_ref, allow_privileged=allow_privileged)
+        cmd, err = _build_cmd(tokens, results_ref, privileged_approved=privileged_approved)
         if err:
             return [], err
         commands.append(ResolvedCommand(cmd, suppress_stderr=suppress_stderr))
     return commands, None
 
 
-def _parse_command_part(cmd_str: str, results_ref: list, allow_privileged: bool = False):
+def _parse_command_part(cmd_str: str, results_ref: list, privileged_approved: bool = False):
     pipe_segments = _split_pipes(cmd_str)
     if len(pipe_segments) > 1:
-        commands, err = _build_pipe_procs(pipe_segments, results_ref, allow_privileged=allow_privileged)
+        commands, err = _build_pipe_procs(pipe_segments, results_ref, privileged_approved=privileged_approved)
         if err:
             return None, err
         return ParsedCommandPart(argv_list=commands), None
@@ -273,7 +271,7 @@ def _parse_command_part(cmd_str: str, results_ref: list, allow_privileged: bool 
     if not tokens:
         return ParsedCommandPart(argv_list=[], suppress_stderr=suppress_stderr), None
 
-    cmd, err = _build_cmd(tokens, results_ref, allow_privileged=allow_privileged)
+    cmd, err = _build_cmd(tokens, results_ref, privileged_approved=privileged_approved)
     if err:
         return None, err
     return ParsedCommandPart(argv_list=[ResolvedCommand(cmd)], suppress_stderr=suppress_stderr), None
@@ -626,23 +624,56 @@ def _restricted_failure_payload(cmd_str, result_entry, results):
     return None
 
 
+def _request_privileged_approval(approve_privileged, err, cmd_str):
+    """Ask the client to approve a privileged binary and return the decision.
+
+    The server updates the whitelist before reporting a positive decision, so
+    callers simply re-parse the command afterwards. Without an approval
+    channel the request is denied.
+    """
+    if approve_privileged is None:
+        return False
+    return bool(approve_privileged({
+        "approval_kind": err.get("approval_kind", "privileged_whitelist"),
+        "binary": err.get("binary", ""),
+        "command": cmd_str,
+    }))
+
+
+def _privileged_denied_payload(err, results):
+    return {
+        "ok": False,
+        "error": f"Privileged command not approved: {err.get('binary', '')}",
+        "results": results,
+    }
+
+
 # ---------------------------------------------------------------------------
 #  Restricted execution (single generator drives both streaming and run modes)
 # ---------------------------------------------------------------------------
 
-def _exec_restricted(command, timeout=120, allow_privileged=False):
+def _exec_restricted(command, timeout=120, approve_privileged=None):
     """Generator: yields stream frames then a final result frame."""
     results = []
 
     commands = _split_chained_commands(command)
     for command_index, cmd_str in enumerate(commands):
-        parsed, err = _parse_command_part(cmd_str, results, allow_privileged=allow_privileged)
+        parsed, err = _parse_command_part(cmd_str, results)
+        if err and err.get("approval_required"):
+            if not _request_privileged_approval(approve_privileged, err, cmd_str):
+                yield {"type": "result", **_privileged_denied_payload(err, results)}
+                return
+            parsed, err = _parse_command_part(cmd_str, results, privileged_approved=True)
         if err:
             if err.get("approval_required"):
-                # Earlier links have already run.  The client must retry only
-                # the unexecuted suffix after approval, never the whole chain.
-                err["retry_command"] = " && ".join(commands[command_index:])
-            yield {"type": "result", **err}
+                yield {
+                    "type": "result",
+                    "ok": False,
+                    "error": f"Privileged command failed after approval: {err.get('binary', '')}",
+                    "results": results,
+                }
+            else:
+                yield {"type": "result", **err}
             return
 
         if not parsed.argv_list:
@@ -684,7 +715,7 @@ def _exec_restricted(command, timeout=120, allow_privileged=False):
 #  Unrestricted execution
 # ---------------------------------------------------------------------------
 
-def _prepare_unrestricted(command: str, allow_privileged: bool) -> tuple[str | None, dict | None]:
+def _prepare_unrestricted(command: str) -> tuple[str | None, dict | None]:
     sudo_replacements = []
     for m in re.finditer(r'(?<![^\s])sudo\s+(\S+)', command):
         binary_token = m.group(1)
@@ -693,16 +724,14 @@ def _prepare_unrestricted(command: str, allow_privileged: bool) -> tuple[str | N
         if not (resolved := shutil.which(binary_token)):
             continue
         if not get_config().is_privileged_binary_allowed(resolved):
-            if not allow_privileged:
-                return None, {
-                    "ok": False,
-                    "error": f"Privileged command requires approval: {resolved}",
-                    "approval_required": True,
-                    "approval_kind": "privileged_whitelist",
-                    "binary": resolved,
-                    "results": [],
-                }
-            get_config().add_privileged_binary(resolved)
+            return None, {
+                "ok": False,
+                "error": f"Privileged command requires approval: {resolved}",
+                "approval_required": True,
+                "approval_kind": "privileged_whitelist",
+                "binary": resolved,
+                "results": [],
+            }
         sudo_replacements.append((m.start(), m.end(), resolved))
 
     if sudo_replacements:
@@ -726,49 +755,65 @@ def _prepare_unrestricted(command: str, allow_privileged: bool) -> tuple[str | N
     return command, None
 
 
-def _exec_unrestricted(command, timeout=None, allow_privileged=False):
+def _exec_unrestricted(command, timeout=None, approve_privileged=None):
     """Generator: yields stream frames then a final result frame."""
-    command, err = _prepare_unrestricted(command, allow_privileged)
+    prepared, err = _prepare_unrestricted(command)
+    seen = set()
+    while err and err.get("approval_required"):
+        binary = err.get("binary", "")
+        if binary in seen:
+            yield {
+                "type": "result",
+                "ok": False,
+                "error": f"Privileged command failed after approval: {binary}",
+                "results": [],
+            }
+            return
+        seen.add(binary)
+        if not _request_privileged_approval(approve_privileged, err, command):
+            yield {"type": "result", **_privileged_denied_payload(err, [])}
+            return
+        prepared, err = _prepare_unrestricted(command)
     if err:
         yield {"type": "result", **err}
         return
 
-    argv = ["/bin/bash", "-c", command]
+    argv = ["/bin/bash", "-c", prepared]
     results = []
 
-    streamer = _stream_command_with_pty if _command_requires_pty_streaming(command) else _stream_command
+    streamer = _stream_command_with_pty if _command_requires_pty_streaming(prepared) else _stream_command
     entry, err = yield from streamer(
-        argv, command, results, timeout=timeout, suppress_stderr=False,
+        argv, prepared, results, timeout=timeout, suppress_stderr=False,
     )
     if err:
         yield {"type": "result", **err}
         return
 
     ok = entry["returncode"] == 0 or bool(entry["stdout"].strip())
-    yield {"type": "result", **_finalize_bash_payload({"ok": ok, "command": command, "results": [entry]})}
+    yield {"type": "result", **_finalize_bash_payload({"ok": ok, "command": prepared, "results": [entry]})}
 
 
 # ---------------------------------------------------------------------------
 #  Public API — thin wrappers preserving original function signatures
 # ---------------------------------------------------------------------------
 
-def _run_restricted(command, timeout=120, allow_privileged=False):
-    for frame in _exec_restricted(command, timeout=timeout, allow_privileged=allow_privileged):
+def _run_restricted(command, timeout=120, approve_privileged=None):
+    for frame in _exec_restricted(command, timeout=timeout, approve_privileged=approve_privileged):
         if frame.get("type") == "result":
             return {k: v for k, v in frame.items() if k != "type"}
     return {"ok": False, "error": "No result from bash execution"}
 
 
-def _run_unrestricted(command, timeout=None, allow_privileged=False):
-    for frame in _exec_unrestricted(command, timeout=timeout, allow_privileged=allow_privileged):
+def _run_unrestricted(command, timeout=None, approve_privileged=None):
+    for frame in _exec_unrestricted(command, timeout=timeout, approve_privileged=approve_privileged):
         if frame.get("type") == "result":
             return {k: v for k, v in frame.items() if k != "type"}
     return {"ok": False, "error": "No result from bash execution"}
 
 
-def _stream_restricted(command, timeout=120, allow_privileged=False):
-    return _exec_restricted(command, timeout=timeout, allow_privileged=allow_privileged)
+def _stream_restricted(command, timeout=120, approve_privileged=None):
+    return _exec_restricted(command, timeout=timeout, approve_privileged=approve_privileged)
 
 
-def _stream_unrestricted(command, timeout=None, allow_privileged=False):
-    return _exec_unrestricted(command, timeout=timeout, allow_privileged=allow_privileged)
+def _stream_unrestricted(command, timeout=None, approve_privileged=None):
+    return _exec_unrestricted(command, timeout=timeout, approve_privileged=approve_privileged)

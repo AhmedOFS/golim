@@ -355,16 +355,14 @@ def read_file(path: str, page: int = 1) -> dict:
         return {"ok": False, "error": str(e)}
 
 @tool
-def bash(command: str, stream: bool = False, allow_privileged: bool = False, timeout: int | None = None) -> dict:
+def bash(command: str, stream: bool = False, timeout: int | None = None, _approve_privileged=None) -> dict:
     """
     Executes command lines.
 
     When `unrestricted_mode` is true in ~/.cterm/config/config.json the command
     is passed directly to /bin/bash -c, giving full shell access (pipes,
     redirections, subshells, here-docs, etc.). The only remaining restriction
-    is cterm's sudo whitelist: any `sudo <binary>` call whose resolved path is
-    not on the whitelist is rejected and an approval_required result is
-    returned, exactly as in the restricted path.
+    is cterm's sudo whitelist, exactly as in the restricted path.
 
     When `unrestricted_mode` is false (the default) the original safe argv
     parser is used. It supports unquoted `&&` chaining, unquoted `|` pipelines,
@@ -383,8 +381,8 @@ def bash(command: str, stream: bool = False, allow_privileged: bool = False, tim
     else:
         runner, streamer = _run_restricted, _stream_restricted
     if stream:
-        return streamer(command, allow_privileged=allow_privileged, timeout=timeout)
-    return runner(command, allow_privileged=allow_privileged, timeout=timeout)
+        return streamer(command, approve_privileged=_approve_privileged, timeout=timeout)
+    return runner(command, approve_privileged=_approve_privileged, timeout=timeout)
 
 
 @tool

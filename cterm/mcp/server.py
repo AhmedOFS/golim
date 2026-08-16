@@ -11,15 +11,26 @@ import threading
 import asyncio
 import socket
 import json
+import itertools
 from pathlib import Path
 import pwd
 import queue
 import types
 
 from cterm.mcp.vars import INACTIVITY_TIMEOUT_SECONDS
+from cterm.mcp.config import get_config
 from cterm.mcp.utils.cancellation import bind_tool_cancellation
 
 logger = logging.getLogger(__name__)
+
+
+class _PendingApproval:
+    """Approval state held while a tool call waits for the client's answer."""
+
+    def __init__(self, info):
+        self.info = info
+        self.event = threading.Event()
+        self.approved = False
 
 def get_socket_path() -> Path:
     """Returns the UDS path based on the current user (using UID for robustness)."""
@@ -34,10 +45,26 @@ class MCPServer:
     def __init__(self, mcp_instance):
         self.mcp = mcp_instance
         self.last_activity = time.time()
-        
+        self._approvals_lock = threading.Lock()
+        self._pending_approvals = {}
+        self._approval_seq = itertools.count()
+
     def update_activity(self):
         """Update last activity timestamp"""
         self.last_activity = time.time()
+
+    def _resolve_approval(self, approval_id, approved):
+        """Resolve a pending approval; whitelist the binary on approval."""
+        with self._approvals_lock:
+            pending = self._pending_approvals.pop(approval_id, None)
+        if pending is None:
+            return False
+        binary = pending.info.get("binary")
+        if approved and binary:
+            get_config().add_privileged_binary(binary)
+        pending.approved = bool(approved)
+        pending.event.set()
+        return True
     
     async def _wait_for_disconnect(self, reader: asyncio.StreamReader):
         """Wait until the client half-closes or closes its connection."""
@@ -78,16 +105,38 @@ class MCPServer:
 
     async def _run_tool_call(
         self, tool_func, arguments, request_id, writer, reader=None,
+        inject_approval=False,
     ):
         """Run one tool off-loop and cancel it when its client disconnects."""
         events = queue.Queue()
         cancel_event = threading.Event()
-        worker = self._start_tool_worker(tool_func, arguments, events, cancel_event)
+        local_approvals = []
+
+        def request_approval(info):
+            """Block the tool worker until the client answers the approval."""
+            with self._approvals_lock:
+                seq = next(self._approval_seq)
+                approval_id = f"{request_id}:{seq}"
+                pending = _PendingApproval(info)
+                self._pending_approvals[approval_id] = pending
+            local_approvals.append(approval_id)
+            events.put(("approval", approval_id, info))
+            pending.event.wait()
+            return pending.approved
+
+        call_arguments = dict(arguments)
+        if inject_approval:
+            call_arguments["_approve_privileged"] = request_approval
+        worker = self._start_tool_worker(tool_func, call_arguments, events, cancel_event)
         worker_finished = False
         disconnect_task = (
             asyncio.create_task(self._wait_for_disconnect(reader))
             if reader is not None else None
         )
+
+        def release_pending_approvals():
+            for approval_id in local_approvals:
+                self._resolve_approval(approval_id, False)
 
         def send(obj: dict):
             writer.write((json.dumps(obj) + "\n").encode("utf-8"))
@@ -95,14 +144,34 @@ class MCPServer:
         try:
             while True:
                 if disconnect_task is not None and disconnect_task.done():
+                    release_pending_approvals()
                     await self._cancel_tool_worker(worker, cancel_event)
                     worker_finished = True
                     return False
 
+                self.update_activity()
+
                 try:
-                    event_type, value = events.get_nowait()
+                    event = events.get_nowait()
+                    event_type = event[0]
+                    value = event[1] if len(event) == 2 else event[1:]
                 except queue.Empty:
                     await asyncio.sleep(0.01)
+                    continue
+
+                if event_type == "approval":
+                    approval_id, info = value
+                    send({
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "approval_request": {
+                            "approval_id": approval_id,
+                            "approval_kind": info.get("approval_kind", "privileged_whitelist"),
+                            "binary": info.get("binary", ""),
+                            "command": info.get("command", ""),
+                        },
+                    })
+                    await writer.drain()
                     continue
 
                 if event_type == "error":
@@ -140,11 +209,13 @@ class MCPServer:
                 worker_finished = True
                 return True
         except (BrokenPipeError, ConnectionResetError):
+            release_pending_approvals()
             await self._cancel_tool_worker(worker, cancel_event)
             worker_finished = True
             raise
         finally:
             if not worker_finished and worker.is_alive():
+                release_pending_approvals()
                 await self._cancel_tool_worker(worker, cancel_event)
             if disconnect_task is not None:
                 disconnect_task.cancel()
@@ -164,6 +235,11 @@ class MCPServer:
         JSON frames before the final result frame:
           {"jsonrpc":"2.0","id":N,"stream":{"fd":"stdout"|"stderr","line":"..."}}
           {"jsonrpc":"2.0","id":N,"result": <final result dict>}
+
+        A held bash tool call can also emit an approval frame:
+          {"jsonrpc":"2.0","id":N,"approval_request":{"approval_id":...,"binary":...}}
+        resolved by a separate `approval/respond` request. The approval
+        exchange is never returned to the model as a tool result.
 
         Non-streaming tools send a single result frame as before.
         """
@@ -190,7 +266,7 @@ class MCPServer:
                             properties = {}
                             required = []
                             for pname, param in sig.parameters.items():
-                                if pname in ('kwargs', 'args'):
+                                if pname in ('kwargs', 'args') or pname.startswith('_'):
                                     continue
                                 prop = {"type": "string"}
                                 if param.annotation is not inspect.Parameter.empty:
@@ -226,7 +302,8 @@ class MCPServer:
 
             elif method == "tools/call":
                 tool_name = params.get("name")
-                arguments = params.get("arguments", {})
+                arguments = dict(params.get("arguments") or {})
+                arguments.pop("allow_privileged", None)
 
                 if not hasattr(self.mcp, tool_name):
                     send({
@@ -239,7 +316,18 @@ class MCPServer:
                 tool_func = getattr(self.mcp, tool_name)
                 await self._run_tool_call(
                     tool_func, arguments, request_id, writer, reader,
+                    inject_approval=(tool_name == "bash"),
                 )
+
+            elif method == "approval/respond":
+                approval_id = params.get("approval_id")
+                approved = bool(params.get("approved"))
+                resolved = self._resolve_approval(approval_id, approved)
+                send({
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "result": {"resolved": resolved},
+                })
 
             else:
                 send({

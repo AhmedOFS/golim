@@ -10,6 +10,7 @@ class FakeMCPClient:
     def __init__(self, results):
         self.results = list(results)
         self.calls = []
+        self.on_approval_request = None
 
     async def call_tool(self, tool_name, args, stream_output=False, on_stream=None):
         self.calls.append((tool_name, dict(args), stream_output))
@@ -72,14 +73,8 @@ class ToolApprovalTests(unittest.TestCase):
         agent.mcp_client = client
         return agent
 
-    def test_tool_agent_prompts_then_retries_with_service_side_approval(self):
+    def test_tool_agent_wires_client_approval_callback_to_ui(self):
         client = FakeMCPClient([
-            {
-                "ok": False,
-                "approval_required": True,
-                "approval_kind": "privileged_whitelist",
-                "binary": "/usr/bin/chmod",
-            },
             {"ok": True, "results": []},
         ])
         ui = FakeUI(approved=True)
@@ -88,23 +83,36 @@ class ToolApprovalTests(unittest.TestCase):
         result = agent._execute_tool("bash", {"command": "sudo chmod 666 new-logs.txt"})
 
         self.assertTrue(result["ok"], result)
-        self.assertEqual(ui.approval_prompts, ["/usr/bin/chmod"])
-        self.assertEqual(client.calls[0][1], {"command": "sudo chmod 666 new-logs.txt"})
+        self.assertEqual(len(client.calls), 1)
         self.assertEqual(
-            client.calls[1][1],
-            {"command": "sudo chmod 666 new-logs.txt", "allow_privileged": True},
+            client.calls[0][1],
+            {"command": "sudo chmod 666 new-logs.txt"},
         )
-        self.assertTrue(client.calls[0][2])
-        self.assertTrue(client.calls[1][2])
+        self.assertNotIn("allow_privileged", client.calls[0][1])
+        self.assertIsNotNone(client.on_approval_request)
+        approved = client.on_approval_request({
+            "approval_id": "1:0",
+            "approval_kind": "privileged_whitelist",
+            "binary": "/usr/bin/chmod",
+            "command": "sudo chmod 666 new-logs.txt",
+        })
+        self.assertTrue(approved)
+        self.assertEqual(ui.approval_prompts, ["/usr/bin/chmod"])
 
-    def test_shell_retry_prints_captured_output_when_no_stream_frame_arrives(self):
+    def test_tool_agent_wires_client_approval_denial_to_ui(self):
         client = FakeMCPClient([
-            {
-                "ok": False,
-                "approval_required": True,
-                "approval_kind": "privileged_whitelist",
-                "binary": "/usr/bin/snap",
-            },
+            {"ok": True, "results": []},
+        ])
+        ui = FakeUI(approved=False)
+        agent = self._agent_with_client(client, ui=ui)
+
+        agent._execute_tool("bash", {"command": "sudo chmod 666 new-logs.txt"})
+
+        self.assertFalse(client.on_approval_request({"binary": "/usr/bin/chmod"}))
+        self.assertEqual(ui.approval_prompts, ["/usr/bin/chmod"])
+
+    def test_bash_result_prints_captured_output_when_no_stream_frame_arrives(self):
+        client = FakeMCPClient([
             {
                 "ok": True,
                 "results": [{
@@ -118,8 +126,7 @@ class ToolApprovalTests(unittest.TestCase):
         agent = self._agent_with_client(client)
         stderr = StringIO()
 
-        with patch.object(agent.ui, "request_binary_approval", return_value=True), \
-             redirect_stderr(stderr):
+        with redirect_stderr(stderr):
             result = agent._execute_tool("bash", {"command": "sudo snap install spotify"})
 
         self.assertTrue(result["ok"], result)
@@ -147,14 +154,9 @@ class ToolApprovalTests(unittest.TestCase):
         self.assertEqual(ui.tool_results, [final_result])
         self.assertEqual(ui.shell_results, [])
 
-    def test_tool_agent_denial_does_not_retry(self):
+    def test_tool_agent_passes_through_server_denial_without_retry(self):
         client = FakeMCPClient([
-            {
-                "ok": False,
-                "approval_required": True,
-                "approval_kind": "privileged_whitelist",
-                "binary": "/usr/bin/chmod",
-            },
+            {"ok": False, "error": "Privileged command not approved: /usr/bin/chmod"},
         ])
         ui = FakeUI(approved=False)
         agent = self._agent_with_client(client, ui=ui)
@@ -163,7 +165,7 @@ class ToolApprovalTests(unittest.TestCase):
 
         self.assertFalse(result["ok"], result)
         self.assertEqual(len(client.calls), 1)
-        self.assertEqual(ui.approval_prompts, ["/usr/bin/chmod"])
+        self.assertEqual(ui.approval_prompts, [])
         self.assertIn("not approved", result["error"])
 
     def test_write_file_prompts_before_writing_in_restricted_mode(self):

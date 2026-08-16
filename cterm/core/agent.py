@@ -420,45 +420,19 @@ class ToolAgent:
                 return value
             raise value
 
-    def _needs_privileged_approval(self, tool_result):
-        return (
-            isinstance(tool_result, dict)
-            and tool_result.get("approval_required")
-            and tool_result.get("approval_kind") == "privileged_whitelist"
-        )
+    def _wire_privileged_approval(self):
+        """Route server approval requests to the user through the current UI.
 
-    def _retry_privileged_shell_tool(
-        self, tool_name, args, label, tool_result, call_once, streamed_output,
-    ):
-        if not self._needs_privileged_approval(tool_result):
-            return tool_result
+        The approval exchange happens inside the MCP tool call, out-of-band
+        from the model: the server holds the bash call, the client prompts
+        the user, and the model only ever receives the final tool result.
+        """
+        client = self.mcp_client
+        if client is not None and hasattr(client, "on_approval_request"):
+            client.on_approval_request = self._ui_binary_approval
 
-        binary = tool_result.get("binary", "")
-        if not self.ui.request_binary_approval(binary):
-            return {
-                "ok": False,
-                "error": f"Privileged command not approved: {binary}",
-            }
-
-        retry_args = dict(args)
-        retry_args["allow_privileged"] = True
-        retry_command = tool_result.get("retry_command")
-        if retry_command:
-            retry_args["command"] = retry_command
-        log_diagnostic_section(f"tool_call {tool_name}", retry_args or {})
-        self.ui.tool_call(tool_name, retry_args)
-        retried_result = self._call_tool_with_long_running_policy(
-            label, call_once, retry_args, tool_name, streamed_output,
-        )
-        if retry_command and isinstance(retried_result, dict):
-            # Keep the full chain's result available to the model without
-            # replaying already-completed commands or duplicating their UI.
-            earlier_results = tool_result.get("results", [])
-            retry_results = retried_result.get("results", [])
-            retried_result = dict(retried_result)
-            retried_result["command"] = args.get("command", retry_command)
-            retried_result["results"] = [*earlier_results, *retry_results]
-        return retried_result
+    def _ui_binary_approval(self, approval):
+        return self.ui.request_binary_approval(approval.get("binary", ""))
 
     def _tool_status(self, tool_result):
         if (
@@ -496,6 +470,7 @@ class ToolAgent:
                 )
             )
 
+        self._wire_privileged_approval()
         label, tool_result = self._prepare_tool_call(tool_name, args, is_shell, is_exec, is_write)
         if tool_result is not None:
             log_diagnostic_section(f"tool_result {tool_name}", tool_result)
@@ -508,16 +483,6 @@ class ToolAgent:
 
         if not is_shell and isinstance(tool_result, dict):
             self.ui.tool_output(result=tool_result)
-
-        if is_shell:
-            tool_result = self._retry_privileged_shell_tool(
-                tool_name,
-                args,
-                label,
-                tool_result,
-                _call_once,
-                streamed_output,
-            )
 
         if is_shell:
             if shell_stream_seen:

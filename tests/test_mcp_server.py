@@ -1,10 +1,12 @@
 import asyncio
 import json
+import os
 import tempfile
 import threading
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from cterm.mcp.utils.cancellation import is_tool_cancelled
 from cterm.mcp.server import MCPServer
@@ -67,6 +69,20 @@ class _DisconnectReader:
         self.closed.set()
 
 
+class _ApprovalTools:
+    def __init__(self):
+        self.decisions = []
+
+    def gated(self, _approve_privileged=None):
+        decision = _approve_privileged({
+            "approval_kind": "privileged_whitelist",
+            "binary": "/usr/bin/apt",
+            "command": "sudo apt update",
+        })
+        self.decisions.append(decision)
+        return {"ok": decision}
+
+
 class _CaptureWriter:
     def __init__(self):
         self.frames = []
@@ -87,13 +103,30 @@ class MCPServerTests(unittest.TestCase):
         return event.is_set()
 
     @staticmethod
-    async def _start_tool_call(server, tools, name, arguments, request_id=1):
+    async def _start_tool_call(server, tools, name, arguments, request_id=1, inject_approval=False):
         reader = _DisconnectReader()
         writer = _CaptureWriter()
         task = asyncio.create_task(server._run_tool_call(
             getattr(tools, name), arguments, request_id, writer, reader,
+            inject_approval=inject_approval,
         ))
         return task, reader, writer
+
+    @staticmethod
+    async def _wait_for_frames(writer, count=1, timeout=2):
+        deadline = time.monotonic() + timeout
+        while len(writer.frames) < count and time.monotonic() < deadline:
+            await asyncio.sleep(0.01)
+        return len(writer.frames) >= count
+
+    @staticmethod
+    def _approval_respond_request(approval_id, approved):
+        return json.dumps({
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "approval/respond",
+            "params": {"approval_id": approval_id, "approved": approved},
+        })
 
     def test_broken_client_closes_streaming_generator(self):
         tools = _Tools()
@@ -230,6 +263,132 @@ class MCPServerTests(unittest.TestCase):
                 self.assertFalse(finished.exists())
 
         asyncio.run(run())
+
+    def test_approval_request_frame_is_sent_and_respond_resolves_it(self):
+        async def run():
+            tools = _ApprovalTools()
+            server = MCPServer(tools)
+            task, reader, writer = await self._start_tool_call(
+                server, tools, "gated", {}, 1, inject_approval=True,
+            )
+            self.assertTrue(await self._wait_for_frames(writer))
+            frame = json.loads(writer.frames[0].decode())
+            self.assertEqual(frame["id"], 1)
+            self.assertEqual(frame["approval_request"]["binary"], "/usr/bin/apt")
+            self.assertEqual(frame["approval_request"]["command"], "sudo apt update")
+            approval_id = frame["approval_request"]["approval_id"]
+
+            respond_writer = _CaptureWriter()
+            await server.handle_request(
+                self._approval_respond_request(approval_id, True),
+                respond_writer,
+            )
+            self.assertTrue(await asyncio.wait_for(task, 2))
+            self.assertTrue(tools.decisions[0])
+            result_frame = json.loads(writer.frames[-1].decode())
+            self.assertEqual(result_frame["result"], {"ok": True})
+            self.assertEqual(server._pending_approvals, {})
+            reader.close()
+
+        asyncio.run(run())
+
+    def test_approval_respond_whitelists_binary(self):
+        async def run():
+            with tempfile.TemporaryDirectory() as tmp:
+                whitelist = Path(tmp) / "privileged_whitelist"
+                with patch.dict(os.environ, {"CTERM_PRIVILEGED_WHITELIST": str(whitelist)}):
+                    tools = _ApprovalTools()
+                    server = MCPServer(tools)
+                    task, reader, writer = await self._start_tool_call(
+                        server, tools, "gated", {}, 1, inject_approval=True,
+                    )
+                    self.assertTrue(await self._wait_for_frames(writer))
+                    approval_id = json.loads(writer.frames[0].decode())["approval_request"]["approval_id"]
+
+                    await server.handle_request(
+                        self._approval_respond_request(approval_id, True),
+                        _CaptureWriter(),
+                    )
+                    self.assertTrue(await asyncio.wait_for(task, 2))
+                    reader.close()
+
+                lines = whitelist.read_text(encoding="utf-8").splitlines()
+                self.assertIn("/usr/bin/apt", lines)
+
+        asyncio.run(run())
+
+    def test_approval_respond_denial_does_not_whitelist_binary(self):
+        async def run():
+            with tempfile.TemporaryDirectory() as tmp:
+                whitelist = Path(tmp) / "privileged_whitelist"
+                with patch.dict(os.environ, {"CTERM_PRIVILEGED_WHITELIST": str(whitelist)}):
+                    tools = _ApprovalTools()
+                    server = MCPServer(tools)
+                    task, reader, writer = await self._start_tool_call(
+                        server, tools, "gated", {}, 1, inject_approval=True,
+                    )
+                    self.assertTrue(await self._wait_for_frames(writer))
+                    approval_id = json.loads(writer.frames[0].decode())["approval_request"]["approval_id"]
+
+                    await server.handle_request(
+                        self._approval_respond_request(approval_id, False),
+                        _CaptureWriter(),
+                    )
+                    self.assertTrue(await asyncio.wait_for(task, 2))
+                    self.assertFalse(tools.decisions[0])
+                    reader.close()
+
+                self.assertFalse(whitelist.exists())
+
+        asyncio.run(run())
+
+    def test_disconnect_denies_pending_approval(self):
+        async def run():
+            tools = _ApprovalTools()
+            server = MCPServer(tools)
+            task, reader, writer = await self._start_tool_call(
+                server, tools, "gated", {}, 1, inject_approval=True,
+            )
+            self.assertTrue(await self._wait_for_frames(writer))
+            reader.close()
+            self.assertFalse(await asyncio.wait_for(task, 2))
+            self.assertFalse(tools.decisions[0])
+            self.assertEqual(server._pending_approvals, {})
+
+        asyncio.run(run())
+
+    def test_unknown_approval_respond_reports_unresolved(self):
+        from cterm.mcp.tools import mcp
+        server = MCPServer(mcp)
+        writer = _CaptureWriter()
+
+        asyncio.run(server.handle_request(
+            self._approval_respond_request("missing:0", True),
+            writer,
+        ))
+
+        frame = json.loads(writer.frames[0].decode())
+        self.assertEqual(frame["result"], {"resolved": False})
+
+    def test_tools_list_hides_approval_parameters_from_model_schema(self):
+        from cterm.mcp.tools import mcp
+        server = MCPServer(mcp)
+        writer = _CaptureWriter()
+
+        asyncio.run(server.handle_request(
+            json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}),
+            writer,
+        ))
+
+        frame = json.loads(writer.frames[0].decode())
+        bash_schema = next(
+            tool["inputSchema"] for tool in frame["result"]["tools"]
+            if tool["name"] == "bash"
+        )
+        self.assertNotIn("allow_privileged", bash_schema["properties"])
+        self.assertNotIn("_approve_privileged", bash_schema["properties"])
+        self.assertNotIn("allow_privileged", bash_schema["required"])
+        self.assertNotIn("_approve_privileged", bash_schema["required"])
 
 
 if __name__ == "__main__":
