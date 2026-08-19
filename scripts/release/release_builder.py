@@ -131,7 +131,10 @@ def compile_application(runtime: Path) -> None:
     application = runtime / "lib" / "openterm"
     if not application.is_dir():
         raise RuntimeError("flattened runtime does not contain openterm")
-    python = next(runtime.glob("bin/python3.*"), None)
+    python = next(
+        (p for p in runtime.glob("bin/python3.*") if not p.name.endswith("-config")),
+        None,
+    )
     if python is None:
         raise RuntimeError("could not find standalone Python for bytecode compilation")
     run([str(python), "-m", "compileall", "-q", "-f", "-b", str(application)])
