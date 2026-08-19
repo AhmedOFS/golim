@@ -10,10 +10,10 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import tomllib
 
 
 ROOT = Path(__file__).resolve().parents[3]
+VERSION_FILE = ROOT / "openterm" / "version.py"
 APP_DIST = ROOT / "dist" / "linux"
 RELEASE_DIR = ROOT / "release"
 DEB_DIR = RELEASE_DIR / "linux"
@@ -23,8 +23,13 @@ POSTRM_SOURCE = ROOT / "packaging" / "postrm.sh"
 
 
 def project_version() -> str:
-    with (ROOT / "pyproject.toml").open("rb") as stream:
-        return str(tomllib.load(stream)["project"]["version"])
+    if not VERSION_FILE.is_file():
+        raise RuntimeError(
+            f"missing {VERSION_FILE}; run scripts/var_setup.py to generate it first"
+        )
+    namespace: dict[str, str] = {}
+    exec(VERSION_FILE.read_text(encoding="utf-8"), namespace)
+    return namespace["__version__"]
 
 
 def debian_architecture() -> str:

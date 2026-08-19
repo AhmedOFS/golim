@@ -4,7 +4,7 @@ import argparse
 import json
 import re
 import sys
-from . import __version__
+from .version import __version__
 from .config.app_home import resolve_app_home
 from .config import ConfigSchemaError, get_config, init_config
 from .config.utils import resolve_provider_settings
