@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from cterm.core.mcp_client import FastMCPClient
+from openterm.core.mcp_client import FastMCPClient
 
 
 class FakeClient(FastMCPClient):

@@ -1,1 +1,1 @@
-"""Build and release helpers for Cterm."""
+"""Build and release helpers for Openterm."""

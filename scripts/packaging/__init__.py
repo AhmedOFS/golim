@@ -1,1 +1,1 @@
-"""Platform-specific Cterm package builders."""
+"""Platform-specific Openterm package builders."""

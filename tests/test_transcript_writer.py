@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from cterm.ui.tui.app.transcript_writer import TranscriptWriter
+from openterm.ui.tui.app.transcript_writer import TranscriptWriter
 
 
 class TranscriptWriterTests(unittest.TestCase):

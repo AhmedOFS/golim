@@ -3,8 +3,8 @@ import unittest
 from importlib.util import find_spec
 from unittest.mock import patch
 
-from cterm.config import Config
-from cterm.core.agent import ToolAgent
+from openterm.config import Config
+from openterm.core.agent import ToolAgent
 
 
 class FakeUI:
@@ -31,7 +31,7 @@ class ThinkingTraceTests(unittest.TestCase):
                 on_thinking_delta("two")
                 return {"message": {"role": "assistant", "content": "ok"}}
 
-            with patch("cterm.core.agent.chat_with_model_api", side_effect=fake_chat):
+            with patch("openterm.core.agent.chat_with_model_api", side_effect=fake_chat):
                 result = agent._chat_with_optional_thinking("model", [])
 
         self.assertEqual(result["message"]["content"], "ok")
@@ -48,7 +48,7 @@ class ThinkingTraceTests(unittest.TestCase):
                 self.assertNotIn("on_thinking_delta", kwargs)
                 return {"message": {"role": "assistant", "content": "ok"}}
 
-            with patch("cterm.core.agent.chat_with_model_api", side_effect=fake_chat):
+            with patch("openterm.core.agent.chat_with_model_api", side_effect=fake_chat):
                 result = agent._chat_with_optional_thinking("model", [])
 
         self.assertEqual(result["message"]["content"], "ok")
@@ -57,7 +57,7 @@ class ThinkingTraceTests(unittest.TestCase):
 
     @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
     def test_tui_thinking_renderable_starts_with_icon_and_label(self):
-        from cterm.ui.tui.app.widgets.transcript import Transcript
+        from openterm.ui.tui.app.widgets.transcript import Transcript
 
         transcript = Transcript()
 
@@ -69,7 +69,7 @@ class ThinkingTraceTests(unittest.TestCase):
 
     @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
     def test_tui_live_thinking_updates_then_collapses_same_entry(self):
-        from cterm.ui.tui.app.widgets.transcript import Transcript
+        from openterm.ui.tui.app.widgets.transcript import Transcript
 
         transcript = Transcript()
         transcript.append_thinking_delta("first")

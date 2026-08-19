@@ -11,7 +11,7 @@ import sys
 
 from scripts.build.runtime_builder import ROOT, remove_path
 
-LAUNCHER_SOURCE = ROOT / "launcher" / "cterm_launcher.c"
+LAUNCHER_SOURCE = ROOT / "launcher" / "openterm_launcher.c"
 
 
 @dataclass(frozen=True)
@@ -56,26 +56,26 @@ def flatten_site_packages(runtime: Path) -> None:
     if site_packages is None:
         raise RuntimeError("could not find site-packages in the standalone runtime")
     for entry in sorted(site_packages.iterdir()):
-        copy_entry(entry, (runtime / "lib" if entry.name == "cterm" else runtime) / entry.name)
+        copy_entry(entry, (runtime / "lib" if entry.name == "openterm" else runtime) / entry.name)
     remove_path(site_packages)
 
 
 def _compiler() -> str:
     compiler = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
     if compiler is None:
-        raise RuntimeError("a C compiler is required to build the cterm launcher")
+        raise RuntimeError("a C compiler is required to build the openterm launcher")
     return compiler
 
 
-def compile_linux_launcher(runtime: Path, *, output_name: str = "cterm", entry_module: str = "cterm.__main__", entry_function: str = "main") -> None:
+def compile_linux_launcher(runtime: Path, *, output_name: str = "openterm", entry_module: str = "openterm.__main__", entry_function: str = "main") -> None:
     include = next((runtime / "include").glob("python*"), None)
     python_lib = next((runtime / "lib").glob("libpython*.so"), None)
     if include is None or python_lib is None:
         raise RuntimeError("runtime does not contain Linux embedding headers and libpython")
     run([
         _compiler(), "-O2", "-DNDEBUG",
-        f'-DCTERM_ENTRY_MODULE="{entry_module}"',
-        f'-DCTERM_ENTRY_FUNCTION="{entry_function}"',
+        f'-DOPENTERM_ENTRY_MODULE="{entry_module}"',
+        f'-DOPENTERM_ENTRY_FUNCTION="{entry_function}"',
         "-fPIE", "-I", str(include), str(LAUNCHER_SOURCE),
         "-L", str(runtime / "lib"),
         "-Wl,-rpath,$ORIGIN/lib", "-Wl,--disable-new-dtags",
@@ -85,8 +85,8 @@ def compile_linux_launcher(runtime: Path, *, output_name: str = "cterm", entry_m
     (runtime / output_name).chmod(0o755)
 
 
-def compile_macos_launcher(runtime: Path, *, output_name: str = "cterm", entry_module: str = "cterm") -> None:
-    run([_compiler(), "-O2", "-DNDEBUG", f'-DCTERM_ENTRY_MODULE="{entry_module}"', str(LAUNCHER_SOURCE), "-o", str(runtime / output_name)])
+def compile_macos_launcher(runtime: Path, *, output_name: str = "openterm", entry_module: str = "openterm") -> None:
+    run([_compiler(), "-O2", "-DNDEBUG", f'-DOPENTERM_ENTRY_MODULE="{entry_module}"', str(LAUNCHER_SOURCE), "-o", str(runtime / output_name)])
     (runtime / output_name).chmod(0o755)
 
 
@@ -128,9 +128,9 @@ def remove_interpreter_tools(runtime: Path, keep_interpreter: bool = False) -> N
 
 
 def compile_application(runtime: Path) -> None:
-    application = runtime / "lib" / "cterm"
+    application = runtime / "lib" / "openterm"
     if not application.is_dir():
-        raise RuntimeError("flattened runtime does not contain cterm")
+        raise RuntimeError("flattened runtime does not contain openterm")
     python = next(runtime.glob("bin/python3.*"), None)
     if python is None:
         raise RuntimeError("could not find standalone Python for bytecode compilation")
@@ -142,7 +142,7 @@ def compile_application(runtime: Path) -> None:
 
 
 def verify_runtime(runtime: Path) -> None:
-    launcher = runtime / "cterm"
+    launcher = runtime / "openterm"
     if not launcher.is_file() or not os.access(launcher, os.X_OK):
         raise RuntimeError("runtime launcher was not created")
     run([str(launcher), "--version"])
@@ -158,10 +158,10 @@ def assemble_runtime(config: ReleaseConfig, platform_name: str) -> None:
     flatten_site_packages(config.release_dir)
     if platform_name == "linux":
         compile_linux_launcher(config.release_dir)
-        compile_linux_launcher(config.release_dir, output_name="cterm-mcp", entry_module="cterm.mcp.server", entry_function="run_server")
+        compile_linux_launcher(config.release_dir, output_name="openterm-mcp", entry_module="openterm.mcp.server", entry_function="run_server")
     else:
         compile_macos_launcher(config.release_dir)
-        compile_macos_launcher(config.release_dir, output_name="cterm-mcp", entry_module="cterm.mcp.server")
+        compile_macos_launcher(config.release_dir, output_name="openterm-mcp", entry_module="openterm.mcp.server")
     compile_application(config.release_dir)
     remove_development_files(config.release_dir, platform_name)
     remove_interpreter_tools(config.release_dir, config.keep_interpreter)

@@ -3,10 +3,10 @@ set -u
 
 # Debian removes package-owned files itself. This script removes the
 # privileged/systemd integration created by postinstall.sh as well as the
-# user's Cterm state created for this installation.
-SUDOERS_FILE="/etc/sudoers.d/cterm"
-WRAPPER="/usr/lib/cterm/cterm-privileged"
-SERVICE="/usr/lib/systemd/user/cterm-mcp.service"
+# user's Openterm state created for this installation.
+SUDOERS_FILE="/etc/sudoers.d/openterm"
+WRAPPER="/usr/lib/openterm/openterm-privileged"
+SERVICE="/usr/lib/systemd/user/openterm-mcp.service"
 
 # dpkg calls this script with an action argument. During ``upgrade`` the
 # old package's postrm runs while the new package is unpacked but not yet
@@ -30,21 +30,21 @@ if [ -n "$REAL_USER" ] && [ "$REAL_USER" != "root" ]; then
   USER_UID="$(id -u "$REAL_USER")"
   if command -v runuser >/dev/null 2>&1 && command -v systemctl >/dev/null 2>&1; then
     runuser -u "$REAL_USER" -- env XDG_RUNTIME_DIR="/run/user/$USER_UID" \
-      systemctl --user disable --now cterm-mcp.service >/dev/null 2>&1 || true
+      systemctl --user disable --now openterm-mcp.service >/dev/null 2>&1 || true
     runuser -u "$REAL_USER" -- env XDG_RUNTIME_DIR="/run/user/$USER_UID" \
       systemctl --user daemon-reload >/dev/null 2>&1 || true
   fi
 
-  if [ -n "$REAL_HOME" ] && [ -d "$REAL_HOME/.cterm" ]; then
-    rm -rf -- "$REAL_HOME/.cterm"
-    ok "Removed Cterm user state from $REAL_HOME/.cterm."
+  if [ -n "$REAL_HOME" ] && [ -d "$REAL_HOME/.openterm" ]; then
+    rm -rf -- "$REAL_HOME/.openterm"
+    ok "Removed Openterm user state from $REAL_HOME/.openterm."
   fi
 else
-  warn "Could not identify the installing user; user Cterm state was left untouched."
+  warn "Could not identify the installing user; user Openterm state was left untouched."
 fi
 
 rm -f -- "$SERVICE"
 rm -f -- "$WRAPPER"
 rm -f -- "$SUDOERS_FILE"
-rmdir --ignore-fail-on-non-empty /usr/lib/cterm 2>/dev/null || true
-ok "Removed Cterm privileged and system integration files."
+rmdir --ignore-fail-on-non-empty /usr/lib/openterm 2>/dev/null || true
+ok "Removed Openterm privileged and system integration files."

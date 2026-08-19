@@ -1,1 +1,1 @@
-"""Platform-specific Cterm runtime builders."""
+"""Platform-specific Openterm runtime builders."""

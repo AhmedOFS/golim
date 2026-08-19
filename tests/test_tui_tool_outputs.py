@@ -4,7 +4,7 @@ import unittest
 from io import StringIO
 from importlib.util import find_spec
 
-from cterm.ui.tui.app.transcript_writer import TranscriptWriter
+from openterm.ui.tui.app.transcript_writer import TranscriptWriter
 
 
 def _plain(renderable):
@@ -18,7 +18,7 @@ def _plain(renderable):
 @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
 class TextualToolOutputTests(unittest.TestCase):
     def make_ui(self, transcript=None):
-        from cterm.ui.tui.app.agent_events_handler import TUIAgentEventsHandler
+        from openterm.ui.tui.app.agent_events_handler import TUIAgentEventsHandler
 
         class FakeApp:
             def __init__(self):
@@ -66,14 +66,14 @@ class TextualToolOutputTests(unittest.TestCase):
         ui.tool_output(result={
             "ok": True,
             "os": {"system": "Linux", "release": "6.1"},
-            "cwd": "/home/ahmed/Cterm",
+            "cwd": "/home/ahmed/Openterm",
         })
 
         summary, detail = app.expandables[-1]
         self.assertEqual(_plain(summary), "✓ Done")
         self.assertIn("os:", _plain(detail))
         self.assertIn("system: Linux", _plain(detail))
-        self.assertIn("cwd: /home/ahmed/Cterm", _plain(detail))
+        self.assertIn("cwd: /home/ahmed/Openterm", _plain(detail))
 
     def test_finder_result_expands_to_match_list(self):
         ui, app = self.make_ui()
@@ -217,7 +217,7 @@ class TextualToolOutputTests(unittest.TestCase):
     def test_tui_log_records_full_tool_output_and_thinking_trace(self):
         ui, _ = self.make_ui()
         log = StringIO()
-        from cterm.logger import DIAGNOSTIC_LOGGER
+        from openterm.logger import DIAGNOSTIC_LOGGER
 
         handler = logging.StreamHandler(log)
         handler.setFormatter(logging.Formatter("%(message)s"))
@@ -225,7 +225,7 @@ class TextualToolOutputTests(unittest.TestCase):
         DIAGNOSTIC_LOGGER.setLevel(logging.DEBUG)
 
         try:
-            from cterm.logger import log_diagnostic_section
+            from openterm.logger import log_diagnostic_section
 
             log_diagnostic_section("tool_call bash", {"command": "seq 1 3"})
             log_diagnostic_section("tool_result bash", {

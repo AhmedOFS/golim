@@ -40,7 +40,7 @@ class PackagingLayoutTests(unittest.TestCase):
             (runtime / "include" / "python3.14").mkdir(parents=True)
             (runtime / "lib").mkdir()
             (runtime / "lib" / "libpython3.14.so").touch()
-            (runtime / "cterm").touch()
+            (runtime / "openterm").touch()
             calls = []
 
             def record_called_process(command, **kwargs):
@@ -65,14 +65,14 @@ class PackagingLayoutTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             bin_dir = Path(temporary) / "bin"
             bin_dir.mkdir()
-            for name in ("python3.14", "python3.14-config", "cterm", "pip"):
+            for name in ("python3.14", "python3.14-config", "openterm", "pip"):
                 (bin_dir / name).write_text("tool")
 
             remove_interpreter_tools(Path(temporary), keep_interpreter=True)
 
             self.assertTrue((bin_dir / "python3.14").exists())
             self.assertFalse((bin_dir / "python3.14-config").exists())
-            self.assertFalse((bin_dir / "cterm").exists())
+            self.assertFalse((bin_dir / "openterm").exists())
             self.assertFalse((bin_dir / "pip").exists())
 
 

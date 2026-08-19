@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from cterm.mcp.tools import mcp
+from openterm.mcp.tools import mcp
 
 
 class ExecToolTests(unittest.TestCase):
@@ -40,7 +40,7 @@ class ExecToolTests(unittest.TestCase):
             def poll(self):
                 return self.returncode
 
-        with patch("cterm.mcp.tools.subprocess.Popen", return_value=Completed()) as popen:
+        with patch("openterm.mcp.tools.subprocess.Popen", return_value=Completed()) as popen:
             result = getattr(mcp, "exec")(code="pass", timeout=121)
 
         self.assertTrue(result["ok"], result)

@@ -6,8 +6,8 @@ import unittest
 from unittest.mock import patch
 from io import StringIO
 
-from cterm.config import Config
-from cterm.core.agent import ToolAgent
+from openterm.config import Config
+from openterm.core.agent import ToolAgent
 
 
 class OrchestrationTests(unittest.TestCase):
@@ -36,7 +36,7 @@ class OrchestrationTests(unittest.TestCase):
         agent.MAX_AGENT_ITERATIONS = 5
 
         with patch.object(agent, "_execute_tool", return_value={"ok": True, "results": []}) as execute_tool, \
-             patch("cterm.core.agent.chat_with_model_api", side_effect=fake_chat):
+             patch("openterm.core.agent.chat_with_model_api", side_effect=fake_chat):
             result = agent._run_action_agent("Do work.", selected_skills=[])
 
         self.assertEqual(result, {
@@ -71,7 +71,7 @@ class OrchestrationTests(unittest.TestCase):
         agent.MAX_AGENT_ITERATIONS = 5
 
         with patch.object(agent, "_execute_tool", return_value={"ok": True, "results": []}), \
-             patch("cterm.core.agent.chat_with_model_api", side_effect=fake_chat):
+             patch("openterm.core.agent.chat_with_model_api", side_effect=fake_chat):
             result = agent._run_action_agent("Do work.", selected_skills=[])
 
         self.assertEqual(result, {"ok": True, "LLM_response": "Done."})
@@ -91,7 +91,7 @@ class OrchestrationTests(unittest.TestCase):
             }]}
         }
         with patch.object(agent, "_execute_tool", return_value={"ok": True, "results": []}), \
-             patch("cterm.core.agent.chat_with_model_api", side_effect=[tool_call, RuntimeError("summary unavailable")]):
+             patch("openterm.core.agent.chat_with_model_api", side_effect=[tool_call, RuntimeError("summary unavailable")]):
             result = agent._run_action_agent("Do work.", selected_skills=[])
 
         self.assertIn("summary unavailable", result["LLM_response"])
@@ -113,7 +113,7 @@ class OrchestrationTests(unittest.TestCase):
         agent = ToolAgent("main")
         agent.tools = []
 
-        with patch("cterm.core.agent.chat_with_model_api", side_effect=fake_chat):
+        with patch("openterm.core.agent.chat_with_model_api", side_effect=fake_chat):
             result = agent._run_action_agent(
                 "followup: Expand on that.",
                 selected_skills=[],
@@ -155,7 +155,7 @@ class OrchestrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, \
              patch.dict(os.environ, {"HOME": tmp}), \
              patch.object(agent, "_execute_tool", return_value={"ok": True, "results": []}), \
-             patch("cterm.core.agent.chat_with_model_api", side_effect=fake_chat):
+             patch("openterm.core.agent.chat_with_model_api", side_effect=fake_chat):
             Config().set(Config.STREAM_THINKING_TRACES, True)
             result = agent._run_action_agent("Do work.", selected_skills=[])
 
@@ -210,7 +210,7 @@ class OrchestrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, \
              patch.dict(os.environ, {"HOME": tmp}), \
              patch.object(agent, "_execute_tool", return_value={"ok": True, "results": []}), \
-             patch("cterm.core.agent.chat_with_model_api", side_effect=fake_chat):
+             patch("openterm.core.agent.chat_with_model_api", side_effect=fake_chat):
             Config().set(Config.STREAM_THINKING_TRACES, True)
             result = agent._run_action_agent("Do work.", selected_skills=[])
 
@@ -233,7 +233,7 @@ class OrchestrationTests(unittest.TestCase):
             "result": {
                 "ok": True,
                 "output_truncated": True,
-                "output_file": "/tmp/cterm/data/bash_output.json",
+                "output_file": "/tmp/openterm/data/bash_output.json",
                 "output_line_count": 60,
                 "message": "Output exceeded 50 lines.",
                 "results": [{
@@ -246,7 +246,7 @@ class OrchestrationTests(unittest.TestCase):
         }])
 
         self.assertIn("output truncated: true", summary)
-        self.assertIn("output file: /tmp/cterm/data/bash_output.json", summary)
+        self.assertIn("output file: /tmp/openterm/data/bash_output.json", summary)
         self.assertIn("Output exceeded 50 lines.", summary)
 
     def test_execution_summary_includes_read_file_page_content(self):

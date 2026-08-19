@@ -3,7 +3,7 @@ import asyncio
 from importlib.util import find_spec
 from unittest.mock import MagicMock, patch
 
-from cterm import __main__ as main_module
+from openterm import __main__ as main_module
 
 
 class MainTuiTests(unittest.TestCase):
@@ -26,10 +26,10 @@ class MainTuiTests(unittest.TestCase):
         tui.assert_not_called()
 
     def test_broken_config_prints_diagnostic_instead_of_crashing(self):
-        from cterm.config import ConfigSchemaError
-        from cterm.config.config import Config
+        from openterm.config import ConfigSchemaError
+        from openterm.config.config import Config
 
-        error = ConfigSchemaError("Invalid cterm configuration at /bad/path")
+        error = ConfigSchemaError("Invalid openterm configuration at /bad/path")
         with patch.object(main_module, "setup_root_logger"), \
              patch.object(Config, "_load", side_effect=error), \
              patch("sys.stderr") as stderr:
@@ -38,20 +38,20 @@ class MainTuiTests(unittest.TestCase):
                 self.assertEqual(result, 1)
 
         output = "".join(call.args[0] for call in stderr.write.call_args_list)
-        self.assertIn("Invalid cterm configuration", output)
-        self.assertIn("cterm -i", output)
+        self.assertIn("Invalid openterm configuration", output)
+        self.assertIn("openterm -i", output)
 
     def test_config_schema_error_reports_json_line_and_column(self):
         import json as _json
 
-        from cterm.config import ConfigSchemaError
-        from cterm.config.config import Config
+        from openterm.config import ConfigSchemaError
+        from openterm.config.config import Config
 
         try:
             _json.loads('{\n    "providers": ')
         except _json.JSONDecodeError as exc:
             json_error = exc
-            schema_error = ConfigSchemaError("Invalid cterm configuration at /bad/path")
+            schema_error = ConfigSchemaError("Invalid openterm configuration at /bad/path")
             schema_error.__cause__ = json_error
 
         with patch.object(main_module, "setup_root_logger"), \
@@ -65,9 +65,9 @@ class MainTuiTests(unittest.TestCase):
 
     @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
     def test_reused_tui_runtime_does_not_store_ui(self):
-        from cterm.ui.tui.app.app_tui import CtermApp
+        from openterm.ui.tui.app.app_tui import OpentermApp
 
-        app = CtermApp("model", model="main")
+        app = OpentermApp("model", model="main")
 
         runtime = app._get_runtime()
         same_runtime = app._get_runtime()
@@ -77,8 +77,8 @@ class MainTuiTests(unittest.TestCase):
 
     @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
     def test_tui_prompt_placeholder_changes_with_state(self):
-        from cterm.ui.tui.app.app_tui import CtermApp
-        from cterm.ui.tui.app.widgets.prompt_line import (
+        from openterm.ui.tui.app.app_tui import OpentermApp
+        from openterm.ui.tui.app.widgets.prompt_line import (
             DONE_PROMPT_PLACEHOLDER,
             INITIAL_PROMPT_PLACEHOLDER,
             RUNNING_PROMPT_PLACEHOLDER,
@@ -115,7 +115,7 @@ class MainTuiTests(unittest.TestCase):
                 self.prompt.focus()
 
         fake_prompt_line = FakePromptLine()
-        app = CtermApp("model", model="main")
+        app = OpentermApp("model", model="main")
 
         def fake_query_one(selector, *_args, **_kwargs):
             if selector == PromptLine:
@@ -140,8 +140,8 @@ class MainTuiTests(unittest.TestCase):
 
     @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
     def test_config_reload_updates_model_and_discards_runtime(self):
-        from cterm.ui.tui.app.app_tui import CtermApp
-        from cterm.ui.tui.app.widgets.footer import Footer
+        from openterm.ui.tui.app.app_tui import OpentermApp
+        from openterm.ui.tui.app.widgets.footer import Footer
 
         class FakeFooter:
             def __init__(self):
@@ -161,7 +161,7 @@ class MainTuiTests(unittest.TestCase):
         config.api_provider = "ollama"
         config.selected_model = "new-model"
         config.small_model = "new-small"
-        app = CtermApp("old", config=config, model="old-model", small_model="old-small")
+        app = OpentermApp("old", config=config, model="old-model", small_model="old-small")
         fake_footer = FakeFooter()
         runtime = FakeRuntime()
         app._runtime = runtime
@@ -173,7 +173,7 @@ class MainTuiTests(unittest.TestCase):
 
         app.query_one = fake_query_one
 
-        with patch("cterm.config.utils.is_ollama_installed", return_value=True):
+        with patch("openterm.config.utils.is_ollama_installed", return_value=True):
             app._reload_config_settings()
 
         self.assertEqual(app.model_label, "new-model")
@@ -187,12 +187,12 @@ class MainTuiTests(unittest.TestCase):
 
     @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
     def test_tab_opens_main_menu_while_prompt_is_focused(self):
-        from cterm.ui.tui.app.app_tui import CtermApp
+        from openterm.ui.tui.app.app_tui import OpentermApp
 
         async def run_case():
             config = MagicMock()
             config.is_complete.return_value = True
-            app = CtermApp("model", model="main", config=config)
+            app = OpentermApp("model", model="main", config=config)
             async with app.run_test() as pilot:
                 self.assertEqual(app.focused.id, "prompt")
                 await pilot.press("tab")
@@ -208,14 +208,14 @@ class MainTuiTests(unittest.TestCase):
 
     @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
     def test_model_menu_arrow_keys_move_between_search_and_results(self):
-        from cterm.ui.tui.app.app_tui import CtermApp
+        from openterm.ui.tui.app.app_tui import OpentermApp
 
         async def run_case():
             config = MagicMock()
             config.is_complete.return_value = True
-            app = CtermApp("model", model="main", config=config)
+            app = OpentermApp("model", model="main", config=config)
             async with app.run_test() as pilot:
-                with patch("cterm.ui.tui.app.app_tui.get_configured_model_choices", return_value=(
+                with patch("openterm.ui.tui.app.app_tui.get_configured_model_choices", return_value=(
                     ["provider/one", "provider/two"],
                     {"provider/one": ("provider", "one"), "provider/two": ("provider", "two")},
                 )):

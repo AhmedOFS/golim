@@ -4,8 +4,8 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from cterm import config
-from cterm.mcp.config import ServerConfig, get_config, init_config
+from openterm import config
+from openterm.mcp.config import ServerConfig, get_config, init_config
 
 
 class McpConfigSchemaTests(unittest.TestCase):
@@ -22,7 +22,7 @@ class McpConfigSchemaTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_reader_returns_the_nested_schema_without_flattening(self):
-        path = Path(self.tmp.name) / ".cterm" / "config" / "config.json"
+        path = Path(self.tmp.name) / ".openterm" / "config" / "config.json"
         path.parent.mkdir(parents=True)
         schema = {
             config.Config.PROVIDERS: {
@@ -41,7 +41,7 @@ class McpConfigSchemaTests(unittest.TestCase):
         self.assertNotIn(config.Config.UNRESTRICTED_MODE, get_config().read().keys())
 
     def test_reader_uses_the_client_schema_keys_and_values(self):
-        path = Path(self.tmp.name) / ".cterm" / "config" / "config.json"
+        path = Path(self.tmp.name) / ".openterm" / "config" / "config.json"
         path.parent.mkdir(parents=True)
         path.write_text(json.dumps({
             config.Config.PROVIDERS: {},
@@ -57,7 +57,7 @@ class McpConfigSchemaTests(unittest.TestCase):
         self.assertEqual(server_config.websearch_provider, config.Config.PARALLEL)
 
     def test_reader_rejects_flat_config(self):
-        path = Path(self.tmp.name) / ".cterm" / "config" / "config.json"
+        path = Path(self.tmp.name) / ".openterm" / "config" / "config.json"
         path.parent.mkdir(parents=True)
         path.write_text(json.dumps({config.Config.UNRESTRICTED_MODE: True}))
 
@@ -67,8 +67,8 @@ class McpConfigSchemaTests(unittest.TestCase):
         server_config = init_config()
 
         self.assertIsInstance(server_config, ServerConfig)
-        self.assertEqual(server_config.config_path, Path(self.tmp.name) / ".cterm" / "config" / "config.json")
-        self.assertEqual(server_config.whitelist_path, Path(self.tmp.name) / ".cterm" / "privileged_whitelist")
+        self.assertEqual(server_config.config_path, Path(self.tmp.name) / ".openterm" / "config" / "config.json")
+        self.assertEqual(server_config.whitelist_path, Path(self.tmp.name) / ".openterm" / "privileged_whitelist")
 
 
 if __name__ == "__main__":

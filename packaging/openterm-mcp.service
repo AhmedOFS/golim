@@ -1,0 +1,22 @@
+# --- openterm-mcp.service ---
+# Installed to /usr/lib/systemd/user/ by the .deb package.
+
+[Unit]
+Description=Openterm MCP Tool Server (UDS/Inactivity Shutdown)
+# This service is started on demand by the openterm CLI client.
+
+[Service]
+# Type=simple means the process remains in the foreground as the main service process.
+Type=simple
+# Standard user environment variables are passed to the service.
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/lib/openterm/openterm-mcp
+# If the server exits successfully (due to inactivity timeout), we don't restart it.
+Restart=on-failure
+# No timeout needed, as the server manages its own inactivity timeout and graceful exit.
+# This prevents systemd from automatically cleaning up the socket file.
+
+[Install]
+# This section is optional but can be used if you want the user to be able to enable/disable it.
+# We will rely on manual start via systemctl --user start from the CLI.
+WantedBy=default.target

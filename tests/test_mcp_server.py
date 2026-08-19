@@ -8,9 +8,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from cterm.mcp.utils.cancellation import is_tool_cancelled
-from cterm.mcp.server import MCPServer
-from cterm.mcp.tools import bash, exec_python
+from openterm.mcp.utils.cancellation import is_tool_cancelled
+from openterm.mcp.server import MCPServer
+from openterm.mcp.tools import bash, exec_python
 
 
 class _Writer:
@@ -296,7 +296,7 @@ class MCPServerTests(unittest.TestCase):
         async def run():
             with tempfile.TemporaryDirectory() as tmp:
                 whitelist = Path(tmp) / "privileged_whitelist"
-                with patch.dict(os.environ, {"CTERM_PRIVILEGED_WHITELIST": str(whitelist)}):
+                with patch.dict(os.environ, {"OPENTERM_PRIVILEGED_WHITELIST": str(whitelist)}):
                     tools = _ApprovalTools()
                     server = MCPServer(tools)
                     task, reader, writer = await self._start_tool_call(
@@ -321,7 +321,7 @@ class MCPServerTests(unittest.TestCase):
         async def run():
             with tempfile.TemporaryDirectory() as tmp:
                 whitelist = Path(tmp) / "privileged_whitelist"
-                with patch.dict(os.environ, {"CTERM_PRIVILEGED_WHITELIST": str(whitelist)}):
+                with patch.dict(os.environ, {"OPENTERM_PRIVILEGED_WHITELIST": str(whitelist)}):
                     tools = _ApprovalTools()
                     server = MCPServer(tools)
                     task, reader, writer = await self._start_tool_call(
@@ -358,7 +358,7 @@ class MCPServerTests(unittest.TestCase):
         asyncio.run(run())
 
     def test_unknown_approval_respond_reports_unresolved(self):
-        from cterm.mcp.tools import mcp
+        from openterm.mcp.tools import mcp
         server = MCPServer(mcp)
         writer = _CaptureWriter()
 
@@ -371,7 +371,7 @@ class MCPServerTests(unittest.TestCase):
         self.assertEqual(frame["result"], {"resolved": False})
 
     def test_tools_list_hides_approval_parameters_from_model_schema(self):
-        from cterm.mcp.tools import mcp
+        from openterm.mcp.tools import mcp
         server = MCPServer(mcp)
         writer = _CaptureWriter()
 

@@ -1,1 +1,1 @@
-"""Platform-specific Cterm release assemblers."""
+"""Platform-specific Openterm release assemblers."""

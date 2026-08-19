@@ -4,9 +4,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from cterm.ui.basic.basic import TerminalUI
-from cterm.ui.basic.spinner import Spinner
-from cterm.logger import log_diagnostic_section, start_run_logging
+from openterm.ui.basic.basic import TerminalUI
+from openterm.ui.basic.spinner import Spinner
+from openterm.logger import log_diagnostic_section, start_run_logging
 
 
 class _RecordingSpinner:

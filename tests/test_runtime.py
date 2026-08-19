@@ -1,8 +1,8 @@
 import unittest
 from unittest.mock import MagicMock, patch
 
-from cterm.core.agent_events import active_agent_events_handler
-from cterm.core.runtime import Runtime
+from openterm.core.agent_events import active_agent_events_handler
+from openterm.core.runtime import Runtime
 
 
 class FakeUI:
@@ -66,9 +66,9 @@ class RuntimeTests(unittest.TestCase):
         def fake_chat(model, messages, tools=None, binary="ollama", response_format=None):
             return {"message": {"role": "assistant", "content": "Done."}}
 
-        with patch.object(runtime, "ensure_mcp_server", return_value="/tmp/cterm-test.sock"), \
+        with patch.object(runtime, "ensure_mcp_server", return_value="/tmp/openterm-test.sock"), \
              patch.object(runtime, "select_skills", return_value=([], "")), \
-             patch("cterm.core.agent.chat_with_model_api", side_effect=fake_chat):
+             patch("openterm.core.agent.chat_with_model_api", side_effect=fake_chat):
             result = runtime.run("Do work.")
 
         self.assertEqual(result, {"ok": True, "LLM_response": "Done."})
@@ -92,9 +92,9 @@ class RuntimeTests(unittest.TestCase):
                 return {"message": {"role": "assistant", "content": "First answer."}}
             return {"message": {"role": "assistant", "content": "Second answer."}}
 
-        with patch.object(runtime, "ensure_mcp_server", return_value="/tmp/cterm-test.sock"), \
+        with patch.object(runtime, "ensure_mcp_server", return_value="/tmp/openterm-test.sock"), \
              patch.object(runtime, "select_skills", return_value=([], "")), \
-             patch("cterm.core.agent.chat_with_model_api", side_effect=fake_chat):
+             patch("openterm.core.agent.chat_with_model_api", side_effect=fake_chat):
             first = runtime.run("Do work.")
             second = runtime.run_followup("// explain more")
 
@@ -122,9 +122,9 @@ class RuntimeTests(unittest.TestCase):
             chat_calls.append([message.copy() for message in messages])
             return {"message": {"role": "assistant", "content": "Clarified answer."}}
 
-        with patch.object(runtime, "ensure_mcp_server", return_value="/tmp/cterm-test.sock"), \
+        with patch.object(runtime, "ensure_mcp_server", return_value="/tmp/openterm-test.sock"), \
              patch.object(runtime, "select_skills", return_value=([], "")), \
-             patch("cterm.core.agent.chat_with_model_api", side_effect=fake_chat):
+             patch("openterm.core.agent.chat_with_model_api", side_effect=fake_chat):
             result = runtime.run_followup("use the smaller file", clarification=True)
 
         self.assertEqual(result, {"ok": True, "LLM_response": "Clarified answer."})
@@ -158,10 +158,10 @@ class RuntimeTests(unittest.TestCase):
             runtime.interrupt()
             return {"ok": True}
 
-        with patch.object(runtime, "ensure_mcp_server", return_value="/tmp/cterm-test.sock"), \
+        with patch.object(runtime, "ensure_mcp_server", return_value="/tmp/openterm-test.sock"), \
              patch.object(runtime, "select_skills", return_value=([], "")), \
-             patch("cterm.core.agent.chat_with_model_api", side_effect=fake_chat), \
-             patch("cterm.core.agent.ToolAgent._execute_tool", side_effect=interrupting_tool):
+             patch("openterm.core.agent.chat_with_model_api", side_effect=fake_chat), \
+             patch("openterm.core.agent.ToolAgent._execute_tool", side_effect=interrupting_tool):
             result = runtime.run("Stop after this.")
 
         self.assertEqual(result, {"ok": False, "LLM_response": "Interrupted."})
@@ -191,10 +191,10 @@ class RuntimeTests(unittest.TestCase):
                 }
             }
 
-        with patch.object(runtime, "ensure_mcp_server", return_value="/tmp/cterm-test.sock"), \
+        with patch.object(runtime, "ensure_mcp_server", return_value="/tmp/openterm-test.sock"), \
              patch.object(runtime, "select_skills", return_value=([], "")), \
-             patch("cterm.core.agent.chat_with_model_api", side_effect=fake_chat), \
-             patch("cterm.core.agent.ToolAgent._execute_tool") as execute_tool:
+             patch("openterm.core.agent.chat_with_model_api", side_effect=fake_chat), \
+             patch("openterm.core.agent.ToolAgent._execute_tool") as execute_tool:
             result = runtime.run("Stop before tool.")
 
         self.assertEqual(result, {"ok": False, "LLM_response": "Interrupted."})
@@ -216,9 +216,9 @@ class RuntimeTests(unittest.TestCase):
             prompts.append(messages[0]["content"])
             return {"message": {"role": "assistant", "content": "Done."}}
 
-        with patch.object(runtime, "ensure_mcp_server", return_value="/tmp/cterm-test.sock"), \
+        with patch.object(runtime, "ensure_mcp_server", return_value="/tmp/openterm-test.sock"), \
              patch.object(runtime, "select_skills", side_effect=[([], "first skill"), ([], "different skill")]) as select_skills, \
-             patch("cterm.core.agent.chat_with_model_api", side_effect=fake_chat):
+             patch("openterm.core.agent.chat_with_model_api", side_effect=fake_chat):
             runtime.run("First.")
             runtime.run_followup("// Again.")
 
@@ -237,9 +237,9 @@ class RuntimeTests(unittest.TestCase):
         def fake_chat(model, messages, tools=None, binary="ollama", response_format=None):
             return {"message": {"role": "assistant", "content": "Done."}}
 
-        with patch.object(runtime, "ensure_mcp_server", return_value="/tmp/cterm-test.sock"), \
+        with patch.object(runtime, "ensure_mcp_server", return_value="/tmp/openterm-test.sock"), \
              patch.object(runtime, "select_skills", return_value=([], "")), \
-             patch("cterm.core.agent.chat_with_model_api", side_effect=fake_chat):
+             patch("openterm.core.agent.chat_with_model_api", side_effect=fake_chat):
             runtime.run("First.")
             runtime.run("Second.")
 
@@ -258,10 +258,10 @@ class RuntimeTests(unittest.TestCase):
         runtime = Runtime(model="main")
         client = object()
 
-        with patch("cterm.core.runtime.FastMCPClient", return_value=client) as constructor:
-            result = runtime.create_mcp_client("/tmp/cterm-test.sock")
+        with patch("openterm.core.runtime.FastMCPClient", return_value=client) as constructor:
+            result = runtime.create_mcp_client("/tmp/openterm-test.sock")
 
-        constructor.assert_called_once_with("/tmp/cterm-test.sock")
+        constructor.assert_called_once_with("/tmp/openterm-test.sock")
         self.assertIs(result, client)
         self.assertIs(runtime.mcp_client, client)
 

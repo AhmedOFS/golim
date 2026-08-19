@@ -8,13 +8,13 @@ from unittest.mock import MagicMock, call, patch
 
 import requests
 
-from cterm.api.retry import with_retries
-from cterm.core.agent import ToolAgent
-from cterm.core.agent_events import active_agent_events_handler
-from cterm.core.mcp_client import FastMCPClient
-from cterm.core.runtime import Runtime
-from cterm.core.utils import get_socket_path
-from cterm.mcp.utils import bash_utils
+from openterm.api.retry import with_retries
+from openterm.core.agent import ToolAgent
+from openterm.core.agent_events import active_agent_events_handler
+from openterm.core.mcp_client import FastMCPClient
+from openterm.core.runtime import Runtime
+from openterm.core.utils import get_socket_path
+from openterm.mcp.utils import bash_utils
 
 
 class _UI:
@@ -38,15 +38,15 @@ class ResilienceTests(unittest.TestCase):
         self.assertIs(agent.ui, ui)
 
     def test_socket_path_uses_effective_uid_username(self):
-        with patch("cterm.core.utils.pwd.getpwuid") as lookup, \
-             patch("cterm.core.utils.os.getuid", return_value=123):
+        with patch("openterm.core.utils.pwd.getpwuid") as lookup, \
+             patch("openterm.core.utils.os.getuid", return_value=123):
             lookup.return_value.pw_name = "service-user"
-            self.assertEqual(get_socket_path(), Path("/tmp/cterm_mcp_service-user.sock"))
+            self.assertEqual(get_socket_path(), Path("/tmp/openterm_mcp_service-user.sock"))
             lookup.assert_called_once_with(123)
 
     def test_request_failures_retry_three_times(self):
         operation = MagicMock(side_effect=requests.exceptions.ConnectionError("offline"))
-        with patch("cterm.api.retry.time.sleep") as sleep:
+        with patch("openterm.api.retry.time.sleep") as sleep:
             with self.assertRaisesRegex(RuntimeError, "after 3 attempts"):
                 with_retries(operation, provider="Example")
         self.assertEqual(operation.call_count, 3)
@@ -66,19 +66,19 @@ class ResilienceTests(unittest.TestCase):
     def test_runtime_falls_back_when_user_systemd_is_unavailable(self):
         runtime = Runtime(model="main")
         socket_path = MagicMock()
-        with patch("cterm.core.runtime.get_socket_path", return_value=socket_path), \
-             patch("cterm.core.runtime.subprocess.run", side_effect=subprocess_error()), \
-             patch("cterm.core.runtime.subprocess.Popen") as popen, \
+        with patch("openterm.core.runtime.get_socket_path", return_value=socket_path), \
+             patch("openterm.core.runtime.subprocess.run", side_effect=subprocess_error()), \
+             patch("openterm.core.runtime.subprocess.Popen") as popen, \
              patch.object(runtime, "_socket_is_ready", side_effect=[False, True]), \
-             patch("cterm.core.runtime.time.sleep"):
+             patch("openterm.core.runtime.time.sleep"):
             runtime.ensure_mcp_server()
         self.assertTrue(popen.called)
 
     def test_runtime_restarts_active_service_when_socket_is_stale(self):
         runtime = Runtime(model="main")
         socket_path = MagicMock()
-        with patch("cterm.core.runtime.get_socket_path", return_value=socket_path), \
-             patch("cterm.core.runtime.subprocess.run") as run, \
+        with patch("openterm.core.runtime.get_socket_path", return_value=socket_path), \
+             patch("openterm.core.runtime.subprocess.run") as run, \
              patch.object(runtime, "_socket_is_ready", return_value=False), \
              patch.object(runtime, "_wait_for_socket", side_effect=[False, True]):
             runtime.ensure_mcp_server()
@@ -86,8 +86,8 @@ class ResilienceTests(unittest.TestCase):
         self.assertEqual(
             [call.args[0] for call in run.call_args_list],
             [
-                ["systemctl", "--user", "start", "cterm-mcp.service"],
-                ["systemctl", "--user", "restart", "cterm-mcp.service"],
+                ["systemctl", "--user", "start", "openterm-mcp.service"],
+                ["systemctl", "--user", "restart", "openterm-mcp.service"],
             ],
         )
 
@@ -100,7 +100,7 @@ class ResilienceTests(unittest.TestCase):
             started.append(proc)
             return proc
 
-        with patch("cterm.mcp.utils.bash_utils.subprocess.Popen", side_effect=tracking_popen):
+        with patch("openterm.mcp.utils.bash_utils.subprocess.Popen", side_effect=tracking_popen):
             stream = bash_utils._stream_subprocess(
                 ["/bin/sh", "-c", "printf 'ready\\n'; sleep 30"],
                 "test command",
@@ -208,7 +208,7 @@ class ResilienceTests(unittest.TestCase):
         timer.start()
         started = time.monotonic()
         try:
-            with patch("cterm.core.agent.chat_with_model_api", side_effect=blocked_chat):
+            with patch("openterm.core.agent.chat_with_model_api", side_effect=blocked_chat):
                 with self.assertRaises(InterruptedError):
                     agent._chat_for_next_action([{"role": "user", "content": "hi"}])
         finally:

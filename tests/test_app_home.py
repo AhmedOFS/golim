@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from cterm.config.app_home import get_app_home, resolve_app_home
+from openterm.config.app_home import get_app_home, resolve_app_home
 
 
 class AppHomeTests(unittest.TestCase):
@@ -12,7 +12,7 @@ class AppHomeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"HOME": tmp}):
             resolved = resolve_app_home()
 
-            self.assertEqual(resolved, Path(tmp) / ".cterm")
+            self.assertEqual(resolved, Path(tmp) / ".openterm")
             self.assertEqual(get_app_home(), resolved)
             self.assertTrue(resolved.is_dir())
 

@@ -3,7 +3,7 @@ from contextlib import redirect_stderr
 from io import StringIO
 from unittest.mock import patch
 
-from cterm.core.agent import ToolAgent
+from openterm.core.agent import ToolAgent
 
 
 class FakeMCPClient:
@@ -175,7 +175,7 @@ class ToolApprovalTests(unittest.TestCase):
         ui = FakeUI(approved=True)
         agent = self._agent_with_client(client, ui=ui)
 
-        with patch("cterm.core.agent.get_config") as get_config:
+        with patch("openterm.core.agent.get_config") as get_config:
             get_config.return_value.unrestricted_mode = False
             result = agent._execute_tool("write_file", {
                 "path": "/home/ahmed/out.txt",
@@ -195,7 +195,7 @@ class ToolApprovalTests(unittest.TestCase):
         ui = FakeUI(approved=False)
         agent = self._agent_with_client(client, ui=ui)
 
-        with patch("cterm.core.agent.get_config") as get_config:
+        with patch("openterm.core.agent.get_config") as get_config:
             get_config.return_value.unrestricted_mode = False
             result = agent._execute_tool("write_file", {
                 "path": "/home/ahmed/out.txt",
@@ -215,7 +215,7 @@ class ToolApprovalTests(unittest.TestCase):
         ui = FakeUI(approved=False)
         agent = self._agent_with_client(client, ui=ui)
 
-        with patch("cterm.core.agent.get_config") as get_config:
+        with patch("openterm.core.agent.get_config") as get_config:
             get_config.return_value.unrestricted_mode = True
             result = agent._execute_tool("write_file", {
                 "path": "/home/ahmed/out.txt",

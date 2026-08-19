@@ -2,10 +2,10 @@ import json
 import unittest
 from unittest.mock import MagicMock, patch
 
-from cterm.api import chat_api
-from cterm.api import ollama as chat_api_ollama
-from cterm.api import utils as chat_api_utils
-from cterm.config import Config
+from openterm.api import chat_api
+from openterm.api import ollama as chat_api_ollama
+from openterm.api import utils as chat_api_utils
+from openterm.config import Config
 
 
 class FakeStreamResponse:
@@ -98,7 +98,7 @@ class ChatApiStreamingTests(unittest.TestCase):
         )
 
     def test_openai_compatible_chat_appends_v1_once_with_or_without_v1(self):
-        from cterm.api import openai_compatible
+        from openterm.api import openai_compatible
 
         for stored_url in ("http://host:8000/v1", "http://host:8000"):
             with self.subTest(stored_url=stored_url):
@@ -109,7 +109,7 @@ class ChatApiStreamingTests(unittest.TestCase):
                 response = MagicMock()
                 response.content = json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode("utf-8")
 
-                with patch("cterm.api.openai_compatible.requests.post", return_value=response) as post:
+                with patch("openterm.api.openai_compatible.requests.post", return_value=response) as post:
                     result = openai_compatible.chat("model", [{"role": "user", "content": "hi"}], config=config)
 
                 self.assertEqual(result["message"]["content"], "ok")

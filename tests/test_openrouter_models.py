@@ -5,8 +5,8 @@ from unittest.mock import Mock, patch
 
 import requests
 
-from cterm.config import Config
-from cterm.config.utils import get_openrouter_models, validate_openrouter_key
+from openterm.config import Config
+from openterm.config.utils import get_openrouter_models, validate_openrouter_key
 
 
 class OpenRouterModelApiTests(unittest.TestCase):
@@ -21,7 +21,7 @@ class OpenRouterModelApiTests(unittest.TestCase):
             ]
         }
 
-        with patch("cterm.config.utils.requests.get", return_value=response) as get:
+        with patch("openterm.config.utils.requests.get", return_value=response) as get:
             models = get_openrouter_models("test-key")
 
         self.assertEqual(models, ["openai/gpt-4o", "anthropic/claude-sonnet"])
@@ -33,14 +33,14 @@ class OpenRouterModelApiTests(unittest.TestCase):
         response.raise_for_status.assert_called_once_with()
 
     def test_get_openrouter_models_returns_empty_list_on_request_failure(self):
-        with patch("cterm.config.utils.requests.get", side_effect=requests.ConnectionError("offline")):
+        with patch("openterm.config.utils.requests.get", side_effect=requests.ConnectionError("offline")):
             self.assertEqual(get_openrouter_models("test-key"), [])
 
     def test_validate_openrouter_key_checks_current_key_endpoint(self):
         response = Mock()
         response.json.return_value = {"data": {"label": "My Key", "usage": 12.34, "limit": 50}}
 
-        with patch("cterm.config.utils.requests.get", return_value=response) as get:
+        with patch("openterm.config.utils.requests.get", return_value=response) as get:
             self.assertTrue(validate_openrouter_key("test-key"))
 
         get.assert_called_once_with(
@@ -54,20 +54,20 @@ class OpenRouterModelApiTests(unittest.TestCase):
         self.assertFalse(validate_openrouter_key(None))
         self.assertFalse(validate_openrouter_key(""))
 
-        with patch("cterm.config.utils.requests.get", side_effect=requests.HTTPError("401 Unauthorized")):
+        with patch("openterm.config.utils.requests.get", side_effect=requests.HTTPError("401 Unauthorized")):
             self.assertFalse(validate_openrouter_key("bad-key"))
 
     def test_validate_openrouter_key_rejects_malformed_response(self):
         response = Mock()
         response.json.side_effect = ValueError("not json")
 
-        with patch("cterm.config.utils.requests.get", return_value=response):
+        with patch("openterm.config.utils.requests.get", return_value=response):
             self.assertFalse(validate_openrouter_key("test-key"))
 
 @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
 class OpenRouterModelConfigTests(unittest.TestCase):
     def test_openrouter_model_uses_search_picker(self):
-        from cterm.ui.tui.config import config_tui
+        from openterm.ui.tui.config import config_tui
         config = _FakeConfig(selected_model="saved/model")
         ui = _FakeUI("provider/selected")
 
@@ -79,7 +79,7 @@ class OpenRouterModelConfigTests(unittest.TestCase):
         self.assertEqual(config.values[Config.SELECTED_MODEL], "provider/selected")
 
     def test_openrouter_small_model_defaults_to_normal_model(self):
-        from cterm.ui.tui.config import config_tui
+        from openterm.ui.tui.config import config_tui
         config = _FakeConfig(selected_model="provider/normal")
         ui = _FakeUI("provider/small")
 
@@ -91,7 +91,7 @@ class OpenRouterModelConfigTests(unittest.TestCase):
         self.assertEqual(config.values[Config.SMALL_MODEL], "provider/small")
 
     def test_openrouter_key_input_saves_key_then_validates(self):
-        from cterm.ui.tui.config import config_tui
+        from openterm.ui.tui.config import config_tui
         config = _FakeConfig()
         ui = _FakeUI("sk-or-fresh-key")
 
@@ -101,7 +101,7 @@ class OpenRouterModelConfigTests(unittest.TestCase):
         self.assertEqual(config.values[(Config.OPEN_ROUTER, Config.PROVIDER_API_KEY)], "sk-or-fresh-key")
 
     def test_openrouter_key_choice_validates_kept_key(self):
-        from cterm.ui.tui.config import config_tui
+        from openterm.ui.tui.config import config_tui
         config = _FakeConfig()
 
         ui = _FakeUI("", select_answer=0)
@@ -113,7 +113,7 @@ class OpenRouterModelConfigTests(unittest.TestCase):
         self.assertEqual(next_state, "OPENROUTER_KEY_INPUT")
 
     def test_openrouter_connect_accepts_valid_key(self):
-        from cterm.ui.tui.config import config_tui
+        from openterm.ui.tui.config import config_tui
         config = _FakeConfig()
         ui = _FakeUI("")
 
@@ -123,7 +123,7 @@ class OpenRouterModelConfigTests(unittest.TestCase):
         self.assertEqual(next_state, "OPENROUTER_MODEL")
 
     def test_openrouter_connect_rejects_invalid_key(self):
-        from cterm.ui.tui.config import config_tui
+        from openterm.ui.tui.config import config_tui
         config = _FakeConfig()
         ui = _FakeUI("")
 
@@ -133,8 +133,8 @@ class OpenRouterModelConfigTests(unittest.TestCase):
         self.assertEqual(next_state, "OPENROUTER_KEY_INPUT")
 
     def test_search_picker_starts_in_input_and_down_selects_first_model(self):
-        from cterm.ui.tui.config.config_tui import ConfigApp
-        from cterm.ui.tui.config.mixin import ModelSearchRequest
+        from openterm.ui.tui.config.config_tui import ConfigApp
+        from openterm.ui.tui.config.mixin import ModelSearchRequest
 
         async def run_case():
             with patch.object(ConfigApp, "run_wizard"):
@@ -155,7 +155,7 @@ class OpenRouterModelConfigTests(unittest.TestCase):
 
 class OpenRouterBasicConfigValidationTests(unittest.TestCase):
     def test_init_openrouter_rejects_bad_key_then_accepts_valid_key(self):
-        from cterm.ui.basic import basic_config
+        from openterm.ui.basic import basic_config
 
         class FakeConfig:
             def __init__(self):

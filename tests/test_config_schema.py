@@ -6,8 +6,8 @@ from importlib.util import find_spec
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from cterm.config import Config, ConfigSchemaError
-from cterm.config.utils import (
+from openterm.config import Config, ConfigSchemaError
+from openterm.config.utils import (
     get_configured_model_choices,
     get_openai_compatible_models,
     normalize_openai_compatible_url,
@@ -44,7 +44,7 @@ class ConfigSchemaTests(unittest.TestCase):
         self.assertTrue(config.is_complete())
 
     def test_missing_schema_attribute_requires_configuration(self):
-        path = Path(self.tmp.name) / ".cterm" / "config" / "config.json"
+        path = Path(self.tmp.name) / ".openterm" / "config" / "config.json"
         path.parent.mkdir(parents=True)
         path.write_text(json.dumps({
             "providers": {"ollama": {"ollama_host": "http://localhost:11434"}},
@@ -54,7 +54,7 @@ class ConfigSchemaTests(unittest.TestCase):
         self.assertTrue(Config().is_complete())
 
     def test_legacy_flat_config_is_rejected(self):
-        path = Path(self.tmp.name) / ".cterm" / "config" / "config.json"
+        path = Path(self.tmp.name) / ".openterm" / "config" / "config.json"
         path.parent.mkdir(parents=True)
         path.write_text(json.dumps({
             "api_provider": "openrouter",
@@ -66,7 +66,7 @@ class ConfigSchemaTests(unittest.TestCase):
             Config()
 
     def test_schema_is_loaded_without_filling_missing_values(self):
-        path = Path(self.tmp.name) / ".cterm" / "config" / "config.json"
+        path = Path(self.tmp.name) / ".openterm" / "config" / "config.json"
         path.parent.mkdir(parents=True)
         path.write_text(json.dumps({"providers": {}, "attributes": {}}))
 
@@ -111,9 +111,9 @@ class ConfigSchemaTests(unittest.TestCase):
         config.set(Config.API_PROVIDER, Config.OPEN_ROUTER)
         config.set(Config.SELECTED_MODEL, "provider/selected")
 
-        with patch("cterm.config.utils.get_models", return_value=[]), \
-             patch("cterm.config.utils.get_openrouter_models", return_value=[]), \
-             patch("cterm.config.utils.get_openai_compatible_models", return_value=[]):
+        with patch("openterm.config.utils.get_models", return_value=[]), \
+             patch("openterm.config.utils.get_openrouter_models", return_value=[]), \
+             patch("openterm.config.utils.get_openai_compatible_models", return_value=[]):
             labels, choices = get_configured_model_choices(config, "ollama")
 
         self.assertEqual(labels, ["open_router: provider/selected"])
@@ -154,7 +154,7 @@ class ConfigSchemaTests(unittest.TestCase):
         response = MagicMock()
         response.json.return_value = {"data": [{"id": "local-model"}]}
 
-        with patch("cterm.config.utils.requests.get", return_value=response) as get:
+        with patch("openterm.config.utils.requests.get", return_value=response) as get:
             models = get_openai_compatible_models("host:8000/v1", "key")
 
         self.assertEqual(models, ["local-model"])
@@ -168,7 +168,7 @@ class ConfigSchemaTests(unittest.TestCase):
 @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
 class OpenAiCompatibleUrlWizardTests(unittest.TestCase):
     def test_url_state_normalizes_scheme_and_v1(self):
-        from cterm.ui.tui.config.config_tui import _state_openai_compatible_url
+        from openterm.ui.tui.config.config_tui import _state_openai_compatible_url
 
         config = _FakeUrlConfig(current="http://host:8000/v1")
         ui = _FakeUrlUI(["http://host:8000/v1", ""])
@@ -179,7 +179,7 @@ class OpenAiCompatibleUrlWizardTests(unittest.TestCase):
         self.assertEqual(config.values[Config.OPENAI_COMPATIBLE_SERVER_URL], "http://host:8000")
 
     def test_url_state_requires_a_url(self):
-        from cterm.ui.tui.config.config_tui import _state_openai_compatible_url
+        from openterm.ui.tui.config.config_tui import _state_openai_compatible_url
 
         config = _FakeUrlConfig(current="")
         ui = _FakeUrlUI([""])
@@ -190,14 +190,14 @@ class OpenAiCompatibleUrlWizardTests(unittest.TestCase):
         self.assertNotIn(Config.OPENAI_COMPATIBLE_SERVER_URL, config.values)
 
     def test_connect_state_validates_v1_models(self):
-        from cterm.ui.tui.config.config_tui import _state_openai_compatible_connect
+        from openterm.ui.tui.config.config_tui import _state_openai_compatible_connect
 
         config = _FakeUrlConfig(current="http://host:8000/v1")
 
-        with patch("cterm.ui.tui.config.config_tui.get_openai_compatible_models", return_value=["m"]):
+        with patch("openterm.ui.tui.config.config_tui.get_openai_compatible_models", return_value=["m"]):
             self.assertEqual(_state_openai_compatible_connect(config, _FakeUrlUI([]), "ollama"), "OPENAI_COMPATIBLE_MODEL")
 
-        with patch("cterm.ui.tui.config.config_tui.get_openai_compatible_models", return_value=[]):
+        with patch("openterm.ui.tui.config.config_tui.get_openai_compatible_models", return_value=[]):
             self.assertEqual(_state_openai_compatible_connect(config, _FakeUrlUI([]), "ollama"), "OPENAI_COMPATIBLE_URL")
 
 

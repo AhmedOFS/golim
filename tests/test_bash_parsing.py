@@ -4,14 +4,14 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
-from cterm.mcp.tools import bash, read_file, _should_stream_with_pty
-from cterm.mcp.utils import bash_utils
-from cterm.mcp.vars import OUTPUT_LINE_LIMIT
+from openterm.mcp.tools import bash, read_file, _should_stream_with_pty
+from openterm.mcp.utils import bash_utils
+from openterm.mcp.vars import OUTPUT_LINE_LIMIT
 
 
 class BashParsingTests(unittest.TestCase):
     def setUp(self):
-        self.unrestricted_patch = patch("cterm.mcp.tools._is_unrestricted_mode", return_value=False)
+        self.unrestricted_patch = patch("openterm.mcp.tools._is_unrestricted_mode", return_value=False)
         self.unrestricted_patch.start()
 
     def tearDown(self):
@@ -24,7 +24,7 @@ class BashParsingTests(unittest.TestCase):
         self.assertEqual(result["results"][0]["stdout"], "hello")
 
     def test_command_not_found_still_fails(self):
-        result = bash("definitely_missing_cterm_command")
+        result = bash("definitely_missing_openterm_command")
 
         self.assertFalse(result["ok"], result)
         self.assertIn("Command not found", result["error"])
@@ -56,7 +56,7 @@ class BashParsingTests(unittest.TestCase):
 
     def test_sudo_returns_approval_required_even_when_binary_is_whitelisted(self):
         with tempfile.TemporaryDirectory() as tmp:
-            wrapper = Path(tmp) / "cterm-privileged"
+            wrapper = Path(tmp) / "openterm-privileged"
             wrapper.write_text("#!/bin/sh\n", encoding="utf-8")
             whitelist = Path(tmp) / "privileged_whitelist"
             whitelist.write_text(
@@ -64,7 +64,7 @@ class BashParsingTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch.dict(os.environ, {"CTERM_PRIVILEGED_WHITELIST": str(whitelist)}), \
+            with patch.dict(os.environ, {"OPENTERM_PRIVILEGED_WHITELIST": str(whitelist)}), \
                  patch.object(bash_utils, "PRIVILEGED_WRAPPER", str(wrapper)):
                 parsed, err = bash_utils._parse_command_part("sudo test -d /", [])
 
@@ -89,11 +89,11 @@ class BashParsingTests(unittest.TestCase):
             return True
 
         with tempfile.TemporaryDirectory() as tmp:
-            wrapper = Path(tmp) / "cterm-privileged"
+            wrapper = Path(tmp) / "openterm-privileged"
             wrapper.write_text("#!/bin/sh\n", encoding="utf-8")
             whitelist = Path(tmp) / "privileged_whitelist"
 
-            with patch.dict(os.environ, {"CTERM_PRIVILEGED_WHITELIST": str(whitelist)}), \
+            with patch.dict(os.environ, {"OPENTERM_PRIVILEGED_WHITELIST": str(whitelist)}), \
                  patch.object(bash_utils, "PRIVILEGED_WRAPPER", str(wrapper)), \
                  patch.object(bash_utils, "_stream_command", fake_stream_command):
                 result = bash_utils._run_restricted(
@@ -113,11 +113,11 @@ class BashParsingTests(unittest.TestCase):
 
     def test_sudo_denial_returns_not_approved_error(self):
         with tempfile.TemporaryDirectory() as tmp:
-            wrapper = Path(tmp) / "cterm-privileged"
+            wrapper = Path(tmp) / "openterm-privileged"
             wrapper.write_text("#!/bin/sh\n", encoding="utf-8")
             whitelist = Path(tmp) / "privileged_whitelist"
 
-            with patch.dict(os.environ, {"CTERM_PRIVILEGED_WHITELIST": str(whitelist)}), \
+            with patch.dict(os.environ, {"OPENTERM_PRIVILEGED_WHITELIST": str(whitelist)}), \
                  patch.object(bash_utils, "PRIVILEGED_WRAPPER", str(wrapper)):
                 result = bash_utils._run_restricted(
                     "sudo test -d /",
@@ -165,7 +165,7 @@ class BashParsingTests(unittest.TestCase):
                 "returncode": 0,
             }, None
 
-        with patch("cterm.mcp.tools._is_unrestricted_mode", return_value=True), \
+        with patch("openterm.mcp.tools._is_unrestricted_mode", return_value=True), \
              patch.object(bash_utils.get_config(), "is_privileged_binary_allowed", return_value=True), \
              patch.object(bash_utils, "_stream_command_with_pty", fake_stream_command_with_pty):
             frames = list(bash("sudo apt install spotify", stream=True))
@@ -250,7 +250,7 @@ class BashParsingTests(unittest.TestCase):
         self.assertTrue(result["results"][0]["stdout"].strip())
 
     def test_supports_stderr_suppression_to_dev_null(self):
-        result = bash("ls /definitely_missing_cterm_path 2>/dev/null")
+        result = bash("ls /definitely_missing_openterm_path 2>/dev/null")
 
         self.assertFalse(result["ok"], result)
         self.assertEqual(result["results"][0]["stderr"], "")
@@ -262,20 +262,20 @@ class BashParsingTests(unittest.TestCase):
         self.assertEqual(len(result["results"]), 2)
 
     def test_rejects_other_redirection(self):
-        result = bash("echo hello >/tmp/cterm-test")
+        result = bash("echo hello >/tmp/openterm-test")
 
         self.assertFalse(result["ok"], result)
         self.assertIn("Forbidden character", result["error"])
 
     def test_supports_stderr_suppression_in_pipeline(self):
-        result = bash("ls /definitely_missing_cterm_path 2>/dev/null | wc -l")
+        result = bash("ls /definitely_missing_openterm_path 2>/dev/null | wc -l")
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["results"][0]["stdout"].strip(), "0")
         self.assertEqual(result["results"][0]["stderr"], "")
 
     def test_streaming_supports_stderr_suppression(self):
-        frames = list(bash("ls /definitely_missing_cterm_path 2>/dev/null", stream=True))
+        frames = list(bash("ls /definitely_missing_openterm_path 2>/dev/null", stream=True))
 
         self.assertFalse(frames[-1]["ok"], frames)
         self.assertEqual(frames[-1]["results"][0]["stderr"], "")
