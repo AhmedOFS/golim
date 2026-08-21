@@ -1,6 +1,7 @@
 
 """MCP tools definitions for openterm"""
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -423,9 +424,10 @@ def exec_python(
         if not os.path.isdir(run_cwd):
             return {"ok": False, "error": f"Working directory not found: {cwd}"}
 
+    interpreter = shutil.which("python3") or sys.executable
     try:
         process = subprocess.Popen(
-            [sys.executable, "-c", str(code)],
+            [interpreter, "-c", str(code)],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
