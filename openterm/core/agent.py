@@ -274,6 +274,17 @@ class ToolAgent:
     def _python_denied_result(self):
         return dict(_PYTHON_DENIED_RESULT)
 
+    def _tool_cancelled_result(self):
+        """Consistent cancellation result for a tool stopped by the model's
+        long-tool terminate decision.
+
+        Matches the shape the MCP server produces when it cooperatively
+        cancels a bash call on client disconnect, so the model always sees
+        the same ``"Tool execution cancelled"`` result instead of a transport
+        error from closing the socket.
+        """
+        return {"ok": False, "error": "Tool execution cancelled"}
+
     def _prepare_tool_call(self, tool_name, args, is_shell, is_exec, is_write):
         if is_shell:
             return self._prepare_shell_tool_call(tool_name, args)
@@ -325,16 +336,17 @@ class ToolAgent:
         finally:
             self.ui.clear_status()
 
-    def _long_tool_decision(self, tool_name, args, streamed_output):
-        """Ask the model whether a tool that exceeded 30s may be stopped.
+    def _long_tool_decision(self, tool_name, args, streamed_output, elapsed):
+        """Ask the model whether a long-running tool may be stopped.
 
-        Stopping is deliberately opt-in: malformed/unavailable model answers
-        keep waiting, so the runtime never kills useful work on its own.
+        `elapsed` is the total seconds the tool call has been running. Stopping
+        is deliberately opt-in: malformed/unavailable model answers keep
+        waiting, so the runtime never kills useful work on its own.
         """
         prompt = {
             "role": "user",
             "content": (
-                "A tool call has run for more than 30 seconds. Decide whether "
+                f"A tool call has run for {elapsed:.0f} seconds. Decide whether "
                 "to keep waiting or terminate it. Reply with JSON only in this "
                 "schema: {\"action\": \"keep\"|\"terminate\"}. "
                 f"Tool: {tool_name}; arguments: {self._compact_json(args)}; "
@@ -377,7 +389,9 @@ class ToolAgent:
 
         tool_thread = threading.Thread(target=_run_tool, daemon=True)
         tool_thread.start()
-        deadline = time.monotonic() + self.LONG_TOOL_NOTICE_SECONDS
+        started = time.monotonic()
+        deadline = started + self.LONG_TOOL_NOTICE_SECONDS
+        terminated = False
 
         while True:
             if self._should_hard_cancel():
@@ -395,6 +409,7 @@ class ToolAgent:
                 try:
                     should_terminate = self._long_tool_decision(
                         tool_name, args, streamed_output,
+                        time.monotonic() - started,
                     )
                 except InterruptedError:
                     # The decision request can be in flight while the user
@@ -404,8 +419,11 @@ class ToolAgent:
                         self.mcp_client.close()
                     raise
                 if should_terminate:
-                    # Closing active MCP sockets unblocks the server request;
-                    # its partial streamed output is already in the prompt.
+                    # The model chose to stop the tool. Closing active MCP
+                    # sockets unblocks the server request and cooperatively
+                    # cancels the subprocess-backed tool; the model sees the
+                    # same cancellation result as a client side disconnect.
+                    terminated = True
                     if self.mcp_client is not None:
                         self.mcp_client.close()
                     deadline = float("inf")
@@ -416,6 +434,13 @@ class ToolAgent:
                     deadline = time.monotonic() + self.LONG_TOOL_NOTICE_SECONDS
                 continue
 
+            if terminated:
+                # The model chose to stop the tool, so the socket close above
+                # is the expected cause of any outcome (including transport
+                # errors from the torn-down MCP connection). Surface the
+                # consistent cancellation result regardless of how the worker
+                # unwound, so the model ties the closure back to its decision.
+                return self._tool_cancelled_result()
             if ok:
                 return value
             raise value

@@ -78,7 +78,7 @@ class BashParsingTests(unittest.TestCase):
         calls = []
         approvals = []
 
-        def fake_stream_command(argv, cmd_str, results, timeout, suppress_stderr):
+        def fake_stream_command(argv, cmd_str, results, suppress_stderr):
             calls.append(argv)
             return {"command": cmd_str, "stdout": "ok", "stderr": "", "returncode": 0}, None
             yield
@@ -182,30 +182,6 @@ class BashParsingTests(unittest.TestCase):
         self.assertTrue(frames[-1]["ok"], frames)
         self.assertEqual(frames[-1]["results"][0]["stdout"], "hello")
 
-    def test_accepts_string_timeout_for_non_streaming_command(self):
-        result = bash("printf hello", timeout="120")
-
-        self.assertTrue(result["ok"], result)
-        self.assertEqual(result["results"][0]["stdout"], "hello")
-
-    def test_accepts_string_timeout_for_streaming_command(self):
-        frames = list(bash("printf hello", stream=True, timeout="120"))
-
-        self.assertTrue(frames[-1]["ok"], frames)
-        self.assertEqual(frames[-1]["results"][0]["stdout"], "hello")
-
-    def test_invalid_timeout_returns_clear_error(self):
-        result = bash("printf hello", timeout="soon")
-
-        self.assertFalse(result["ok"], result)
-        self.assertIn("timeout must be a number", result["error"])
-
-    def test_boolean_timeout_is_rejected(self):
-        result = bash("printf hello", timeout=True)
-
-        self.assertFalse(result["ok"], result)
-        self.assertIn("not a boolean", result["error"])
-
     def test_chain_sudo_denial_preserves_earlier_results(self):
         with patch.object(bash_utils.os.path, "isfile", return_value=True):
             result = bash("printf first && sudo echo second")
@@ -218,7 +194,7 @@ class BashParsingTests(unittest.TestCase):
     def test_chain_sudo_approval_executes_remaining_links(self):
         calls = []
 
-        def fake_stream_command(argv, cmd_str, results, timeout, suppress_stderr):
+        def fake_stream_command(argv, cmd_str, results, suppress_stderr):
             calls.append(cmd_str)
             return {"command": cmd_str, "stdout": "x", "stderr": "", "returncode": 0}, None
             yield

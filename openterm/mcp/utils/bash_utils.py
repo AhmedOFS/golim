@@ -10,7 +10,6 @@ import shlex
 import signal
 import shutil
 import subprocess
-import time
 from dataclasses import dataclass
 
 from ..config import get_config
@@ -281,7 +280,7 @@ def _parse_command_part(cmd_str: str, results_ref: list, privileged_approved: bo
 #  Pipeline execution (synchronous, non-streaming)
 # ---------------------------------------------------------------------------
 
-def _run_pipeline(argv_list: list, cmd_str: str, timeout=None) -> dict:
+def _run_pipeline(argv_list: list, cmd_str: str) -> dict:
     procs = []
     try:
         for command in argv_list:
@@ -299,21 +298,13 @@ def _run_pipeline(argv_list: list, cmd_str: str, timeout=None) -> dict:
             procs.append(proc)
 
         last = procs[-1]
-        started = time.monotonic()
         while True:
             if is_tool_cancelled():
                 for p in procs:
                     _terminate_process_group(p)
                 return {"ok": False, "error": "Tool execution cancelled"}
-            remaining = None if timeout is None else timeout - (time.monotonic() - started)
-            if remaining is not None and remaining <= 0:
-                for p in procs:
-                    _terminate_process_group(p)
-                return {"ok": False, "error": f"Pipeline timed out: {cmd_str}"}
             try:
-                stdout_data, stderr_data = last.communicate(
-                    timeout=0.1 if remaining is None else min(0.1, remaining),
-                )
+                stdout_data, stderr_data = last.communicate(timeout=0.1)
                 break
             except subprocess.TimeoutExpired:
                 continue
@@ -476,7 +467,7 @@ def _terminate_process_group(proc):
         pass
 
 
-def _stream_subprocess(argv, cmd_str, results, timeout, suppress_stderr, use_pty):
+def _stream_subprocess(argv, cmd_str, results, suppress_stderr, use_pty):
     output_lines = {"stdout": [], "stderr": []}
     pending = {"stdout": "", "stderr": ""}
     fd_to_stream = {}  # fd -> stream_name
@@ -521,8 +512,6 @@ def _stream_subprocess(argv, cmd_str, results, timeout, suppress_stderr, use_pty
                     pass
         return None, {"ok": False, "error": str(e), "results": results}
 
-    deadline = time.monotonic() + timeout if timeout is not None else float("inf")
-
     try:
         while fd_to_stream:
             if is_tool_cancelled():
@@ -531,13 +520,9 @@ def _stream_subprocess(argv, cmd_str, results, timeout, suppress_stderr, use_pty
                     "error": "Tool execution cancelled",
                     "results": results,
                 }
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                proc.kill()
-                return None, {"ok": False, "error": f"Command timed out: {cmd_str}", "results": results}
 
             readable, _, exceptional = select.select(
-                list(fd_to_stream), [], list(fd_to_stream), min(1.0, remaining)
+                list(fd_to_stream), [], list(fd_to_stream), 1.0
             )
             for fd in exceptional:
                 fd_to_stream.pop(fd, None)
@@ -598,18 +583,18 @@ def _stream_subprocess(argv, cmd_str, results, timeout, suppress_stderr, use_pty
     }, None
 
 
-def _stream_command_with_pty(argv, cmd_str, results, timeout=None, suppress_stderr=False):
+def _stream_command_with_pty(argv, cmd_str, results, suppress_stderr=False):
     """Stream a single command through a pseudo-terminal (for apt/snap/etc.
     that detect a tty before prompting)."""
     return _stream_subprocess(
-        argv, cmd_str, results, timeout, suppress_stderr, use_pty=True,
+        argv, cmd_str, results, suppress_stderr, use_pty=True,
     )
 
 
-def _stream_command(argv, cmd_str, results, timeout, suppress_stderr):
+def _stream_command(argv, cmd_str, results, suppress_stderr):
     """Stream a single command through regular pipes."""
     return _stream_subprocess(
-        argv, cmd_str, results, timeout, suppress_stderr, use_pty=False,
+        argv, cmd_str, results, suppress_stderr, use_pty=False,
     )
 
 
@@ -652,7 +637,7 @@ def _privileged_denied_payload(err, results):
 #  Restricted execution (single generator drives both streaming and run modes)
 # ---------------------------------------------------------------------------
 
-def _exec_restricted(command, timeout=120, approve_privileged=None):
+def _exec_restricted(command, approve_privileged=None):
     """Generator: yields stream frames then a final result frame."""
     results = []
 
@@ -684,7 +669,7 @@ def _exec_restricted(command, timeout=120, approve_privileged=None):
             suppress = parsed.suppress_stderr or rc.suppress_stderr
             streamer = _stream_command_with_pty if _requires_pty_streaming(rc.argv) else _stream_command
             entry, err = yield from streamer(
-                rc.argv, cmd_str, results, timeout=timeout,
+                rc.argv, cmd_str, results,
                 suppress_stderr=suppress,
             )
             if err:
@@ -693,7 +678,7 @@ def _exec_restricted(command, timeout=120, approve_privileged=None):
             if entry is None:
                 continue
         else:
-            entry = _run_pipeline(parsed.argv_list, cmd_str, timeout=timeout)
+            entry = _run_pipeline(parsed.argv_list, cmd_str)
             if entry.get("ok") is False:
                 yield {"type": "result", **entry, "results": results}
                 return
@@ -755,7 +740,7 @@ def _prepare_unrestricted(command: str) -> tuple[str | None, dict | None]:
     return command, None
 
 
-def _exec_unrestricted(command, timeout=None, approve_privileged=None):
+def _exec_unrestricted(command, approve_privileged=None):
     """Generator: yields stream frames then a final result frame."""
     prepared, err = _prepare_unrestricted(command)
     seen = set()
@@ -783,7 +768,7 @@ def _exec_unrestricted(command, timeout=None, approve_privileged=None):
 
     streamer = _stream_command_with_pty if _command_requires_pty_streaming(prepared) else _stream_command
     entry, err = yield from streamer(
-        argv, prepared, results, timeout=timeout, suppress_stderr=False,
+        argv, prepared, results, suppress_stderr=False,
     )
     if err:
         yield {"type": "result", **err}
@@ -794,26 +779,26 @@ def _exec_unrestricted(command, timeout=None, approve_privileged=None):
 
 
 # ---------------------------------------------------------------------------
-#  Public API — thin wrappers preserving original function signatures
+#  Public API — thin wrappers
 # ---------------------------------------------------------------------------
 
-def _run_restricted(command, timeout=120, approve_privileged=None):
-    for frame in _exec_restricted(command, timeout=timeout, approve_privileged=approve_privileged):
+def _run_restricted(command, approve_privileged=None):
+    for frame in _exec_restricted(command, approve_privileged=approve_privileged):
         if frame.get("type") == "result":
             return {k: v for k, v in frame.items() if k != "type"}
     return {"ok": False, "error": "No result from bash execution"}
 
 
-def _run_unrestricted(command, timeout=None, approve_privileged=None):
-    for frame in _exec_unrestricted(command, timeout=timeout, approve_privileged=approve_privileged):
+def _run_unrestricted(command, approve_privileged=None):
+    for frame in _exec_unrestricted(command, approve_privileged=approve_privileged):
         if frame.get("type") == "result":
             return {k: v for k, v in frame.items() if k != "type"}
     return {"ok": False, "error": "No result from bash execution"}
 
 
-def _stream_restricted(command, timeout=120, approve_privileged=None):
-    return _exec_restricted(command, timeout=timeout, approve_privileged=approve_privileged)
+def _stream_restricted(command, approve_privileged=None):
+    return _exec_restricted(command, approve_privileged=approve_privileged)
 
 
-def _stream_unrestricted(command, timeout=None, approve_privileged=None):
-    return _exec_unrestricted(command, timeout=timeout, approve_privileged=approve_privileged)
+def _stream_unrestricted(command, approve_privileged=None):
+    return _exec_unrestricted(command, approve_privileged=approve_privileged)

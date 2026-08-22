@@ -105,7 +105,6 @@ class ResilienceTests(unittest.TestCase):
                 ["/bin/sh", "-c", "printf 'ready\\n'; sleep 30"],
                 "test command",
                 [],
-                timeout=30,
                 suppress_stderr=False,
                 use_pty=True,
             )
@@ -121,10 +120,22 @@ class ResilienceTests(unittest.TestCase):
         agent = ToolAgent("model", ui=_UI())
         agent._active_messages = [{"role": "system", "content": "system"}]
         agent._chat_with_optional_thinking = MagicMock(return_value={"message": {"content": json.dumps({"action": "terminate"})}})
-        self.assertTrue(agent._long_tool_decision("bash", {"command": "sleep 60"}, []))
+        self.assertTrue(agent._long_tool_decision("bash", {"command": "sleep 60"}, [], 42))
 
         agent._chat_with_optional_thinking.return_value = {"message": {"content": "not json"}}
-        self.assertFalse(agent._long_tool_decision("bash", {}, []))
+        self.assertFalse(agent._long_tool_decision("bash", {}, [], 42))
+
+    def test_long_tool_decision_reports_elapsed_seconds(self):
+        agent = ToolAgent("model", ui=_UI())
+        agent._active_messages = [{"role": "system", "content": "system"}]
+        agent._chat_with_optional_thinking = MagicMock(
+            return_value={"message": {"content": json.dumps({"action": "keep"})}}
+        )
+
+        agent._long_tool_decision("bash", {}, [], 97)
+        prompt = agent._chat_with_optional_thinking.call_args.args[1][-1]
+        self.assertEqual(prompt["role"], "user")
+        self.assertIn("has run for 97 seconds", prompt["content"])
 
     def test_long_tool_policy_closes_transport_only_after_terminate_decision(self):
         agent = ToolAgent("model", ui=_UI())
@@ -140,7 +151,7 @@ class ResilienceTests(unittest.TestCase):
             "bash", slow_call, {"command": "sleep 60"}, "bash", [],
         )
 
-        self.assertFalse(result["ok"])
+        self.assertEqual(result, agent._tool_cancelled_result())
         agent.mcp_client.close.assert_called_once()
 
     def test_long_tool_policy_rechecks_after_keep_decision(self):
@@ -164,9 +175,9 @@ class ResilienceTests(unittest.TestCase):
             release_tool.set()
             timer.cancel()
 
-        self.assertTrue(result["ok"])
         self.assertEqual(agent._long_tool_decision.call_count, 2)
         agent.mcp_client.close.assert_called_once()
+        self.assertEqual(result, agent._tool_cancelled_result())
 
     def test_long_tool_policy_updates_status_after_keep_decision(self):
         ui = MagicMock()
@@ -237,7 +248,7 @@ class ResilienceTests(unittest.TestCase):
         try:
             with patch.object(agent, "_chat_with_optional_thinking", side_effect=blocked_chat):
                 with self.assertRaises(InterruptedError):
-                    agent._long_tool_decision("bash", {"command": "sleep 60"}, [])
+                    agent._long_tool_decision("bash", {"command": "sleep 60"}, [], 30)
         finally:
             release_request.set()
             cancel_thread.join(timeout=1)

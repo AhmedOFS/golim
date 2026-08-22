@@ -36,22 +36,6 @@ from .utils.web_utils import (
 _should_stream_with_pty = _requires_pty_streaming
 
 
-def _coerce_bash_timeout(timeout):
-    if timeout is None:
-        return None, None
-    if isinstance(timeout, bool):
-        return None, {"ok": False, "error": "timeout must be a number of seconds or null, not a boolean"}
-    try:
-        coerced = float(timeout)
-    except (TypeError, ValueError):
-        return None, {"ok": False, "error": "timeout must be a number of seconds or null"}
-    if coerced <= 0:
-        return None, {"ok": False, "error": "timeout must be greater than zero"}
-    return coerced, None
-
-
-
-
 # Simple wrapper class to hold tools (no FastMCP dependency needed for server)
 class MCPTools:
     """Container for MCP tool functions"""
@@ -356,16 +340,14 @@ def read_file(path: str, page: int = 1) -> dict:
         return {"ok": False, "error": str(e)}
 
 @tool
-def bash(command: str, stream: bool = False, timeout: int | None = None, _approve_privileged=None) -> dict:
+def bash(command: str, stream: bool = False, _approve_privileged=None) -> dict:
     """
     Executes command lines.
 
-    When `unrestricted_mode` is true in ~/.openterm/config/config.json the command
-    is passed directly to /bin/bash -c, giving full shell access (pipes,
+    When `unrestricted_mode` is true full shell access is given (pipes,
     redirections, subshells, here-docs, etc.). The only remaining restriction
-    is openterm's sudo whitelist, exactly as in the restricted path.
 
-    When `unrestricted_mode` is false (the default) the original safe argv
+    When `unrestricted_mode` is false (the default) a safe argv
     parser is used. It supports unquoted `&&` chaining, unquoted `|` pipelines,
     quoted arguments, environment-variable and `~` expansion, glob expansion,
     and `2>/dev/null` stderr suppression. Other redirection and shell-only
@@ -374,16 +356,13 @@ def bash(command: str, stream: bool = False, timeout: int | None = None, _approv
     In both modes, `stream=True` yields incremental output chunks followed by
     a final result dict.
     """
-    timeout, timeout_error = _coerce_bash_timeout(timeout)
-    if timeout_error:
-        return timeout_error
     if _is_unrestricted_mode():
         runner, streamer = _run_unrestricted, _stream_unrestricted
     else:
         runner, streamer = _run_restricted, _stream_restricted
     if stream:
-        return streamer(command, approve_privileged=_approve_privileged, timeout=timeout)
-    return runner(command, approve_privileged=_approve_privileged, timeout=timeout)
+        return streamer(command, approve_privileged=_approve_privileged)
+    return runner(command, approve_privileged=_approve_privileged)
 
 
 @tool

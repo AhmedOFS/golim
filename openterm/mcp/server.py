@@ -304,6 +304,7 @@ class MCPServer:
                 tool_name = params.get("name")
                 arguments = dict(params.get("arguments") or {})
                 arguments.pop("allow_privileged", None)
+                arguments.pop("timeout", None)
 
                 if not hasattr(self.mcp, tool_name):
                     send({
