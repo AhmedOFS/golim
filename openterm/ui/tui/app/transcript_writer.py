@@ -1,3 +1,4 @@
+import json
 from datetime import datetime
 from pathlib import Path
 
@@ -58,3 +59,49 @@ class TranscriptWriter:
             self._file.flush()
         except Exception:
             pass
+
+    def write_record(self, *, kind: str, text: str, **extra) -> None:
+        """Append one structured JSON-lines record.
+
+        ``kind`` describes how the entry should be reconstructed (for
+        example ``"markdown"``, ``"thinking"``, or ``"expandable"``) and any
+        extra keyword fields are preserved verbatim on the record. Records
+        are written as a single JSON object per line alongside the plain
+        ``write`` output, so the file stays human-readable while remaining
+        reconstructable via :func:`load_records`.
+        """
+        if self._file is None:
+            return
+        try:
+            payload = {"kind": kind, "text": text, **extra}
+            self._file.write(json.dumps(payload, ensure_ascii=False) + "\n")
+            self._file.flush()
+        except Exception:
+            pass
+
+
+def load_records(path) -> list[dict]:
+    """Reconstruct structured records from a transcript file or stream.
+
+    Returns a list of dicts. JSON-lines records carrying a ``kind`` key are
+    returned unchanged; any other non-empty line is surfaced as a plain
+    ``{"kind": "text", "text": ...}`` record so legacy transcript files stay
+    readable.
+    """
+    if hasattr(path, "read"):
+        lines = path.read().splitlines()
+    else:
+        lines = Path(path).read_text(encoding="utf-8").splitlines()
+    records: list[dict] = []
+    for line in lines:
+        if not line:
+            continue
+        try:
+            payload = json.loads(line)
+            if isinstance(payload, dict) and "kind" in payload:
+                records.append(payload)
+                continue
+        except json.JSONDecodeError:
+            pass
+        records.append({"kind": "text", "text": line})
+    return records
