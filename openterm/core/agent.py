@@ -248,6 +248,9 @@ class ToolAgent:
             message = response.get("message", {})
             if isinstance(message, dict):
                 self._last_thinking_trace = self._extract_message_thinking(message)
+        if self._last_thinking_trace and not thinking_parts:
+            log_diagnostic_section("thinking_trace", self._last_thinking_trace)
+            self.ui.thinking_complete(self._last_thinking_trace)
         return response
 
     def _extract_message_thinking(self, message):

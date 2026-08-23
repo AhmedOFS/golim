@@ -7,6 +7,7 @@ from unittest.mock import patch
 from openterm.ui.basic.basic import TerminalUI
 from openterm.ui.basic.spinner import Spinner
 from openterm.logger import log_diagnostic_section, start_run_logging
+from openterm.ui.tui.app.transcript_writer import TranscriptWriter
 
 
 class _RecordingSpinner:
@@ -72,6 +73,18 @@ class BasicUiOutputTests(unittest.TestCase):
         self.assertIn("THINKING: The user wants to uninstall Spotify.", stderr.getvalue())
         self.assertIn("Let me check the current OS first.", stderr.getvalue())
         self.assertNotIn("▶ THINKING:", stderr.getvalue())
+
+    def test_transcript_records_thinking_without_spinner_output(self):
+        transcript_file = io.StringIO()
+        ui = TerminalUI(config=object(), transcript=TranscriptWriter(transcript_file))
+
+        ui.status("Thinking")
+        ui.thinking_complete("The model checked the current system.")
+
+        text = transcript_file.getvalue()
+        self.assertIn("▶ THINKING: The model checked the current system.", text)
+        self.assertNotIn("Thinking...", text)
+        self.assertNotIn("⠋", text)
 
     def test_run_logging_keeps_full_diagnostic_sections_out_of_ui(self):
         with tempfile.TemporaryDirectory() as tmp:

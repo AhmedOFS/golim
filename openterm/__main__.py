@@ -2,7 +2,6 @@
 """openterm - Main entry point"""
 import argparse
 import json
-import re
 import sys
 from .version import __version__
 from .config.app_home import resolve_app_home
@@ -16,22 +15,7 @@ from .ui.tui.app.transcript_writer import TranscriptWriter
 
 def _setup_session_log():
     transcript = TranscriptWriter()
-    _ansi_strip = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
     real_stderr = sys.stderr
-
-    class _Tee:
-        def write(self, text):
-            real_stderr.write(text)
-            real_stderr.flush()
-            if "\n" in text:
-                transcript.write(_ansi_strip.sub("", text), end="")
-        def flush(self):
-            real_stderr.flush()
-            transcript.flush()
-        def isatty(self):
-            return real_stderr.isatty()
-
-    sys.stderr = _Tee()
     return transcript, transcript.path, real_stderr
 
 def chat_command(message: str, binary: str = "ollama") -> int:
@@ -45,7 +29,12 @@ def chat_command(message: str, binary: str = "ollama") -> int:
     transcript, log_path, real_stderr = _setup_session_log()
     run_logging = start_run_logging(log_path)
     try:
-        ui = TerminalUI(model=model, binary=binary, small_model=small_model)
+        ui = TerminalUI(
+            model=model,
+            binary=binary,
+            small_model=small_model,
+            transcript=transcript,
+        )
         token = active_agent_events_handler.set(ui)
         try:
             response = ui.run(message)

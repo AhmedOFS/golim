@@ -55,6 +55,28 @@ class ThinkingTraceTests(unittest.TestCase):
         self.assertEqual(ui.deltas, [])
         self.assertEqual(ui.completed, [])
 
+    def test_agent_surfaces_thinking_returned_in_non_streaming_response(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict("os.environ", {"HOME": tmp}):
+            Config().set(Config.STREAM_THINKING_TRACES, True)
+            ui = FakeUI()
+            agent = ToolAgent("model", ui=ui)
+
+            def fake_chat(*args, on_thinking_delta=None, **kwargs):
+                return {
+                    "message": {
+                        "role": "assistant",
+                        "thinking": "returned by the provider",
+                        "content": "ok",
+                    }
+                }
+
+            with patch("openterm.core.agent.chat_with_model_api", side_effect=fake_chat):
+                result = agent._chat_with_optional_thinking("model", [])
+
+        self.assertEqual(result["message"]["content"], "ok")
+        self.assertEqual(ui.deltas, [])
+        self.assertEqual(ui.completed, ["returned by the provider"])
+
     @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
     def test_tui_thinking_renderable_starts_with_icon_and_label(self):
         from openterm.ui.tui.app.widgets.transcript import Transcript

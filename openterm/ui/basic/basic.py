@@ -1,5 +1,6 @@
 """Thin terminal UI layer for openterm client output."""
 
+import re
 import sys
 
 from openterm.core.agent_events import AgentEvents
@@ -8,6 +9,10 @@ from openterm.config import Config, get_config
 from openterm.core.runtime import Runtime
 from openterm.core.utils import _clip_label
 from openterm.ui.basic.spinner import Spinner
+from openterm.ui.tui.app.transcript_writer import TranscriptWriter
+
+
+_ANSI_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
 
 
 class TerminalUI(AgentEvents):
@@ -18,6 +23,7 @@ class TerminalUI(AgentEvents):
         model: str | None = None,
         binary: str = "ollama",
         small_model: str | None = None,
+        transcript: TranscriptWriter | None = None,
     ):
         self._config = config or get_config()
         self._model = model
@@ -25,6 +31,7 @@ class TerminalUI(AgentEvents):
         self._small_model = small_model
         self._spinner = None
         self._thinking_live = False
+        self._transcript = transcript
 
     def run(self, message: str) -> RunResult:
         with Runtime(
@@ -47,7 +54,9 @@ class TerminalUI(AgentEvents):
             self._spinner.stop()
             self._spinner = None
 
-    def _write_output(self, text, end="\n"):
+    def _write_output(self, text, end="\n", *, record=True):
+        if record and self._transcript:
+            self._transcript.write(_ANSI_RE.sub("", str(text)), end=end)
         if self._spinner:
             self._spinner.write_above(str(text), end=end)
             return
@@ -64,13 +73,22 @@ class TerminalUI(AgentEvents):
             self.clear_status()
         prefix = "THINKING: " if not self._thinking_live else ""
         self._thinking_live = True
-        self._write_output(f"\033[38;5;248m{prefix}{text}\033[0m", end="")
+        self._write_output(
+            f"\033[38;5;248m{prefix}{text}\033[0m",
+            end="",
+            record=False,
+        )
 
     def thinking_complete(self, text):
-        if not text:
+        full_text = str(text or "").strip()
+        if not full_text:
             return
+        if self._transcript:
+            self._transcript.write(f"▶ THINKING: {full_text}")
+        if not self._thinking_live:
+            self.thinking_delta(full_text)
         if self._thinking_live:
-            self._write_output("")
+            self._write_output("", record=False)
         self._thinking_live = False
 
 
@@ -92,9 +110,9 @@ class TerminalUI(AgentEvents):
             if formatted:
                 self._write_output(formatted)
             self._write_output("")
-        elif fd is not None and self._spinner:
+        elif fd is not None:
             output = f"\033[33m{line}\033[0m" if fd == "stderr" else line
-            self._spinner.write_above(output, end=end)
+            self._write_output(output, end=end)
 
     def shell_output(self, result):
         if not isinstance(result, dict):
@@ -131,16 +149,16 @@ class TerminalUI(AgentEvents):
         return answer.strip().lower() in {"y", "yes"}
     
     def _show_python(self, code):
-        sys.stderr.write("\033[38;5;248m" + "-" * 40 + "\033[0m\n")
+        self._write_output("\033[38;5;248m" + "-" * 40 + "\033[0m")
         for line in code.split("\n"):
-            sys.stderr.write(f"\033[33m{line}\033[0m\n")
-        sys.stderr.write("\033[38;5;248m" + "-" * 40 + "\033[0m\n")
+            self._write_output(f"\033[33m{line}\033[0m")
+        self._write_output("\033[38;5;248m" + "-" * 40 + "\033[0m")
 
     def python_code(self, code):
         if self._spinner:
             self._spinner.stop()
             self._spinner = None
-        sys.stderr.write("\n\033[1mPython code in bash command:\033[0m\n")
+        self._write_output("\n\033[1mPython code in bash command:\033[0m")
         self._show_python(code)
         sys.stderr.flush()
 
@@ -149,7 +167,7 @@ class TerminalUI(AgentEvents):
             self._spinner.stop()
             self._spinner = None
 
-        sys.stderr.write("\n\033[1mPython code requires approval:\033[0m\n")
+        self._write_output("\n\033[1mPython code requires approval:\033[0m")
         self._show_python(code)
 
         prompt = "Execute this Python code? [Y/N] "
@@ -171,7 +189,7 @@ class TerminalUI(AgentEvents):
             self._spinner = None
 
         mode_label = f" ({mode})" if mode != "overwrite" else ""
-        sys.stderr.write(f"\n\033[1mWriting file requires approval: {path}{mode_label}\033[0m\n")
+        self._write_output(f"\n\033[1mWriting file requires approval: {path}{mode_label}\033[0m")
         self._show_python(content)
 
         prompt = "Write this file? [Y/N] "
