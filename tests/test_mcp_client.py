@@ -72,10 +72,10 @@ class MCPClientTests(unittest.TestCase):
 
     @staticmethod
     def _approval_server_behaviors():
-        stream_frame = {
+        progress_notification = {
             "jsonrpc": "2.0",
-            "id": 1,
-            "stream": {"fd": "stdout", "line": "live", "end": "\n"},
+            "method": "tools/progress",
+            "params": {"token": 1, "fd": "stdout", "line": "live", "end": "\n"},
         }
         approval_frame = {
             "jsonrpc": "2.0",
@@ -91,7 +91,7 @@ class MCPClientTests(unittest.TestCase):
         return [
             [
                 ("recv",),
-                ("send", stream_frame),
+                ("send", progress_notification),
                 ("send", approval_frame),
                 ("send", final_frame),
                 ("close",),
@@ -136,6 +136,41 @@ class MCPClientTests(unittest.TestCase):
 
         self.assertTrue(client._handle_approval_request({"binary": "/usr/bin/apt"}))
         self.assertFalse(client._handle_approval_request({"binary": "/usr/bin/chmod"}))
+
+    def test_progress_notification_dispatches_to_stream_callback(self):
+        client = FastMCPClient("/tmp")
+        streams = []
+
+        consumed = client._dispatch_interim_frame(
+            {
+                "jsonrpc": "2.0",
+                "method": "tools/progress",
+                "params": {"token": 1, "fd": "stderr", "line": "warn", "end": "\n"},
+            },
+            lambda fd, line, end: streams.append((fd, line, end)),
+        )
+
+        self.assertTrue(consumed)
+        self.assertEqual(streams, [("stderr", "warn", "\n")])
+
+    def test_unknown_notification_is_ignored_without_callback(self):
+        client = FastMCPClient("/tmp")
+
+        self.assertTrue(client._dispatch_interim_frame({
+            "jsonrpc": "2.0",
+            "method": "tools/other",
+            "params": {},
+        }))
+
+    def test_response_frames_are_not_interim(self):
+        client = FastMCPClient("/tmp")
+
+        self.assertFalse(client._dispatch_interim_frame(
+            {"jsonrpc": "2.0", "id": 1, "result": {"ok": True}}, None,
+        ))
+        self.assertFalse(client._dispatch_interim_frame(
+            {"jsonrpc": "2.0", "id": 1, "error": {"code": -32000, "message": "boom"}}, None,
+        ))
 
     def test_stream_request_handles_approval_round_trip(self):
         with tempfile.TemporaryDirectory() as tmp:

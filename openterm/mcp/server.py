@@ -190,8 +190,9 @@ class MCPServer:
                     if chunk.get("type") == "stream":
                         send({
                             "jsonrpc": "2.0",
-                            "id": request_id,
-                            "stream": {
+                            "method": "tools/progress",
+                            "params": {
+                                "token": request_id,
                                 "fd": chunk["fd"],
                                 "line": chunk["line"],
                                 "end": chunk.get("end", "\n"),
@@ -232,8 +233,10 @@ class MCPServer:
         Handle an MCP request and write response(s) to writer.
 
         For streaming tool results the server sends multiple newline-delimited
-        JSON frames before the final result frame:
-          {"jsonrpc":"2.0","id":N,"stream":{"fd":"stdout"|"stderr","line":"..."}}
+        JSON frames before the final result frame. Progress frames are valid
+        JSON-RPC 2.0 notifications correlated by params.token; only the final
+        frame carries the request id:
+          {"jsonrpc":"2.0","method":"tools/progress","params":{"token":N,"fd":"stdout"|"stderr","line":"..."}}
           {"jsonrpc":"2.0","id":N,"result": <final result dict>}
 
         A held bash tool call can also emit an approval frame:

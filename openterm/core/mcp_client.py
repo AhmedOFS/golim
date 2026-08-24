@@ -54,6 +54,27 @@ class FastMCPClient:
         except OSError:
             pass
 
+    def _dispatch_interim_frame(self, frame, on_stream=None):
+        """Handle interim traffic received before the response frame.
+
+        Approval requests are answered out-of-band; ``tools/progress``
+        notifications are forwarded to the stream callback. Returns True
+        when the frame was interim and the caller should keep waiting for
+        the JSON-RPC response (``result``/``error``).
+        """
+        if "approval_request" in frame:
+            approval = frame["approval_request"]
+            approved = self._handle_approval_request(approval)
+            self._send_approval_response(approval.get("approval_id"), approved)
+            return True
+        if "result" in frame or "error" in frame:
+            return False
+        if frame.get("method") == "tools/progress":
+            params = frame.get("params") or {}
+            if on_stream:
+                on_stream(params.get("fd"), params.get("line"), params.get("end", "\n"))
+        return True
+
     def _send_request(self, method, params=None):
         sock = self._open_socket()
         try:
@@ -70,12 +91,7 @@ class FastMCPClient:
                     if not line:
                         continue
                     frame = json.loads(line.decode())
-                    if "approval_request" in frame:
-                        approval = frame["approval_request"]
-                        approved = self._handle_approval_request(approval)
-                        self._send_approval_response(approval.get("approval_id"), approved)
-                        continue
-                    if "stream" not in frame:
+                    if not self._dispatch_interim_frame(frame):
                         return frame
             if not buf.strip():
                 raise ConnectionError("No response from server")
@@ -104,26 +120,11 @@ class FastMCPClient:
                     if not line:
                         continue
                     frame = json.loads(line.decode())
-
-                    if "approval_request" in frame:
-                        approval = frame["approval_request"]
-                        approved = self._handle_approval_request(approval)
-                        self._send_approval_response(approval.get("approval_id"), approved)
-                        continue
-
-                    if "stream" in frame:
-                        if on_stream:
-                            stream = frame["stream"]
-                            on_stream(stream["fd"], stream["line"], stream.get("end", "\n"))
-                    else:
+                    if not self._dispatch_interim_frame(frame, on_stream):
                         final_frame = frame
             if buf.strip():
                 frame = json.loads(buf.decode().strip())
-                if "stream" in frame:
-                    if on_stream:
-                        stream = frame["stream"]
-                        on_stream(stream["fd"], stream["line"], stream.get("end", "\n"))
-                else:
+                if not self._dispatch_interim_frame(frame, on_stream):
                     final_frame = frame
             if final_frame is None:
                 raise ConnectionError("No result frame received from server")

@@ -28,6 +28,7 @@ class _Tools:
     def streamed(self):
         try:
             yield {"type": "stream", "fd": "stdout", "line": "output"}
+            yield {"type": "result", "ok": True}
         finally:
             self.closed = True
 
@@ -145,6 +146,29 @@ class MCPServerTests(unittest.TestCase):
             ))
 
         self.assertTrue(tools.closed)
+
+    def test_stream_chunks_are_sent_as_progress_notifications(self):
+        tools = _Tools()
+        server = MCPServer(tools)
+
+        async def run():
+            task, reader, writer = await self._start_tool_call(
+                server, tools, "streamed", {},
+            )
+            self.assertTrue(await asyncio.wait_for(task, 2))
+            reader.close()
+            return writer
+
+        writer = asyncio.run(run())
+        frames = [json.loads(data.decode()) for data in writer.frames]
+        progress = [f for f in frames if f.get("method") == "tools/progress"]
+        self.assertEqual(progress, [{
+            "jsonrpc": "2.0",
+            "method": "tools/progress",
+            "params": {"token": 1, "fd": "stdout", "line": "output", "end": "\n"},
+        }])
+        self.assertEqual(frames[-1]["id"], 1)
+        self.assertEqual(frames[-1]["result"], {"ok": True})
 
     def test_connection_close_cancels_cooperative_python_tool(self):
         async def run():
