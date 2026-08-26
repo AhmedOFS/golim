@@ -1,5 +1,7 @@
 import unittest
 import os
+import pwd
+import subprocess
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
@@ -7,6 +9,8 @@ from unittest.mock import patch
 from openterm.mcp.tools import bash, read_file, _should_stream_with_pty
 from openterm.mcp.utils import bash_utils
 from openterm.mcp.vars import OUTPUT_LINE_LIMIT
+
+POSTINSTALL_SCRIPT = Path(__file__).resolve().parent.parent / "packaging" / "postinstall.sh"
 
 
 class BashParsingTests(unittest.TestCase):
@@ -128,6 +132,95 @@ class BashParsingTests(unittest.TestCase):
         self.assertFalse(result["ok"], result)
         self.assertIn("not approved", result["error"])
         self.assertFalse(whitelist_exists)
+
+    def test_sudo_boolean_options_are_stripped_and_routed(self):
+        calls = []
+
+        def fake_stream_command(argv, cmd_str, results, suppress_stderr):
+            calls.append(argv)
+            return {"command": cmd_str, "stdout": "ok", "stderr": "", "returncode": 0}, None
+            yield
+
+        def approve(info):
+            bash_utils.get_config().add_privileged_binary(info["binary"])
+            return True
+
+        with tempfile.TemporaryDirectory() as tmp:
+            wrapper = Path(tmp) / "openterm-privileged"
+            wrapper.write_text("#!/bin/sh\n", encoding="utf-8")
+            whitelist = Path(tmp) / "privileged_whitelist"
+
+            with patch.dict(os.environ, {"OPENTERM_PRIVILEGED_WHITELIST": str(whitelist)}), \
+                 patch.object(bash_utils, "PRIVILEGED_WRAPPER", str(wrapper)), \
+                 patch.object(bash_utils, "_stream_command", fake_stream_command):
+                result = bash_utils._run_restricted(
+                    "sudo -n -k test -d /",
+                    approve_privileged=approve,
+                )
+
+        resolved_test = bash_utils.shutil.which("test")
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(
+            calls[0],
+            ["sudo", "--non-interactive", str(wrapper), resolved_test, "-d", "/"],
+        )
+
+    def test_sudo_target_option_is_rejected_without_approval(self):
+        approvals = []
+
+        with tempfile.TemporaryDirectory() as tmp:
+            whitelist = Path(tmp) / "privileged_whitelist"
+            with patch.dict(os.environ, {"OPENTERM_PRIVILEGED_WHITELIST": str(whitelist)}):
+                result = bash_utils._run_restricted(
+                    "sudo -u root test -d /",
+                    approve_privileged=lambda info: approvals.append(info) or True,
+                )
+
+        self.assertFalse(result["ok"], result)
+        self.assertIn("not supported", result["error"])
+        self.assertEqual(approvals, [])
+
+    def test_sudo_unknown_option_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            whitelist = Path(tmp) / "privileged_whitelist"
+            with patch.dict(os.environ, {"OPENTERM_PRIVILEGED_WHITELIST": str(whitelist)}):
+                result = bash_utils._run_restricted(
+                    "sudo -p myprompt test -d /",
+                    approve_privileged=lambda info: True,
+                )
+
+        self.assertFalse(result["ok"], result)
+        self.assertIn("Unsupported sudo option: -p", result["error"])
+
+    def test_unrestricted_sudo_flag_form_routes_through_wrapper(self):
+        with patch.object(bash_utils.get_config(), "is_privileged_binary_allowed", return_value=True):
+            prepared, err = bash_utils._prepare_unrestricted("sudo -n snap install spotify")
+
+        resolved_snap = bash_utils.shutil.which("snap")
+        self.assertIsNone(err)
+        self.assertEqual(
+            prepared,
+            f"sudo --non-interactive {bash_utils.PRIVILEGED_WRAPPER} {resolved_snap} install spotify",
+        )
+
+    def test_unrestricted_sudo_target_option_fails_without_rewrite(self):
+        with patch.object(bash_utils.get_config(), "is_privileged_binary_allowed", return_value=True):
+            prepared, err = bash_utils._prepare_unrestricted("sudo -u root apt install curl")
+
+        self.assertIsNone(prepared)
+        self.assertFalse(err["ok"], err)
+        self.assertIn("not supported", err["error"])
+        self.assertNotIn("approval_required", err)
+
+    def test_unrestricted_sudo_unknown_option_fails_without_rewrite(self):
+        with patch.object(bash_utils.get_config(), "is_privileged_binary_allowed", return_value=True):
+            prepared, err = bash_utils._prepare_unrestricted("sudo -p x ls /")
+
+        self.assertIsNone(prepared)
+        self.assertFalse(err["ok"], err)
+        self.assertIn("Unsupported sudo option: -p", err["error"])
+        self.assertNotIn("approval_required", err)
+
 
     def test_privileged_snap_and_apt_stream_with_pty(self):
         wrapper = bash_utils.PRIVILEGED_WRAPPER
@@ -379,6 +472,90 @@ class BashParsingTests(unittest.TestCase):
             self.assertEqual(result["next_page"], 3)
             self.assertEqual(result["content"].splitlines()[0], "201")
             self.assertEqual(result["content"].splitlines()[-1], "400")
+
+
+class PrivilegedWrapperScriptTests(unittest.TestCase):
+    """Exercise the real wrapper script from packaging/postinstall.sh.
+
+    Runs without root: the wrapper only needs SUDO_USER and a readable
+    whitelist, both provided here through the environment.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        if os.geteuid() == 0:
+            raise unittest.SkipTest("wrapper refuses to run with SUDO_USER=root")
+        script = POSTINSTALL_SCRIPT.read_text(encoding="utf-8")
+        marker = "<< 'EOF'"
+        start = script.index(marker) + len(marker)
+        end = script.index("\nEOF\n", start)
+        cls.wrapper_source = script[start:end].lstrip("\n") + "\n"
+
+    def _install_wrapper(self, tmp: Path) -> Path:
+        wrapper = tmp / "openterm-privileged"
+        wrapper.write_text(self.wrapper_source, encoding="utf-8")
+        wrapper.chmod(0o755)
+        return wrapper
+
+    def _run_wrapper(self, wrapper: Path, whitelist: Path, argv: list[str]):
+        env = dict(os.environ)
+        env["SUDO_USER"] = pwd.getpwuid(os.getuid()).pw_name
+        env["OPENTERM_PRIVILEGED_WHITELIST"] = str(whitelist)
+        return subprocess.run(
+            [str(wrapper), *argv], env=env, capture_output=True, text=True
+        )
+
+    def test_symlinked_multiplexer_keeps_invoked_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            real_bin = tmp_path / "kmod"
+            real_bin.write_text("#!/bin/sh\nprintf 'argv0=%s' \"$(basename \"$0\")\"\n", encoding="utf-8")
+            real_bin.chmod(0o755)
+            symlink = tmp_path / "modprobe"
+            symlink.symlink_to(real_bin)
+
+            whitelist = tmp_path / "privileged_whitelist"
+            whitelist.write_text(f"{real_bin.resolve()}\n", encoding="utf-8")
+
+            proc = self._run_wrapper(self._install_wrapper(tmp_path), whitelist, [str(symlink), "nvidia"])
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("argv0=modprobe", proc.stdout, proc.stdout)
+
+    def test_canonical_whitelist_match_allows_resolved_target(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            real_bin = tmp_path / "tool"
+            real_bin.write_text("#!/bin/sh\necho ran \"$@\"\n", encoding="utf-8")
+            real_bin.chmod(0o755)
+            link_dir = tmp_path / "alias"
+            link_dir.mkdir()
+            alias = link_dir / "tool-alias"
+            alias.symlink_to(real_bin)
+
+            whitelist = tmp_path / "privileged_whitelist"
+            # Whitelist stores the alias path; canonical resolution must match.
+            whitelist.write_text(f"{alias}\n", encoding="utf-8")
+
+            proc = self._run_wrapper(self._install_wrapper(tmp_path), whitelist, [str(real_bin), "-d", "/"])
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("ran -d /", proc.stdout)
+
+    def test_unwhitelisted_binary_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            real_bin = tmp_path / "dkms"
+            real_bin.write_text("#!/bin/sh\n", encoding="utf-8")
+            real_bin.chmod(0o755)
+
+            whitelist = tmp_path / "privileged_whitelist"
+            whitelist.write_text("", encoding="utf-8")
+
+            proc = self._run_wrapper(self._install_wrapper(tmp_path), whitelist, [str(real_bin)])
+
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("binary not allowed", proc.stderr)
 
 
 if __name__ == "__main__":

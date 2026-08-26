@@ -84,6 +84,20 @@ class _ApprovalTools:
         return {"ok": decision}
 
 
+class _GatedBashTools:
+    def __init__(self):
+        self.decisions = []
+
+    def bash(self, _approve_privileged=None, **_kwargs):
+        decision = _approve_privileged({
+            "approval_kind": "privileged_whitelist",
+            "binary": "/usr/bin/apt",
+            "command": "sudo apt update",
+        })
+        self.decisions.append(decision)
+        return {"ok": decision}
+
+
 class _CaptureWriter:
     def __init__(self):
         self.frames = []
@@ -393,6 +407,77 @@ class MCPServerTests(unittest.TestCase):
 
         frame = json.loads(writer.frames[0].decode())
         self.assertEqual(frame["result"], {"resolved": False})
+
+    def test_notification_tool_call_completes_without_any_frames(self):
+        tools = _Tools()
+        server = MCPServer(tools)
+        reader = _DisconnectReader()
+        writer = _CaptureWriter()
+
+        async def run():
+            await server.handle_request(
+                json.dumps({
+                    "jsonrpc": "2.0",
+                    "method": "tools/call",
+                    "params": {"name": "streamed", "arguments": {}},
+                }),
+                writer,
+                reader,
+            )
+
+        asyncio.run(run())
+        reader.close()
+
+        self.assertTrue(tools.closed)
+        self.assertEqual(writer.frames, [])
+
+    def test_notifications_are_processed_but_never_answered(self):
+        from openterm.mcp.tools import mcp
+        server = MCPServer(mcp)
+        writer = _CaptureWriter()
+
+        asyncio.run(server.handle_request(
+            json.dumps({"jsonrpc": "2.0", "method": "tools/list"}),
+            writer,
+        ))
+        asyncio.run(server.handle_request(
+            json.dumps({"jsonrpc": "2.0", "method": "ping"}),
+            writer,
+        ))
+
+        self.assertEqual(writer.frames, [])
+
+    def test_requests_still_receive_their_response(self):
+        from openterm.mcp.tools import mcp
+        server = MCPServer(mcp)
+        writer = _CaptureWriter()
+
+        asyncio.run(server.handle_request(
+            json.dumps({"jsonrpc": "2.0", "id": 1, "method": "ping"}),
+            writer,
+        ))
+
+        frame = json.loads(writer.frames[0].decode())
+        self.assertEqual(frame["id"], 1)
+        self.assertEqual(frame["error"]["code"], -32601)
+
+    def test_notification_bash_call_auto_denies_privileged_approval(self):
+        tools = _GatedBashTools()
+        server = MCPServer(tools)
+        writer = _CaptureWriter()
+
+        asyncio.run(server.handle_request(
+            json.dumps({
+                "jsonrpc": "2.0",
+                "method": "tools/call",
+                "params": {"name": "bash", "arguments": {"command": "sudo apt update"}},
+            }),
+            writer,
+        ))
+
+        self.assertEqual(tools.decisions, [False])
+        self.assertEqual(writer.frames, [])
+        self.assertEqual(server._pending_approvals, {})
 
     def test_tools_list_hides_approval_parameters_from_model_schema(self):
         from openterm.mcp.tools import mcp

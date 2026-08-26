@@ -105,15 +105,22 @@ class MCPServer:
 
     async def _run_tool_call(
         self, tool_func, arguments, request_id, writer, reader=None,
-        inject_approval=False,
+        inject_approval=False, emit=True,
     ):
-        """Run one tool off-loop and cancel it when its client disconnects."""
+        """Run one tool off-loop and cancel it when its client disconnects.
+
+        ``emit=False`` marks a JSON-RPC notification call: the tool still
+        runs to completion, but no frames are written and privileged
+        approvals auto-deny because no client is awaiting an answer.
+        """
         events = queue.Queue()
         cancel_event = threading.Event()
         local_approvals = []
 
         def request_approval(info):
             """Block the tool worker until the client answers the approval."""
+            if not emit:
+                return False
             with self._approvals_lock:
                 seq = next(self._approval_seq)
                 approval_id = f"{request_id}:{seq}"
@@ -177,36 +184,40 @@ class MCPServer:
                 if event_type == "error":
                     if isinstance(value, (BrokenPipeError, ConnectionResetError)):
                         raise value
-                    send({
-                        "jsonrpc": "2.0",
-                        "id": request_id,
-                        "error": {"code": -32000, "message": f"Tool execution error: {value}"},
-                    })
+                    if emit:
+                        send({
+                            "jsonrpc": "2.0",
+                            "id": request_id,
+                            "error": {"code": -32000, "message": f"Tool execution error: {value}"},
+                        })
                     worker_finished = True
                     return True
 
                 if event_type == "chunk":
                     chunk = value
                     if chunk.get("type") == "stream":
-                        send({
-                            "jsonrpc": "2.0",
-                            "method": "tools/progress",
-                            "params": {
-                                "token": request_id,
-                                "fd": chunk["fd"],
-                                "line": chunk["line"],
-                                "end": chunk.get("end", "\n"),
-                            },
-                        })
-                        await writer.drain()
+                        if emit:
+                            send({
+                                "jsonrpc": "2.0",
+                                "method": "tools/progress",
+                                "params": {
+                                    "token": request_id,
+                                    "fd": chunk["fd"],
+                                    "line": chunk["line"],
+                                    "end": chunk.get("end", "\n"),
+                                },
+                            })
+                            await writer.drain()
                     elif chunk.get("type") == "result":
                         payload = {k: v for k, v in chunk.items() if k != "type"}
-                        send({"jsonrpc": "2.0", "id": request_id, "result": payload})
+                        if emit:
+                            send({"jsonrpc": "2.0", "id": request_id, "result": payload})
                         worker_finished = True
                         return True
                     continue
 
-                send({"jsonrpc": "2.0", "id": request_id, "result": value})
+                if emit:
+                    send({"jsonrpc": "2.0", "id": request_id, "result": value})
                 worker_finished = True
                 return True
         except (BrokenPipeError, ConnectionResetError):
@@ -245,6 +256,9 @@ class MCPServer:
         exchange is never returned to the model as a tool result.
 
         Non-streaming tools send a single result frame as before.
+
+        Frames without an "id" are JSON-RPC 2.0 notifications: they are
+        processed but never answered, not even with an error reply.
         """
         self.update_activity()
 
@@ -256,7 +270,8 @@ class MCPServer:
             request = json.loads(request_data)
             method = request.get("method", "")
             params = request.get("params", {})
-            request_id = request.get("id", 1)
+            has_response_id = "id" in request
+            request_id = request.get("id")
 
             if method == "tools/list":
                 import inspect
@@ -297,11 +312,12 @@ class MCPServer:
                                     "required": required,
                                 }
                             })
-                send({
-                    "jsonrpc": "2.0",
-                    "id": request_id,
-                    "result": {"tools": tools},
-                })
+                if has_response_id:
+                    send({
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "result": {"tools": tools},
+                    })
 
             elif method == "tools/call":
                 tool_name = params.get("name")
@@ -310,35 +326,39 @@ class MCPServer:
                 arguments.pop("timeout", None)
 
                 if not hasattr(self.mcp, tool_name):
-                    send({
-                        "jsonrpc": "2.0",
-                        "id": request_id,
-                        "error": {"code": -32601, "message": f"Tool not found: {tool_name}"},
-                    })
+                    if has_response_id:
+                        send({
+                            "jsonrpc": "2.0",
+                            "id": request_id,
+                            "error": {"code": -32601, "message": f"Tool not found: {tool_name}"},
+                        })
                     return
 
                 tool_func = getattr(self.mcp, tool_name)
                 await self._run_tool_call(
                     tool_func, arguments, request_id, writer, reader,
                     inject_approval=(tool_name == "bash"),
+                    emit=has_response_id,
                 )
 
             elif method == "approval/respond":
                 approval_id = params.get("approval_id")
                 approved = bool(params.get("approved"))
                 resolved = self._resolve_approval(approval_id, approved)
-                send({
-                    "jsonrpc": "2.0",
-                    "id": request_id,
-                    "result": {"resolved": resolved},
-                })
+                if has_response_id:
+                    send({
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "result": {"resolved": resolved},
+                    })
 
             else:
-                send({
-                    "jsonrpc": "2.0",
-                    "id": request_id,
-                    "error": {"code": -32601, "message": f"Method not found: {method}"},
-                })
+                if has_response_id:
+                    send({
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "error": {"code": -32601, "message": f"Method not found: {method}"},
+                    })
 
         except json.JSONDecodeError:
             send({"jsonrpc": "2.0", "id": None,

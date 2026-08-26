@@ -186,10 +186,50 @@ def _check_blocked_binary(resolved: str, results_ref: list) -> dict | None:
 #  Restricted command parsing
 # ---------------------------------------------------------------------------
 
+# sudo options that cannot affect execution through the privileged wrapper and
+# are dropped instead of being treated as the target binary.
+_SUDO_BOOLEAN_OPTIONS = frozenset({
+    "-n", "--non-interactive",  # wrapper call is always non-interactive
+    "-k", "-K",                 # timestamp caching is irrelevant (NOPASSWD)
+    "-E", "--preserve-env",     # environment preservation is not forwarded
+})
+# sudo options that change the execution target; dropping them would silently
+# change what the command does, so they are rejected with a clear error.
+_SUDO_TARGET_OPTIONS = frozenset({"-u", "--user", "-g", "--group"})
+
+
+def _partition_sudo_options(tokens: list[str]) -> tuple[list[str], dict | None]:
+    """Strip leading `sudo` options from a token list.
+
+    Boolean options that cannot affect wrapper execution are dropped;
+    target-selection options (-u/-g) and unknown options produce an error,
+    since silently dropping them would change what the command does.
+    """
+    for index, token in enumerate(tokens):
+        if token == "--":
+            return tokens[index + 1:], None
+        if not token.startswith("-"):
+            return tokens[index:], None
+        base = token.split("=", 1)[0]
+        if base in _SUDO_TARGET_OPTIONS:
+            return None, {
+                "ok": False,
+                "error": f"sudo {base} is not supported through the privileged wrapper",
+            }
+        if base in _SUDO_BOOLEAN_OPTIONS:
+            continue
+        return None, {"ok": False, "error": f"Unsupported sudo option: {token}"}
+    return [], None
+
+
 def _build_cmd(tokens: list[str], results_ref: list, privileged_approved: bool = False):
     privileged = tokens[0] == "sudo"
     if privileged:
         tokens = tokens[1:]
+        stripped, err = _partition_sudo_options(tokens)
+        if err:
+            return None, {**err, "results": results_ref}
+        tokens = stripped
     if not tokens:
         return None, {"ok": False, "error": "Empty command after stripping sudo", "results": results_ref}
 
@@ -701,11 +741,29 @@ def _exec_restricted(command, approve_privileged=None):
 # ---------------------------------------------------------------------------
 
 def _prepare_unrestricted(command: str) -> tuple[str | None, dict | None]:
+    # Matches `sudo` followed by option-like tokens (single-token forms only;
+    # separated values such as `-u user` are caught by option validation) and
+    # the target binary, so the whole invocation can be rewritten.
+    invocation_re = re.compile(
+        r"(?<![^\s])sudo(?P<options>(?:\s+(?:--|-{1,2}[A-Za-z][A-Za-z=-]*))*)\s+(?P<binary>\S+)"
+    )
     sudo_replacements = []
-    for m in re.finditer(r'(?<![^\s])sudo\s+(\S+)', command):
-        binary_token = m.group(1)
-        if binary_token.startswith("-"):
-            continue
+    for m in invocation_re.finditer(command):
+        for token in m.group("options").split():
+            base = token.split("=", 1)[0]
+            if base in _SUDO_TARGET_OPTIONS:
+                return None, {
+                    "ok": False,
+                    "error": f"sudo {base} is not supported through the privileged wrapper",
+                    "results": [],
+                }
+            if token != "--" and base not in _SUDO_BOOLEAN_OPTIONS:
+                return None, {
+                    "ok": False,
+                    "error": f"Unsupported sudo option: {token}",
+                    "results": [],
+                }
+        binary_token = m.group("binary")
         if not (resolved := shutil.which(binary_token)):
             continue
         if not get_config().is_privileged_binary_allowed(resolved):
@@ -717,7 +775,7 @@ def _prepare_unrestricted(command: str) -> tuple[str | None, dict | None]:
                 "binary": resolved,
                 "results": [],
             }
-        sudo_replacements.append((m.start(), m.end(), resolved))
+        sudo_replacements.append((m.start(), m.end("binary"), resolved))
 
     if sudo_replacements:
         parts, last_end = [], 0

@@ -55,6 +55,11 @@ if [ "$#" -lt 1 ]; then
 fi
 
 BINARY="$(readlink -f "$1")"
+# Exec the path as invoked, not its canonical form: symlink-dispatched
+# multiplexers (kmod applets such as modprobe -> kmod) pick their behavior
+# from argv[0], so canonicalizing here would break them. The whitelist check
+# below still compares canonical paths.
+REQUESTED="$1"
 shift
 
 REAL_USER="${SUDO_USER:-}"
@@ -82,7 +87,10 @@ while IFS= read -r allowed || [ -n "$allowed" ]; do
   [ -n "$allowed" ] || continue
   allowed="$(readlink -f "$allowed")"
   if [ "$BINARY" = "$allowed" ]; then
-    exec "$BINARY" "$@"
+    case "$REQUESTED" in
+      */*) exec "$REQUESTED" "$@" ;;
+      *)   exec "$BINARY" "$@" ;;
+    esac
   fi
 done < "$WHITELIST"
 
