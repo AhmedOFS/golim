@@ -10,6 +10,44 @@ from openterm.config import Config
 from openterm.core.agent import ToolAgent
 
 
+class _UI:
+    def status(self, message):
+        pass
+
+    def clear_status(self):
+        pass
+
+    def message(self, text):
+        pass
+
+    def thinking_delta(self, text):
+        pass
+
+    def thinking_complete(self, text):
+        pass
+
+    def tool_call(self, tool_name, args):
+        pass
+
+    def tool_output(self, fd=None, line="", end="\n", result=None):
+        pass
+
+    def shell_output(self, result):
+        pass
+
+    def python_code(self, code):
+        pass
+
+    def request_binary_approval(self, binary):
+        return False
+
+    def request_python_approval(self, code):
+        return False
+
+    def request_write_approval(self, path, content, mode):
+        return False
+
+
 class OrchestrationTests(unittest.TestCase):
     def test_agent_executes_tool_calls_and_returns_final_answer(self):
         chat_calls = []
@@ -31,7 +69,7 @@ class OrchestrationTests(unittest.TestCase):
                 }
             return {"message": {"role": "assistant", "content": "Final answer after three tool iterations."}}
 
-        agent = ToolAgent("main")
+        agent = ToolAgent("main", ui=_UI())
         agent.tools = []
         agent.MAX_AGENT_ITERATIONS = 5
 
@@ -66,7 +104,7 @@ class OrchestrationTests(unittest.TestCase):
                 }
             return {"message": {"role": "assistant", "content": "Done."}}
 
-        agent = ToolAgent("main")
+        agent = ToolAgent("main", ui=_UI())
         agent.tools = []
         agent.MAX_AGENT_ITERATIONS = 5
 
@@ -82,7 +120,7 @@ class OrchestrationTests(unittest.TestCase):
         self.assertEqual(second_call[-1]["role"], "tool")
 
     def test_summarization_failure_keeps_history_for_followup(self):
-        agent = ToolAgent("main")
+        agent = ToolAgent("main", ui=_UI())
         agent.MAX_AGENT_ITERATIONS = 1
 
         tool_call = {
@@ -110,7 +148,7 @@ class OrchestrationTests(unittest.TestCase):
             chat_calls.append([message.copy() for message in messages])
             return {"message": {"role": "assistant", "content": "Followup answer."}}
 
-        agent = ToolAgent("main")
+        agent = ToolAgent("main", ui=_UI())
         agent.tools = []
 
         with patch("openterm.core.agent.chat_with_model_api", side_effect=fake_chat):
@@ -148,7 +186,7 @@ class OrchestrationTests(unittest.TestCase):
                 }
             return {"message": {"role": "assistant", "content": "Done."}}
 
-        agent = ToolAgent("main")
+        agent = ToolAgent("main", ui=_UI())
         agent.tools = []
         agent.MAX_AGENT_ITERATIONS = 5
 
@@ -203,7 +241,7 @@ class OrchestrationTests(unittest.TestCase):
                 }
             return {"message": {"role": "assistant", "content": "Done."}}
 
-        agent = ToolAgent("main")
+        agent = ToolAgent("main", ui=_UI())
         agent.tools = []
         agent.MAX_AGENT_ITERATIONS = 5
 
@@ -224,7 +262,7 @@ class OrchestrationTests(unittest.TestCase):
         self.assertEqual(third_call_text.count("[assistant thinking trace]"), 1)
 
     def test_execution_summary_includes_bash_output_file(self):
-        agent = ToolAgent("main")
+        agent = ToolAgent("main", ui=_UI())
 
         summary = agent._build_execution_summary([{
             "tool": "bash",
@@ -250,7 +288,7 @@ class OrchestrationTests(unittest.TestCase):
         self.assertIn("Output exceeded 50 lines.", summary)
 
     def test_execution_summary_includes_read_file_page_content(self):
-        agent = ToolAgent("main")
+        agent = ToolAgent("main", ui=_UI())
 
         summary = agent._build_execution_summary([{
             "tool": "read_file",

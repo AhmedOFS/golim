@@ -1,13 +1,6 @@
 from __future__ import annotations
 
-from contextvars import ContextVar
 from typing import Any, Protocol
-
-
-active_agent_events_handler: ContextVar["AgentEvents | None"] = ContextVar(
-    "active_agent_events_handler",
-    default=None,
-)
 
 
 class AgentEvents(Protocol):

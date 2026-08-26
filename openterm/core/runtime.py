@@ -10,7 +10,7 @@ import sys
 import threading
 import time
 
-from openterm.core.agent_events import AgentEvents, active_agent_events_handler
+from openterm.core.agent_events import AgentEvents
 from openterm.config import Config, get_config
 from openterm.api.chat_api import chat_with_model_api
 from openterm.core.mcp_client import FastMCPClient
@@ -50,6 +50,7 @@ class Runtime:
         self._interrupt_requested = threading.Event()
         self._hard_cancel_requested = threading.Event()
         self._system_prompt: str | None = None
+        self.ui: AgentEvents | None = None
 
     @staticmethod
     def is_followup_message(user_message: str) -> bool:
@@ -93,12 +94,14 @@ class Runtime:
     def should_hard_cancel(self) -> bool:
         return self._hard_cancel_requested.is_set()
 
-    @staticmethod
-    def _active_ui() -> AgentEvents:
-        ui = active_agent_events_handler.get()
-        if ui is None:
-            raise RuntimeError("Runtime requires an active AgentEvents context.")
-        return ui
+    def bind_ui(self, ui: AgentEvents) -> None:
+        """Bind the handler used by the next run; rebind per run."""
+        self.ui = ui
+
+    def _active_ui(self) -> AgentEvents:
+        if self.ui is None:
+            raise RuntimeError("Runtime requires a bound AgentEvents handler; call bind_ui() first.")
+        return self.ui
     
     def create_mcp_client(self, socket_path=None):
         """Create the transport client without performing tool discovery."""
@@ -279,6 +282,7 @@ class Runtime:
             self.model,
             self.binary,
             self.small_model,
+            ui=self._active_ui(),
             mcp_client=self.mcp_client,
             tools=tools,
             should_interrupt=self.should_interrupt,
@@ -315,6 +319,7 @@ class Runtime:
             self.model,
             self.binary,
             self.small_model,
+            ui=self._active_ui(),
             mcp_client=self.mcp_client,
             tools=tools,
             should_interrupt=self.should_interrupt,

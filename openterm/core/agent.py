@@ -8,9 +8,8 @@ import queue
 import threading
 import time
 
-from openterm.core.agent_events import AgentEvents, active_agent_events_handler
+from openterm.core.agent_events import AgentEvents
 from openterm.core.run_result import RunResult, make_run_result
-from openterm.ui.basic.basic import TerminalUI
 from openterm.config import Config, get_config
 from openterm.api.chat_api import chat_with_model_api
 from openterm.logger import log_diagnostic_section
@@ -39,7 +38,9 @@ class ToolAgent:
         self.binary = binary
         self.mcp_client = mcp_client
         self.tools = list(tools or [])
-        self.ui = ui or active_agent_events_handler.get() or TerminalUI()
+        if ui is None:
+            raise ValueError("ToolAgent requires an AgentEvents ui handler.")
+        self.ui = ui
         self._last_thinking_trace = ""
         self.messages = []
         self.execution_history = []

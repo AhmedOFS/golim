@@ -1,6 +1,4 @@
 import unittest
-from contextlib import redirect_stderr
-from io import StringIO
 from unittest.mock import patch
 
 from openterm.core.agent import ToolAgent
@@ -69,7 +67,7 @@ class FakeUI:
 
 class ToolApprovalTests(unittest.TestCase):
     def _agent_with_client(self, client, ui=None):
-        agent = ToolAgent("model", ui=ui)
+        agent = ToolAgent("model", ui=ui or FakeUI())
         agent.mcp_client = client
         return agent
 
@@ -112,25 +110,23 @@ class ToolApprovalTests(unittest.TestCase):
         self.assertEqual(ui.approval_prompts, ["/usr/bin/chmod"])
 
     def test_bash_result_prints_captured_output_when_no_stream_frame_arrives(self):
-        client = FakeMCPClient([
-            {
-                "ok": True,
-                "results": [{
-                    "command": "sudo snap install spotify",
-                    "stdout": "spotify 1.2.92 installed",
-                    "stderr": "",
-                    "returncode": 0,
-                }],
-            },
-        ])
-        agent = self._agent_with_client(client)
-        stderr = StringIO()
+        final_result = {
+            "ok": True,
+            "results": [{
+                "command": "sudo snap install spotify",
+                "stdout": "spotify 1.2.92 installed",
+                "stderr": "",
+                "returncode": 0,
+            }],
+        }
+        client = FakeMCPClient([final_result])
+        ui = FakeUI()
+        agent = self._agent_with_client(client, ui=ui)
 
-        with redirect_stderr(stderr):
-            result = agent._execute_tool("bash", {"command": "sudo snap install spotify"})
+        result = agent._execute_tool("bash", {"command": "sudo snap install spotify"})
 
         self.assertTrue(result["ok"], result)
-        self.assertIn("spotify 1.2.92 installed", stderr.getvalue())
+        self.assertEqual(ui.shell_results, [final_result])
 
     def test_streaming_bash_forwards_final_result_to_ui(self):
         final_result = {

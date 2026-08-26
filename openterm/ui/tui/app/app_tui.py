@@ -13,7 +13,7 @@ from textual.app import App, ComposeResult
 from textual.containers import Vertical
 from textual.widgets import Input, OptionList
 
-from openterm.core.agent_events import AgentEvents, active_agent_events_handler
+from openterm.core.agent_events import AgentEvents
 from openterm.config import Config, get_config
 from openterm.core.runtime import Runtime
 from openterm.ui.tui.config.config_tui import (
@@ -940,47 +940,44 @@ class OpentermApp(ConfigUIMixin, App[int]):
                 transcript.write(f"error: {self._runtime_error}")
                 result = ChatResult(False, self._runtime_error, str(log_path) if log_path else None)
             else:
-                token = active_agent_events_handler.set(ui)
-                try:
-                    runtime = self._get_runtime()
-                    if runtime is None:
-                        error = "Error: runtime is not available"
-                        transcript.write(f"error: {error}")
-                        result = ChatResult(False, error, str(log_path) if log_path else None)
-                    else:
-                        current_message = message
-                        current_followup = followup
-                        current_clarification = clarification
-                        while True:
-                            if current_followup:
-                                # Each followup is a fresh run: clear the UI
-                                # cancellation signal so a cancelled or
-                                # interrupted run cannot silence its followup.
-                                # This mirrors Runtime.run_followup clearing
-                                # the runtime interrupt flags.
-                                if self._active_cancel_event is not None:
-                                    self._active_cancel_event.clear()
-                                response = runtime.run_followup(
-                                    current_message,
-                                    clarification=current_clarification,
-                                )
-                            else:
-                                response = runtime.run(current_message)
-                            pending = self.pop_pending_followup() if self.is_run_active(run_id) else None
-                            if pending is None:
-                                break
-                            current_message, current_clarification = pending
-                            self.call_from_thread(self.append_followup_query, current_message)
-                            current_followup = True
-                        response_text = str(response.get("LLM_response", ""))
-                        transcript.write(f"\nresponse: {response_text}")
-                        result = ChatResult(
-                            bool(response.get("ok")),
-                            response_text,
-                            str(log_path) if log_path else None,
-                        )
-                finally:
-                    active_agent_events_handler.reset(token)
+                runtime = self._get_runtime()
+                if runtime is None:
+                    error = "Error: runtime is not available"
+                    transcript.write(f"error: {error}")
+                    result = ChatResult(False, error, str(log_path) if log_path else None)
+                else:
+                    runtime.bind_ui(ui)
+                    current_message = message
+                    current_followup = followup
+                    current_clarification = clarification
+                    while True:
+                        if current_followup:
+                            # Each followup is a fresh run: clear the UI
+                            # cancellation signal so a cancelled or
+                            # interrupted run cannot silence its followup.
+                            # This mirrors Runtime.run_followup clearing
+                            # the runtime interrupt flags.
+                            if self._active_cancel_event is not None:
+                                self._active_cancel_event.clear()
+                            response = runtime.run_followup(
+                                current_message,
+                                clarification=current_clarification,
+                            )
+                        else:
+                            response = runtime.run(current_message)
+                        pending = self.pop_pending_followup() if self.is_run_active(run_id) else None
+                        if pending is None:
+                            break
+                        current_message, current_clarification = pending
+                        self.call_from_thread(self.append_followup_query, current_message)
+                        current_followup = True
+                    response_text = str(response.get("LLM_response", ""))
+                    transcript.write(f"\nresponse: {response_text}")
+                    result = ChatResult(
+                        bool(response.get("ok")),
+                        response_text,
+                        str(log_path) if log_path else None,
+                    )
             if not self.is_run_active(run_id):
                 return
             self.call_from_thread(self.append_line, "")

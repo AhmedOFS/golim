@@ -64,7 +64,7 @@ class MainTuiTests(unittest.TestCase):
         self.assertIn(f"line {json_error.lineno}, column {json_error.colno}", output)
 
     @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
-    def test_reused_tui_runtime_does_not_store_ui(self):
+    def test_reused_tui_runtime_binds_ui_per_run(self):
         from openterm.ui.tui.app.app_tui import OpentermApp
 
         app = OpentermApp("model", model="main")
@@ -73,7 +73,16 @@ class MainTuiTests(unittest.TestCase):
         same_runtime = app._get_runtime()
 
         self.assertIs(same_runtime, runtime)
-        self.assertFalse(hasattr(runtime, "ui"))
+        self.assertIsNone(runtime.ui)
+
+        class Handler:
+            pass
+
+        first, second = Handler(), Handler()
+        runtime.bind_ui(first)
+        self.assertIs(runtime.ui, first)
+        runtime.bind_ui(second)
+        self.assertIs(runtime.ui, second)
 
     @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
     def test_tui_prompt_placeholder_changes_with_state(self):

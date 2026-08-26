@@ -10,7 +10,6 @@ import requests
 
 from openterm.api.retry import with_retries
 from openterm.core.agent import ToolAgent
-from openterm.core.agent_events import active_agent_events_handler
 from openterm.core.mcp_client import FastMCPClient
 from openterm.core.runtime import Runtime
 from openterm.core.utils import get_socket_path
@@ -27,15 +26,9 @@ class _UI:
 
 
 class ResilienceTests(unittest.TestCase):
-    def test_agent_uses_active_ui_context_when_not_passed(self):
-        ui = _UI()
-        token = active_agent_events_handler.set(ui)
-        try:
-            agent = ToolAgent("model")
-        finally:
-            active_agent_events_handler.reset(token)
-
-        self.assertIs(agent.ui, ui)
+    def test_agent_requires_explicit_ui_handler(self):
+        with self.assertRaises(ValueError):
+            ToolAgent("model")
 
     def test_socket_path_uses_effective_uid_username(self):
         with patch("openterm.core.utils.pwd.getpwuid") as lookup, \

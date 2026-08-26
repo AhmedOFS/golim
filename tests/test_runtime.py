@@ -1,7 +1,6 @@
 import unittest
 from unittest.mock import MagicMock, patch
 
-from openterm.core.agent_events import active_agent_events_handler
 from openterm.core.runtime import Runtime
 
 
@@ -47,20 +46,10 @@ class FakeMCPClient:
 
 
 class RuntimeTests(unittest.TestCase):
-    def setUp(self):
-        self.ui = FakeUI()
-        self.ui_token = active_agent_events_handler.set(self.ui)
-
-    def tearDown(self):
-        active_agent_events_handler.reset(self.ui_token)
-
     def test_runtime_runs_agent_and_copies_state(self):
         ui = FakeUI()
-        token = active_agent_events_handler.set(ui)
-        try:
-            runtime = Runtime(model="main")
-        finally:
-            active_agent_events_handler.reset(token)
+        runtime = Runtime(model="main")
+        runtime.bind_ui(ui)
         runtime.mcp_client = FakeMCPClient()
 
         def fake_chat(model, messages, tools=None, binary="ollama", response_format=None):
@@ -72,17 +61,14 @@ class RuntimeTests(unittest.TestCase):
             result = runtime.run("Do work.")
 
         self.assertEqual(result, {"ok": True, "LLM_response": "Done."})
-        self.assertFalse(hasattr(runtime, "ui"))
+        self.assertIs(runtime.ui, ui)
         self.assertEqual(runtime.result, {"ok": True, "LLM_response": "Done."})
         self.assertEqual(runtime.execution_history, [])
         self.assertEqual(runtime.messages[-1]["content"], "Done.")
 
     def test_runtime_followup_reuses_previous_messages(self):
-        token = active_agent_events_handler.set(FakeUI())
-        try:
-            runtime = Runtime(model="main")
-        finally:
-            active_agent_events_handler.reset(token)
+        runtime = Runtime(model="main")
+        runtime.bind_ui(FakeUI())
         runtime.mcp_client = FakeMCPClient()
         chat_calls = []
 
@@ -105,11 +91,8 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(chat_calls[1][-1], {"role": "user", "content": "followup: explain more"})
 
     def test_runtime_clarification_uses_safe_history_without_marker(self):
-        token = active_agent_events_handler.set(FakeUI())
-        try:
-            runtime = Runtime(model="main")
-        finally:
-            active_agent_events_handler.reset(token)
+        runtime = Runtime(model="main")
+        runtime.bind_ui(FakeUI())
         runtime.mcp_client = FakeMCPClient()
         runtime.messages = [
             {"role": "system", "content": "system"},
@@ -133,11 +116,8 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(chat_calls[0][-1], {"role": "user", "content": "clarification: use the smaller file"})
 
     def test_runtime_interrupt_aborts_after_tool_iteration(self):
-        token = active_agent_events_handler.set(FakeUI())
-        try:
-            runtime = Runtime(model="main")
-        finally:
-            active_agent_events_handler.reset(token)
+        runtime = Runtime(model="main")
+        runtime.bind_ui(FakeUI())
         runtime.mcp_client = FakeMCPClient()
 
         def fake_chat(model, messages, tools=None, binary="ollama", response_format=None):
@@ -169,11 +149,8 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(runtime.execution_history[0]["tool"], "bash")
 
     def test_runtime_interrupt_before_tool_execution_skips_tool(self):
-        token = active_agent_events_handler.set(FakeUI())
-        try:
-            runtime = Runtime(model="main")
-        finally:
-            active_agent_events_handler.reset(token)
+        runtime = Runtime(model="main")
+        runtime.bind_ui(FakeUI())
         runtime.mcp_client = FakeMCPClient()
 
         def fake_chat(model, messages, tools=None, binary="ollama", response_format=None):
@@ -204,11 +181,8 @@ class RuntimeTests(unittest.TestCase):
         self.assertFalse(any(message.get("tool_calls") for message in runtime.messages))
 
     def test_followup_preserves_initial_system_prompt(self):
-        token = active_agent_events_handler.set(FakeUI())
-        try:
-            runtime = Runtime(model="main")
-        finally:
-            active_agent_events_handler.reset(token)
+        runtime = Runtime(model="main")
+        runtime.bind_ui(FakeUI())
         runtime.mcp_client = FakeMCPClient()
         prompts = []
 
@@ -227,11 +201,8 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(select_skills.call_count, 1)
 
     def test_runtime_verifies_tools_on_every_run(self):
-        token = active_agent_events_handler.set(FakeUI())
-        try:
-            runtime = Runtime(model="main")
-        finally:
-            active_agent_events_handler.reset(token)
+        runtime = Runtime(model="main")
+        runtime.bind_ui(FakeUI())
         runtime.mcp_client = FakeMCPClient()
 
         def fake_chat(model, messages, tools=None, binary="ollama", response_format=None):
@@ -245,14 +216,11 @@ class RuntimeTests(unittest.TestCase):
 
         self.assertEqual(runtime.mcp_client.list_count, 2)
 
-    def test_runtime_requires_ui_context_at_initialization(self):
-        token = active_agent_events_handler.set(None)
+    def test_runtime_run_without_bound_ui_raises(self):
         runtime = Runtime(model="main")
-        try:
-            with self.assertRaises(RuntimeError):
-                runtime.run("Do work.")
-        finally:
-            active_agent_events_handler.reset(token)
+
+        with self.assertRaises(RuntimeError):
+            runtime.run("Do work.")
 
     def test_create_mcp_client_only_constructs_transport(self):
         runtime = Runtime(model="main")

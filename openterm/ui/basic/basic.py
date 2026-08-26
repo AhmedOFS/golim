@@ -40,6 +40,7 @@ class TerminalUI(AgentEvents):
             binary=self._binary,
             small_model=self._small_model,
         ) as runtime:
+            runtime.bind_ui(self)
             return runtime.run(message)
 
     def status(self, message):

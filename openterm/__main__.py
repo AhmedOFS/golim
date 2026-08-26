@@ -8,7 +8,6 @@ from .config.app_home import resolve_app_home
 from .config import ConfigSchemaError, get_config, init_config
 from .config.utils import resolve_provider_settings
 from .logger import setup_root_logger, start_run_logging
-from .core.agent_events import active_agent_events_handler
 from .core.runtime import Runtime
 from .ui.basic.basic import TerminalUI
 from .ui.tui.app.transcript_writer import TranscriptWriter
@@ -35,11 +34,7 @@ def chat_command(message: str, binary: str = "ollama") -> int:
             small_model=small_model,
             transcript=transcript,
         )
-        token = active_agent_events_handler.set(ui)
-        try:
-            response = ui.run(message)
-        finally:
-            active_agent_events_handler.reset(token)
+        response = ui.run(message)
         response_text = str(response.get("LLM_response", ""))
         transcript.write(f"\nresponse: {response_text}")
         print(response_text)
