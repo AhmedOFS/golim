@@ -92,7 +92,6 @@ def init_openrouter(config: Config) -> int:
         return 1
     if not model:
         model = saved_model or "anthropic/claude-3.5-sonnet"
-    config.set(Config.SELECTED_MODEL, model)
     print(f"✓ Model: {model}")
 
     small = config.small_model
@@ -113,8 +112,7 @@ def init_openrouter(config: Config) -> int:
     elif small:
         print(f"✓ Small model: {small}")
 
-    config.set(Config.API_PROVIDER, Config.OPEN_ROUTER)
-    config.remember_model(model, Config.OPEN_ROUTER)
+    config.choose_model(model, Config.OPEN_ROUTER)
     print("\n✓ OpenRouter configured")
     return 0
 
@@ -212,9 +210,7 @@ def init_ollama(config: Config, binary: str) -> int:
         print("\nNo model selected")
         return 1
 
-    config.set(Config.SELECTED_MODEL, selected)
-    config.set(Config.API_PROVIDER, Config.OLLAMA)
-    config.remember_model(selected, Config.OLLAMA)
+    config.choose_model(selected, Config.OLLAMA)
     print(f"✓ Selected model: {selected}")
 
     small_model = select_optional_model(models, config.small_model, "small model")
@@ -259,8 +255,7 @@ def init_openai_compatible(config: Config) -> int:
         return 1
     if not model:
         model = saved_model or "default"
-    config.set(Config.SELECTED_MODEL, model)
-    config.remember_model(model, Config.OPENAI_COMPATIBLE)
+    config.choose_model(model, Config.OPENAI_COMPATIBLE)
     print(f"✓ Model: {model}")
 
     small = config.small_model
@@ -281,7 +276,6 @@ def init_openai_compatible(config: Config) -> int:
     elif small:
         print(f"✓ Small model: {small}")
 
-    config.set(Config.API_PROVIDER, Config.OPENAI_COMPATIBLE)
     print("\n✓ OpenAI-compatible provider configured")
     return 0
 
@@ -289,7 +283,6 @@ def init_openai_compatible(config: Config) -> int:
 def init_command(binary: str = "ollama") -> int:
     """Initialize openterm by detecting Ollama and selecting a model."""
     config = get_config()
-    config.set(Config.API_PROVIDER, Config.OLLAMA)
 
     while True:
         provider = choose_provider(config)

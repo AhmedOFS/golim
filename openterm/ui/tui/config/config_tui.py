@@ -262,10 +262,7 @@ def _state_openrouter_model(config: Config, ui: ConfigPromptHandle, binary: str)
         return "OPENROUTER_MODEL"
     ui.log("OpenRouter models:", STYLE_ACCENT)
     model = ui.search_models("Select model", models, saved_model)
-    config.set(Config.SELECTED_MODEL, model)
-    config.set(Config.API_PROVIDER, Config.OPEN_ROUTER)
-    if hasattr(config, "remember_model"):
-        config.remember_model(model, Config.OPEN_ROUTER)
+    config.choose_model(model, Config.OPEN_ROUTER)
     ui.log(f"✓ Model: {model}", STYLE_SUCCESS)
     return "OPENROUTER_SMALL_MODEL"
 
@@ -282,7 +279,6 @@ def _state_openrouter_small_model(config: Config, ui: ConfigPromptHandle, binary
     config.set(Config.SMALL_MODEL, small_choice)
     ui.log(f"✓ Small model: {small_choice}", STYLE_SUCCESS)
 
-    config.set(Config.API_PROVIDER, Config.OPEN_ROUTER)
     ui.log("✓ OpenRouter configured", STYLE_SUCCESS)
     return _provider_complete_state(ui)
 
@@ -350,10 +346,7 @@ def _state_ollama_model(config: Config, ui: ConfigPromptHandle, binary: str) -> 
         ui.log("No model selected", STYLE_ERROR)
         return "OLLAMA_MODEL"
 
-    config.set(Config.SELECTED_MODEL, selected)
-    config.set(Config.API_PROVIDER, Config.OLLAMA)
-    if hasattr(config, "remember_model"):
-        config.remember_model(selected, Config.OLLAMA)
+    config.choose_model(selected, Config.OLLAMA)
     ui.log(f"✓ Selected model: {selected}", STYLE_SUCCESS)
     return "OLLAMA_SMALL_MODEL"
 
@@ -412,10 +405,7 @@ def _state_openai_compatible_model(config: Config, ui: ConfigPromptHandle, binar
     model = ui.input("Enter model name", default=saved_model or "", placeholder=saved_model or "default")
     if not model:
         model = saved_model or "default"
-    config.set(Config.SELECTED_MODEL, model)
-    config.set(Config.API_PROVIDER, Config.OPENAI_COMPATIBLE)
-    if hasattr(config, "remember_model"):
-        config.remember_model(model, Config.OPENAI_COMPATIBLE)
+    config.choose_model(model, Config.OPENAI_COMPATIBLE)
     ui.log(f"✓ Model: {model}", STYLE_SUCCESS)
     return "OPENAI_COMPATIBLE_SMALL_MODEL"
 
@@ -434,7 +424,6 @@ def _state_openai_compatible_small_model(config: Config, ui: ConfigPromptHandle,
     elif small:
         ui.log(f"✓ Small model: {small}", STYLE_SUCCESS)
 
-    config.set(Config.API_PROVIDER, Config.OPENAI_COMPATIBLE)
     ui.log("✓ OpenAI-compatible provider configured", STYLE_SUCCESS)
     return _provider_complete_state(ui)
 

@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 from io import StringIO
 
-from openterm.config import Config
+from openterm.config import Config, init_config
 from openterm.core.agent import ToolAgent
 
 
@@ -194,7 +194,7 @@ class OrchestrationTests(unittest.TestCase):
              patch.dict(os.environ, {"HOME": tmp}), \
              patch.object(agent, "_execute_tool", return_value={"ok": True, "results": []}), \
              patch("openterm.core.agent.chat_with_model_api", side_effect=fake_chat):
-            Config().set(Config.STREAM_THINKING_TRACES, True)
+            init_config().set(Config.STREAM_THINKING_TRACES, True)
             result = agent._run_action_agent("Do work.", selected_skills=[])
 
         self.assertEqual(result, {"ok": True, "LLM_response": "Done."})
@@ -249,7 +249,7 @@ class OrchestrationTests(unittest.TestCase):
              patch.dict(os.environ, {"HOME": tmp}), \
              patch.object(agent, "_execute_tool", return_value={"ok": True, "results": []}), \
              patch("openterm.core.agent.chat_with_model_api", side_effect=fake_chat):
-            Config().set(Config.STREAM_THINKING_TRACES, True)
+            init_config().set(Config.STREAM_THINKING_TRACES, True)
             result = agent._run_action_agent("Do work.", selected_skills=[])
 
         self.assertEqual(result, {"ok": True, "LLM_response": "Done."})

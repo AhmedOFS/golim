@@ -4,25 +4,42 @@ from __future__ import annotations
 import contextvars
 import json
 from pathlib import Path
+import threading
 
 from openterm.config.app_home import get_app_home
 
 
 _config_context: contextvars.ContextVar[Config | None] = contextvars.ContextVar("_config_context", default=None)
+_shared_config: Config | None = None
+_shared_config_lock = threading.Lock()
 
 
 def get_config() -> Config:
+    """Return this process's shared Config instance.
+
+    Model/provider choice is per-instance session state held on one Config
+    object.  Worker threads (per-request LLM threads, Textual workers) start
+    with an empty contextvar context, so resolution must not construct a
+    fresh Config there: it would re-seed the session pair from models.json
+    on disk and pick up what another running instance wrote.  All threads
+    therefore converge on the same process-wide singleton.
+    """
     config = _config_context.get()
-    app_home = get_app_home()
-    if config is None or getattr(config, "app_home", None) != app_home:
-        config = Config()
-        config.app_home = app_home
-        _config_context.set(config)
-    return config
+    if config is not None:
+        return config
+    with _shared_config_lock:
+        global _shared_config
+        if _shared_config is None:
+            _shared_config = Config()
+        return _shared_config
 
 
 def init_config() -> Config:
-    config = Config()
+    """Construct a fresh shared Config and bind it for this process."""
+    global _shared_config
+    with _shared_config_lock:
+        _shared_config = Config()
+        config = _shared_config
     _config_context.set(config)
     return config
 
@@ -37,12 +54,15 @@ class Config:
     Provider credentials and endpoints live under ``providers``.  All runtime
     settings live under ``attributes``.  This class deliberately does not
     migrate, flatten, or support previous config layouts.
+
+    The active model and provider are not config attributes.  They are
+    per-instance session state seeded from the newest ``models.json`` entry,
+    so each running openterm instance keeps its own choice while shared
+    selection state stays in models.json.
     """
 
     PROVIDERS = "providers"
     ATTRIBUTES = "attributes"
-    API_PROVIDER = "api_provider"
-    SELECTED_MODEL = "current_model"
     SMALL_MODEL = "small_model"
     UNRESTRICTED_MODE = "unrestricted_mode"
     STREAM_THINKING_TRACES = "thinking_traces"
@@ -62,8 +82,6 @@ class Config:
     OPENAI_COMPATIBLE_SERVER_URL = "url"
 
     _ATTRIBUTE_DEFAULTS = {
-        API_PROVIDER: OLLAMA,
-        SELECTED_MODEL: None,
         SMALL_MODEL: None,
         STREAM_THINKING_TRACES: False,
         UNRESTRICTED_MODE: False,
@@ -84,6 +102,11 @@ class Config:
         cfg_dir.mkdir(parents=True, exist_ok=True)
         self.path = cfg_dir / "config.json"
         self.data = self._load()
+        latest = self.latest_model()
+        self._session_model: str | None = None
+        self._session_provider: str | None = None
+        if latest is not None:
+            self._set_session_model(latest["model"], latest["provider"])
 
     @property
     def models_path(self) -> Path:
@@ -111,6 +134,9 @@ class Config:
         }
 
     def reload(self) -> None:
+        # Deliberately keeps the session model/provider: reloading picks up
+        # credential or attribute changes without resetting this instance's
+        # active choice.
         self.data = self._load()
 
     def save(self) -> None:
@@ -148,10 +174,6 @@ class Config:
         self.save()
 
     def is_complete(self) -> bool:
-        attributes = self.data[self.ATTRIBUTES]
-        required = [self.API_PROVIDER, self.SELECTED_MODEL]
-        if any(key not in attributes for key in required):
-            return False
         provider = self.api_provider
         if provider not in self._PROVIDER_DEFAULTS or not self.selected_model:
             return False
@@ -171,6 +193,20 @@ class Config:
             return []
         return [item for item in models if isinstance(item, dict) and isinstance(item.get("model"), str) and isinstance(item.get("provider"), str)]
 
+    def latest_model(self) -> dict[str, str] | None:
+        entries = self.recent_models()
+        return entries[0] if entries else None
+
+    def _set_session_model(self, model: str | None, provider: str | None) -> None:
+        """Bind this instance's session model and provider without touching disk."""
+        self._session_model = model
+        self._session_provider = provider
+
+    def choose_model(self, model: str, provider: str) -> None:
+        """Make ``model`` this session's active choice and record it as the newest models.json entry."""
+        self._set_session_model(model, provider)
+        self.remember_model(model, provider)
+
     def remember_model(self, model: str, provider: str) -> None:
         entries = [item for item in self.recent_models() if item != {"model": model, "provider": provider}]
         entries.insert(0, {"model": model, "provider": provider})
@@ -179,7 +215,7 @@ class Config:
         tmp.replace(self.models_path)
 
     @property
-    def selected_model(self): return self.get(self.SELECTED_MODEL)
+    def selected_model(self): return self._session_model
     @property
     def small_model(self): return self.get(self.SMALL_MODEL)
     @property
@@ -193,7 +229,7 @@ class Config:
     @property
     def dark_mode(self): return bool(self.get(self.DARK_MODE))
     @property
-    def api_provider(self): return self.get(self.API_PROVIDER)
+    def api_provider(self): return self._session_provider
     @property
     def ollama_server_url(self): return self.provider(self.OLLAMA).get(self.OLLAMA_SERVER_URL)
     @property

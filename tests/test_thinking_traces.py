@@ -3,7 +3,7 @@ import unittest
 from importlib.util import find_spec
 from unittest.mock import patch
 
-from openterm.config import Config
+from openterm.config import Config, init_config
 from openterm.core.agent import ToolAgent
 
 
@@ -22,7 +22,7 @@ class FakeUI:
 class ThinkingTraceTests(unittest.TestCase):
     def test_agent_streams_thinking_when_config_enabled(self):
         with tempfile.TemporaryDirectory() as tmp, patch.dict("os.environ", {"HOME": tmp}):
-            Config().set(Config.STREAM_THINKING_TRACES, True)
+            init_config().set(Config.STREAM_THINKING_TRACES, True)
             ui = FakeUI()
             agent = ToolAgent("model", ui=ui)
 
@@ -40,7 +40,7 @@ class ThinkingTraceTests(unittest.TestCase):
 
     def test_agent_does_not_stream_thinking_when_config_disabled(self):
         with tempfile.TemporaryDirectory() as tmp, patch.dict("os.environ", {"HOME": tmp}):
-            Config().set(Config.STREAM_THINKING_TRACES, False)
+            init_config().set(Config.STREAM_THINKING_TRACES, False)
             ui = FakeUI()
             agent = ToolAgent("model", ui=ui)
 
@@ -57,7 +57,7 @@ class ThinkingTraceTests(unittest.TestCase):
 
     def test_agent_surfaces_thinking_returned_in_non_streaming_response(self):
         with tempfile.TemporaryDirectory() as tmp, patch.dict("os.environ", {"HOME": tmp}):
-            Config().set(Config.STREAM_THINKING_TRACES, True)
+            init_config().set(Config.STREAM_THINKING_TRACES, True)
             ui = FakeUI()
             agent = ToolAgent("model", ui=ui)
 

@@ -1,12 +1,13 @@
 import json
 import os
 import tempfile
+import threading
 import unittest
 from importlib.util import find_spec
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from openterm.config import Config, ConfigSchemaError
+from openterm.config import Config, ConfigSchemaError, get_config, init_config
 from openterm.config.utils import (
     get_configured_model_choices,
     get_openai_compatible_models,
@@ -31,25 +32,31 @@ class ConfigSchemaTests(unittest.TestCase):
     def test_schema_separates_provider_values_and_attributes(self):
         config = Config()
         config.set_provider_value(Config.OPEN_ROUTER, Config.PROVIDER_API_KEY, "key")
-        config.set(Config.API_PROVIDER, Config.OPEN_ROUTER)
-        config.set(Config.SELECTED_MODEL, "provider/model")
+        config.choose_model("provider/model", Config.OPEN_ROUTER)
         config.set(Config.SMALL_MODEL, "provider/small")
         config.set(Config.EXA_API_KEY, "exa-key")
 
         saved = json.loads(config.path.read_text())
         self.assertEqual(saved["providers"]["open_router"]["api_key"], "key")
-        self.assertEqual(saved["attributes"]["current_model"], "provider/model")
+        self.assertNotIn("current_model", saved["attributes"])
+        self.assertNotIn("api_provider", saved["attributes"])
         self.assertEqual(saved["attributes"]["small_model"], "provider/small")
         self.assertEqual(saved["attributes"]["exa_api_key"], "exa-key")
         self.assertTrue(config.is_complete())
 
-    def test_missing_schema_attribute_requires_configuration(self):
+    def test_models_json_entry_drives_configuration_status(self):
         path = Path(self.tmp.name) / ".openterm" / "config" / "config.json"
         path.parent.mkdir(parents=True)
         path.write_text(json.dumps({
             "providers": {"ollama": {"ollama_host": "http://localhost:11434"}},
-            "attributes": {"api_provider": "ollama", "current_model": "model"},
+            "attributes": {},
         }))
+
+        self.assertFalse(Config().is_complete())
+
+        models_path = Path(self.tmp.name) / ".openterm" / "data" / "models.json"
+        models_path.parent.mkdir(parents=True, exist_ok=True)
+        models_path.write_text(json.dumps([{"model": "model", "provider": "ollama"}]))
 
         self.assertTrue(Config().is_complete())
 
@@ -105,11 +112,90 @@ class ConfigSchemaTests(unittest.TestCase):
             {"model": "two", "provider": "open_router"},
         ])
 
+    def test_choose_model_sets_session_pair_and_latest_entry(self):
+        config = Config()
+        config.set_provider_value(Config.OPEN_ROUTER, Config.PROVIDER_API_KEY, "key")
+
+        config.choose_model("first/model", Config.OLLAMA)
+        config.choose_model("second/model", Config.OPEN_ROUTER)
+
+        self.assertEqual(config.selected_model, "second/model")
+        self.assertEqual(config.api_provider, Config.OPEN_ROUTER)
+        self.assertEqual(config.latest_model(), {"model": "second/model", "provider": Config.OPEN_ROUTER})
+        stored = json.loads(config.models_path.read_text())
+        self.assertEqual(stored[0], {"model": "second/model", "provider": Config.OPEN_ROUTER})
+        self.assertTrue(config.is_complete())
+
+    def test_fresh_instance_resumes_most_recent_model(self):
+        config = Config()
+        config.set(Config.OLLAMA_SERVER_URL, "http://localhost:11434")
+        config.choose_model("one/model", Config.OLLAMA)
+        config.choose_model("two/model", Config.OPEN_ROUTER)
+
+        resumed = Config()
+
+        self.assertEqual(resumed.selected_model, "two/model")
+        self.assertEqual(resumed.api_provider, Config.OPEN_ROUTER)
+
+    def test_session_pair_survives_config_reload(self):
+        config = Config()
+        config.choose_model("session/model", Config.OLLAMA)
+
+        config.reload()
+
+        self.assertEqual(config.selected_model, "session/model")
+        self.assertEqual(config.api_provider, Config.OLLAMA)
+
+    def test_running_instances_keep_their_own_model_choice(self):
+        first = Config()
+        second = Config()
+        first.choose_model("shared/first", Config.OLLAMA)
+        # Both instances seed from the same models.json initially.
+        second_reloaded = Config()
+        self.assertEqual(second_reloaded.selected_model, "shared/first")
+
+        # The second instance chooses a new model: models.json and its own
+        # session update, while the first instance keeps its session pair.
+        second.choose_model("shared/second", Config.OPEN_ROUTER)
+
+        self.assertEqual(first.selected_model, "shared/first")
+        self.assertEqual(first.api_provider, Config.OLLAMA)
+        self.assertEqual(second.selected_model, "shared/second")
+        self.assertEqual(second.api_provider, Config.OPEN_ROUTER)
+
+    def test_worker_threads_share_the_session_bound_config(self):
+        # Regression: per-request LLM threads run with an empty contextvar
+        # context, so get_config() must not construct a fresh Config there;
+        # it would re-seed the provider/model from models.json on disk and
+        # dispatch another instance's latest choice mid-run.
+        config = init_config()
+        config.set(Config.OLLAMA_SERVER_URL, "http://localhost:11434")
+        config.choose_model("mine/model", Config.OLLAMA)
+
+        # Another running instance writes a newer entry to models.json.
+        other = Config()
+        other.choose_model("other/model", Config.OPEN_ROUTER)
+
+        seen = {}
+
+        def worker():
+            cfg = get_config()
+            seen["obj"] = cfg
+            seen["model"] = cfg.selected_model
+            seen["provider"] = cfg.api_provider
+
+        thread = threading.Thread(target=worker)
+        thread.start()
+        thread.join()
+
+        self.assertIs(seen["obj"], config)
+        self.assertEqual(seen["model"], "mine/model")
+        self.assertEqual(seen["provider"], Config.OLLAMA)
+
     def test_model_picker_keeps_configured_remote_model_when_catalogue_is_unavailable(self):
         config = Config()
         config.set_provider_value(Config.OPEN_ROUTER, Config.PROVIDER_API_KEY, "key")
-        config.set(Config.API_PROVIDER, Config.OPEN_ROUTER)
-        config.set(Config.SELECTED_MODEL, "provider/selected")
+        config.choose_model("provider/selected", Config.OPEN_ROUTER)
 
         with patch("openterm.config.utils.get_models", return_value=[]), \
              patch("openterm.config.utils.get_openrouter_models", return_value=[]), \

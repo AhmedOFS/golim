@@ -542,7 +542,7 @@ class OpentermApp(ConfigUIMixin, App[int]):
         self.query_one(PromptLine).focus_input()
 
     def _run_config_wizard_thread(self, mode: str) -> None:
-        config = Config()
+        config = get_config()
         ui = ConfigPromptHandle(self)
         try:
             self._config_result = run_config(config, self._binary, ui, mode=mode)
@@ -636,9 +636,7 @@ class OpentermApp(ConfigUIMixin, App[int]):
             label = str(shown)
             provider, model = self._menu_choices[label]
             config = get_config()
-            config.set(Config.API_PROVIDER, provider)
-            config.set(Config.SELECTED_MODEL, model)
-            config.remember_model(model, provider)
+            config.choose_model(model, provider)
             self._hide_menu()
             self._reload_config_settings()
             self.append_line(f"Selected {model} ({provider}).", STYLE_SUCCESS)

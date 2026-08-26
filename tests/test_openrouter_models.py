@@ -76,7 +76,7 @@ class OpenRouterModelConfigTests(unittest.TestCase):
 
         self.assertEqual(next_state, "OPENROUTER_SMALL_MODEL")
         self.assertEqual(ui.search_calls, [("Select model", ["provider/first", "saved/model"], "saved/model")])
-        self.assertEqual(config.values[Config.SELECTED_MODEL], "provider/selected")
+        self.assertEqual(config.chosen, [("provider/selected", Config.OPEN_ROUTER)])
 
     def test_openrouter_small_model_defaults_to_normal_model(self):
         from openterm.ui.tui.config import config_tui
@@ -163,6 +163,7 @@ class OpenRouterBasicConfigValidationTests(unittest.TestCase):
                 self.selected_model = None
                 self.small_model = None
                 self.values = {}
+                self.chosen = []
 
             def set_provider_value(self, provider, key, value):
                 self.values[(provider, key)] = value
@@ -173,8 +174,8 @@ class OpenRouterBasicConfigValidationTests(unittest.TestCase):
             def unset(self, key):
                 self.values[key] = None
 
-            def remember_model(self, *args):
-                pass
+            def choose_model(self, model, provider):
+                self.chosen.append((model, provider))
 
         config = FakeConfig()
         answers = iter(["bad-key", "sk-or-good-key", "openai/gpt-4o", ""])
@@ -185,7 +186,7 @@ class OpenRouterBasicConfigValidationTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(fetch.call_count, 2)
         self.assertEqual(config.values[(Config.OPEN_ROUTER, Config.PROVIDER_API_KEY)], "sk-or-good-key")
-        self.assertEqual(config.values[Config.API_PROVIDER], Config.OPEN_ROUTER)
+        self.assertEqual(config.chosen, [("openai/gpt-4o", Config.OPEN_ROUTER)])
 
 
 class _FakeConfig:
@@ -193,12 +194,17 @@ class _FakeConfig:
         self.selected_model = selected_model
         self.openrouter_api_key = "test-key"
         self.values = {}
+        self.chosen = []
 
     def set(self, key, value):
         self.values[key] = value
 
     def set_provider_value(self, provider, key, value):
         self.values[(provider, key)] = value
+
+    def choose_model(self, model, provider):
+        self.chosen.append((model, provider))
+        self.selected_model = model
 
 
 class _FakeUI:
