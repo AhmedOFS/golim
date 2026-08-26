@@ -133,6 +133,57 @@ class BashParsingTests(unittest.TestCase):
         self.assertIn("not approved", result["error"])
         self.assertFalse(whitelist_exists)
 
+    def test_missing_privileged_wrapper_reports_generic_error(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.dict(os.environ, {"OPENTERM_PRIVILEGED_WHITELIST": str(Path(tmp) / "privileged_whitelist")}), \
+             patch.object(bash_utils.os.path, "isfile", return_value=False):
+            result = bash_utils._run_restricted("sudo test -d /")
+
+        self.assertFalse(result["ok"], result)
+        self.assertIn("privileged integration is not installed", result["error"])
+        self.assertNotIn(str(bash_utils.PRIVILEGED_WRAPPER), result["error"])
+
+    def test_sudo_list_invocation_returns_guidance_without_executing(self):
+        calls = []
+
+        def fake_stream_command(argv, cmd_str, results, suppress_stderr):
+            calls.append(cmd_str)
+            return {"command": cmd_str, "stdout": "ok", "stderr": "", "returncode": 0}, None
+            yield
+
+        with patch.object(bash_utils, "_stream_command", fake_stream_command):
+            result = bash_utils._run_restricted("sudo -l")
+
+        self.assertTrue(result["ok"], result)
+        self.assertIn("passwordless", result["results"][0]["stdout"])
+        self.assertNotIn(str(bash_utils.PRIVILEGED_WRAPPER), str(result))
+        self.assertEqual(calls, [])
+
+    def test_unrestricted_sudo_list_invocation_returns_guidance(self):
+        calls = []
+
+        def fake_stream_command(argv, cmd_str, results, suppress_stderr=False):
+            calls.append(cmd_str)
+            return {"command": cmd_str, "stdout": "ok", "stderr": "", "returncode": 0}, None
+            yield
+
+        with patch("openterm.mcp.tools._is_unrestricted_mode", return_value=True), \
+             patch.object(bash_utils, "_stream_command", fake_stream_command):
+            result = bash_utils._run_unrestricted(
+                'whoami; echo "---"; sudo --list 2>&1 | head'
+            )
+
+        self.assertTrue(result["ok"], result)
+        self.assertIn("no need to probe with sudo -l", result["results"][0]["stdout"])
+        self.assertNotIn(str(bash_utils.PRIVILEGED_WRAPPER), str(result))
+        self.assertEqual(calls, [])
+
+    def test_grouped_short_list_flags_are_detected(self):
+        self.assertTrue(bash_utils._sudo_list_invocation("sudo -nl"))
+        self.assertTrue(bash_utils._sudo_list_invocation("printf x && sudo -ln"))
+        self.assertFalse(bash_utils._sudo_list_invocation("sudo -p x ls /"))
+        self.assertFalse(bash_utils._sudo_list_invocation("sudo -n modprobe nvidia"))
+
     def test_sudo_boolean_options_are_stripped_and_routed(self):
         calls = []
 
@@ -263,11 +314,41 @@ class BashParsingTests(unittest.TestCase):
              patch.object(bash_utils, "_stream_command_with_pty", fake_stream_command_with_pty):
             frames = list(bash("sudo apt install spotify", stream=True))
 
+        resolved_apt = bash_utils.shutil.which("apt")
         self.assertEqual(len(calls), 1)
-        self.assertEqual(calls[0][0], ["/bin/bash", "-c", calls[0][1]])
-        self.assertIn(f"{bash_utils.PRIVILEGED_WRAPPER} /usr/bin/apt", calls[0][1])
+        self.assertEqual(
+            calls[0][0],
+            ["/bin/bash", "-c", f"sudo --non-interactive {bash_utils.PRIVILEGED_WRAPPER} {resolved_apt} install spotify"],
+        )
+        self.assertEqual(calls[0][1], "sudo apt install spotify")
         self.assertEqual(frames[0]["line"], "pty output")
         self.assertTrue(frames[-1]["ok"], frames)
+
+    def test_unrestricted_sudo_result_echoes_original_command(self):
+        captured = {}
+
+        def fake_stream_command(argv, cmd_str, results, suppress_stderr=False):
+            captured["argv"] = argv
+            captured["cmd_str"] = cmd_str
+            return {"command": cmd_str, "stdout": "ok", "stderr": "", "returncode": 0}, None
+            yield
+
+        with patch("openterm.mcp.tools._is_unrestricted_mode", return_value=True), \
+             patch.object(bash_utils.get_config(), "is_privileged_binary_allowed", return_value=True), \
+             patch.object(bash_utils, "_stream_command", fake_stream_command):
+            result = bash_utils._run_unrestricted("sudo test -d /")
+
+        resolved_test = bash_utils.shutil.which("test")
+        self.assertTrue(result["ok"], result)
+        self.assertNotIn(str(bash_utils.PRIVILEGED_WRAPPER), str(result))
+        self.assertEqual(captured["cmd_str"], "sudo test -d /")
+        self.assertEqual(captured["argv"], [
+            "/bin/bash",
+            "-c",
+            f"sudo --non-interactive {bash_utils.PRIVILEGED_WRAPPER} {resolved_test} -d /",
+        ])
+        self.assertEqual(result["command"], "sudo test -d /")
+        self.assertEqual(result["results"][0]["command"], "sudo test -d /")
 
     def test_streaming_stdout_still_works(self):
         frames = list(bash("printf hello", stream=True))
