@@ -65,7 +65,7 @@ def finder(
     Fast recursive filename finder.
 
     ```
-    Matching is performed against basenames only.
+    Matching is performed against basenames only and is case-insensitive.
 
     system_inclusive=False:
         - excludes hidden files/directories
@@ -182,11 +182,13 @@ def finder(
     matches = []
 
     def name_matches(name):
-        if fnmatch.fnmatch(name, pattern):
+        lowered = name.lower()
+
+        if fnmatch.fnmatchcase(lowered, pattern.lower()):
             return True
 
         for p in include:
-            if fnmatch.fnmatch(name, p):
+            if fnmatch.fnmatchcase(lowered, p.lower()):
                 return True
 
         return False
@@ -220,56 +222,58 @@ def finder(
         ):
             return
 
+        # On /proc-style pseudo filesystems scandir() can open the directory
+        # but readdir fails with EACCES, raising lazily during iteration.
+        # Materialize inside the guarded region so those errors are caught.
         try:
-            entries = os.scandir(current_dir)
+            entries = list(os.scandir(current_dir))
         except (PermissionError, FileNotFoundError, OSError):
             return
 
-        with entries:
-            for entry in entries:
-                name = entry.name
+        for entry in entries:
+            name = entry.name
 
-                if not system_inclusive and name.startswith("."):
-                    continue
+            if not system_inclusive and name.startswith("."):
+                continue
 
-                rel = os.path.relpath(
-                    entry.path,
-                    base_root,
-                ).replace(os.sep, "/")
+            rel = os.path.relpath(
+                entry.path,
+                base_root,
+            ).replace(os.sep, "/")
 
-                full = entry.path.replace(os.sep, "/")
+            full = entry.path.replace(os.sep, "/")
 
-                if excluded(rel, name):
-                    continue
+            if excluded(rel, name):
+                continue
 
-                try:
-                    is_dir = entry.is_dir(
-                        follow_symlinks=False
-                    )
-                except OSError:
-                    continue
+            try:
+                is_dir = entry.is_dir(
+                    follow_symlinks=False
+                )
+            except OSError:
+                continue
 
-                if is_dir:
-                    if (
-                        type_filter != "file"
-                        and name_matches(name)
-                    ):
-                        matches.append(full)
-
-                    walk(
-                        base_root,
-                        entry.path,
-                        depth + 1,
-                    )
-
-                else:
-                    if type_filter == "dir":
-                        continue
-
-                    if not name_matches(name):
-                        continue
-
+            if is_dir:
+                if (
+                    type_filter != "file"
+                    and name_matches(name)
+                ):
                     matches.append(full)
+
+                walk(
+                    base_root,
+                    entry.path,
+                    depth + 1,
+                )
+
+            else:
+                if type_filter == "dir":
+                    continue
+
+                if not name_matches(name):
+                    continue
+
+                matches.append(full)
 
     for search_root in search_roots:
         walk(

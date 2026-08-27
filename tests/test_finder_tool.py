@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from openterm.mcp.tools import finder
 
@@ -20,6 +21,24 @@ class FinderToolTests(unittest.TestCase):
                 str(Path(tmp, "Resume.pdf")).replace("\\", "/"),
                 str(Path(tmp, "notes.txt")).replace("\\", "/"),
             ],
+        )
+
+    def test_matching_is_case_insensitive(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "Resume.PDF").write_text("resume")
+            Path(tmp, "Inside").mkdir()
+
+            result = finder(tmp, pattern="resume.pdf")
+            result_dirs = finder(tmp, pattern="INSIDE")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(
+            result["matches"],
+            [str(Path(tmp, "Resume.PDF")).replace("\\", "/")],
+        )
+        self.assertEqual(
+            result_dirs["matches"],
+            [str(Path(tmp, "Inside")).replace("\\", "/")],
         )
 
     def test_empty_pattern_is_rejected(self):
@@ -76,6 +95,48 @@ class FinderToolTests(unittest.TestCase):
 
         self.assertFalse(result["ok"])
         self.assertIn("include must be", result["error"])
+
+    def test_swallows_permission_error_raised_during_scandir_iteration(self):
+        # /proc-style pseudo filesystems: scandir() opens the directory, but
+        # the kernel fails readdir with EACCES, so PermissionError is raised
+        # lazily on the first iteration step instead of at scandir() call time.
+        import os as real_os
+
+        original_scandir = real_os.scandir
+
+        class DeferredPermissionDir:
+            def __init__(self, path):
+                self._path = path
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                raise PermissionError(13, "Permission denied", self._path)
+
+        def fake_scandir(path):
+            if str(path).endswith("protected"):
+                return DeferredPermissionDir(path)
+            return original_scandir(path)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "protected").mkdir()
+            Path(tmp, "Resume.pdf").write_text("resume")
+
+            with mock.patch("os.scandir", side_effect=fake_scandir):
+                result = finder(tmp, pattern="*.pdf")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(
+            result["matches"],
+            [str(Path(tmp, "Resume.pdf")).replace("\\", "/")],
+        )
 
 
 if __name__ == "__main__":
