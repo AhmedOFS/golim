@@ -9,11 +9,12 @@ import threading
 import time
 
 from openterm.core.agent_events import AgentEvents
+from openterm.core.permissions import Permissions
 from openterm.core.run_result import RunResult, make_run_result
 from openterm.config import Config, get_config
 from openterm.api.chat_api import chat_with_model_api
 from openterm.logger import log_diagnostic_section
-from openterm.core.utils import _CONTENT_MARKER, _DIRECT_THINKING_KEYS, _FINAL_SUMMARY_PROMPT, _PYTHON_DENIED_RESULT, _REASONING_DETAIL_KEYS, _THINKING_KEYS, _TRACE_MARKER, _TRACE_ONLY_MARKER, _clip_label, _clip_text, _detect_python_in_bash, _indent, _run_async
+from openterm.core.utils import _CONTENT_MARKER, _DIRECT_THINKING_KEYS, _FINAL_SUMMARY_PROMPT, _REASONING_DETAIL_KEYS, _THINKING_KEYS, _TRACE_MARKER, _TRACE_ONLY_MARKER, _clip_label, _clip_text, _detect_python_in_bash, _indent, _run_async
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,7 @@ class ToolAgent:
         tools=None,
         should_interrupt=None,
         should_hard_cancel=None,
+        permissions: Permissions | None = None,
     ):
         self.model = model
         self.small_model = small_model
@@ -41,6 +43,7 @@ class ToolAgent:
         if ui is None:
             raise ValueError("ToolAgent requires an AgentEvents ui handler.")
         self.ui = ui
+        self.permissions = permissions if permissions is not None else Permissions(ui)
         self._last_thinking_trace = ""
         self.messages = []
         self.execution_history = []
@@ -275,9 +278,6 @@ class ToolAgent:
             return "".join(parts)
         return ""
 
-    def _python_denied_result(self):
-        return dict(_PYTHON_DENIED_RESULT)
-
     def _tool_cancelled_result(self):
         """Consistent cancellation result for a tool stopped by the model's
         long-tool terminate decision.
@@ -289,49 +289,25 @@ class ToolAgent:
         """
         return {"ok": False, "error": "Tool execution cancelled"}
 
-    def _prepare_tool_call(self, tool_name, args, is_shell, is_exec, is_write):
+    def _prepare_tool_call(self, tool_name, args, is_shell=False):
+        display_args = self._shell_display_args(args) if is_shell else args
+        self.ui.tool_call(tool_name, display_args)
         if is_shell:
-            return self._prepare_shell_tool_call(tool_name, args)
+            label = _clip_label(display_args.get("command", tool_name), 120)
+        else:
+            label = tool_name
+        return label, self.permissions.is_approved(tool_name, args)
 
-        self.ui.tool_call(tool_name, args)
-        if is_exec and not get_config().unrestricted_mode:
-            code = args.get("code") or args.get("script") or args.get("source") or ""
-            if not self.ui.request_python_approval(code):
-                tool_result = self._python_denied_result()
-                self.ui.tool_output(result=tool_result)
-                return tool_name, tool_result
-        if is_write and not get_config().unrestricted_mode:
-            path = args.get("path", "")
-            content = args.get("content", "")
-            mode = args.get("mode", "overwrite")
-            if not self.ui.request_write_approval(path, content, mode):
-                tool_result = {
-                    "ok": False,
-                    "error": f"File write not approved by user: {path}",
-                }
-                self.ui.tool_output(result=tool_result)
-                return tool_name, tool_result
-        return tool_name, None
-
-    def _prepare_shell_tool_call(self, tool_name, args):
-        command = args.get("command", "")
+    @staticmethod
+    def _shell_display_args(args):
+        """Mask embedded Python before the command is shown to the user."""
+        command = str(args.get("command", ""))
         py_code = _detect_python_in_bash(command)
         if py_code is None or py_code == command:
-            self.ui.tool_call(tool_name, args)
-            return _clip_label(command, 120), None
-
-        display_args = dict(args)
-        display_args["command"] = command.replace(py_code, "<python>")
-        self.ui.tool_call(tool_name, display_args)
-
-        if get_config().unrestricted_mode:
-            self.ui.python_code(py_code)
-        elif not self.ui.request_python_approval(py_code):
-            tool_result = self._python_denied_result()
-            self.ui.tool_output(result=tool_result)
-            return _clip_label(display_args.get("command", tool_name), 120), tool_result
-
-        return _clip_label(display_args.get("command", tool_name), 120), None
+            return args
+        masked = dict(args)
+        masked["command"] = command.replace(py_code, "<python>")
+        return masked
 
     def _call_tool_with_spinner(self, label, call_once, args):
         self.ui.status(label)
@@ -450,18 +426,17 @@ class ToolAgent:
             raise value
 
     def _wire_privileged_approval(self):
-        """Route server approval requests to the user through the current UI.
+        """Route server approval requests to the user through Permissions.
 
         The approval exchange happens inside the MCP tool call, out-of-band
         from the model: the server holds the bash call, the client prompts
-        the user, and the model only ever receives the final tool result.
+        the user via ``Permissions.approve_binary``, and the model only ever
+        receives the final tool result. Rewired per call because the MCP
+        client can be recreated between runs.
         """
         client = self.mcp_client
         if client is not None and hasattr(client, "on_approval_request"):
-            client.on_approval_request = self._ui_binary_approval
-
-    def _ui_binary_approval(self, approval):
-        return self.ui.request_binary_approval(approval.get("binary", ""))
+            client.on_approval_request = self.permissions.approve_binary
 
     def _tool_status(self, tool_result):
         if (
@@ -473,8 +448,6 @@ class ToolAgent:
 
     def _execute_tool(self, tool_name, args):
         is_shell = tool_name == "bash"
-        is_exec = tool_name in ("exec_python", "exec")
-        is_write = tool_name == "write_file"
         shell_stream_seen = False
         streamed_output = []
         log_diagnostic_section(f"tool_call {tool_name}", args or {})
@@ -500,7 +473,7 @@ class ToolAgent:
             )
 
         self._wire_privileged_approval()
-        label, tool_result = self._prepare_tool_call(tool_name, args, is_shell, is_exec, is_write)
+        label, tool_result = self._prepare_tool_call(tool_name, args, is_shell)
         if tool_result is not None:
             log_diagnostic_section(f"tool_result {tool_name}", tool_result)
             self._log_tool_result(tool_name, args, tool_result)

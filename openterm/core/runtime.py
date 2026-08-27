@@ -14,6 +14,7 @@ from openterm.core.agent_events import AgentEvents
 from openterm.config import Config, get_config
 from openterm.api.chat_api import chat_with_model_api
 from openterm.core.mcp_client import FastMCPClient
+from openterm.core.permissions import Permissions
 from openterm.core.run_result import RunResult, make_run_result
 from openterm.core.utils import get_socket_path
 from openterm.core.skill_loader import SkillsLoader
@@ -51,6 +52,7 @@ class Runtime:
         self._hard_cancel_requested = threading.Event()
         self._system_prompt: str | None = None
         self.ui: AgentEvents | None = None
+        self.permissions: Permissions | None = None
 
     @staticmethod
     def is_followup_message(user_message: str) -> bool:
@@ -97,6 +99,9 @@ class Runtime:
     def bind_ui(self, ui: AgentEvents) -> None:
         """Bind the handler used by the next run; rebind per run."""
         self.ui = ui
+        # One Permissions instance per bound handler so approval prompts
+        # always land on the current run's UI implementation.
+        self.permissions = Permissions(ui)
 
     def _active_ui(self) -> AgentEvents:
         if self.ui is None:
@@ -106,6 +111,10 @@ class Runtime:
     def create_mcp_client(self, socket_path=None):
         """Create the transport client without performing tool discovery."""
         self.mcp_client = FastMCPClient(socket_path or get_socket_path())
+        if self.permissions is not None:
+            # Out-of-band privileged approvals resolve through Permissions,
+            # which asks the currently bound UI handler.
+            self.mcp_client.on_approval_request = self.permissions.approve_binary
         return self.mcp_client
 
     @staticmethod
@@ -287,6 +296,7 @@ class Runtime:
             tools=tools,
             should_interrupt=self.should_interrupt,
             should_hard_cancel=self.should_hard_cancel,
+            permissions=self.permissions,
         )
         prefix = "clarification" if clarification else "followup"
         self.result = agent.run(
@@ -324,6 +334,7 @@ class Runtime:
             tools=tools,
             should_interrupt=self.should_interrupt,
             should_hard_cancel=self.should_hard_cancel,
+            permissions=self.permissions,
         )
         self.result = agent.run(
             user_message,
