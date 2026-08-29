@@ -341,6 +341,7 @@ class OpentermApp(ConfigUIMixin, App[int]):
         self._busy = False
         self._active_run_id = 0
         self._approval_request: ApprovalRequest | None = None
+        self._auth_request = None
         self._active_cancel_event: threading.Event | None = None
         self._chat_worker = None
         self._chat_thread_id: int | None = None
@@ -431,6 +432,12 @@ class OpentermApp(ConfigUIMixin, App[int]):
             self._handle_menu_input_submitted(event)
             return
         text = event.value.strip()
+        if self._auth_request is not None:
+            # The password is consumed as an answer and must never be
+            # echoed into the transcript or added to prompt history.
+            self.finish_sudo_password_prompt(event.value)
+            event.input.value = ""
+            return
         if self._approval_request is not None:
             self.finish_approval_prompt(text)
             event.input.value = ""
@@ -614,6 +621,7 @@ class OpentermApp(ConfigUIMixin, App[int]):
         self.query_one("#menu_panel", MenuPanel).show_options("Settings", [
             f"Thinking traces: {'on' if config.stream_thinking_traces else 'off'}",
             f"Unrestricted mode: {'on' if config.unrestricted_mode else 'off'}",
+            f"Proactive sudo auth: {'on' if config.proactive_auth else 'off'}",
             f"Max iteration limit: {config.max_iteration_limit}",
             f"Dark mode: {'on' if config.dark_mode else 'off'}",
             "Back",
@@ -648,6 +656,8 @@ class OpentermApp(ConfigUIMixin, App[int]):
             elif index == 1:
                 config.set(Config.UNRESTRICTED_MODE, not config.unrestricted_mode)
             elif index == 2:
+                config.set(Config.PROACTIVE_AUTH, not config.proactive_auth)
+            elif index == 3:
                 self._menu_page = "max_iterations"
                 panel = self.query_one("#menu_panel", MenuPanel)
                 panel.show_options("Settings", [])
@@ -657,7 +667,7 @@ class OpentermApp(ConfigUIMixin, App[int]):
                 input_widget.placeholder = "Positive integer"
                 input_widget.focus()
                 return
-            elif index == 3:
+            elif index == 4:
                 config.set(Config.DARK_MODE, not config.dark_mode)
                 self._apply_dark_mode(config.dark_mode)
             else:
@@ -826,6 +836,27 @@ class OpentermApp(ConfigUIMixin, App[int]):
         self.append_line(f"Allow sudo access for {request.binary}? [Y/N]", STYLE_WARNING)
         self.query_one(PromptLine).start_approval()
 
+    # -- Sudo session authentication ---------------------------------------
+    def start_sudo_password_prompt(self, request) -> None:
+        if not self.is_run_active(request.run_id):
+            request.password = None
+            request.event.set()
+            return
+        self._auth_request = request
+        self.set_status("")
+        self.append_line("Privileged commands require sudo authentication.", STYLE_WARNING)
+        self.append_line("Enter your sudo password once for this session:", STYLE_WARNING)
+        self.query_one(PromptLine).start_password()
+
+    def finish_sudo_password_prompt(self, text: str) -> None:
+        request = self._auth_request
+        if request is None:
+            return
+        request.password = text or None
+        self._auth_request = None
+        self.query_one(PromptLine).finish_approval(self._busy, self._has_completed_query)
+        request.event.set()
+
     # -- File write approval -------------------------------------------------
     def start_write_approval_prompt(self, request: ApprovalRequest) -> None:
         if not self.is_run_active(request.run_id):
@@ -904,6 +935,10 @@ class OpentermApp(ConfigUIMixin, App[int]):
                 self._approval_request.answer = False
                 self._approval_request.event.set()
                 self._approval_request = None
+            if self._auth_request is not None:
+                self._auth_request.password = None
+                self._auth_request.event.set()
+                self._auth_request = None
             self.set_status("Interrupting. Press Esc again to force.")
         else:
             self._cancel_active_run()

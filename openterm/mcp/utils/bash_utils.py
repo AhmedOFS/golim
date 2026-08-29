@@ -1,7 +1,6 @@
 """Bash command execution for openterm — restricted and unrestricted modes."""
 
 import errno
-import glob
 import os
 import pty
 import re
@@ -10,7 +9,6 @@ import shlex
 import signal
 import shutil
 import subprocess
-from dataclasses import dataclass
 
 from ..config import get_config
 from .cancellation import is_tool_cancelled
@@ -19,97 +17,13 @@ from ..vars import (
     _BLOCKED_BINARIES,
     _COMMAND_SEPARATORS,
     _PTY_BINARIES,
-    FORBIDDEN_CHARS,
     OUTPUT_LINE_LIMIT,
     PRIVILEGED_WRAPPER,
-    READ_FILE_PAGE_SIZE,
+    TOKEN_ENV_VAR,
 )
 
 
 SUBPROCESS_WAIT_TIMEOUT_SECONDS = 1.0
-
-
-@dataclass(frozen=True)
-class ResolvedCommand:
-    argv: list
-    suppress_stderr: bool = False
-
-
-@dataclass(frozen=True)
-class ParsedCommandPart:
-    argv_list: list
-    suppress_stderr: bool = False
-
-
-# ---------------------------------------------------------------------------
-#  Token-level helpers
-# ---------------------------------------------------------------------------
-
-def _is_safe_arg(arg: str) -> bool:
-    return not any(c in FORBIDDEN_CHARS for c in arg)
-
-
-def _expand_supported_vars(token: str) -> str:
-    home = os.path.expanduser("~")
-    token = token.replace("${HOME}", home).replace("$HOME", home)
-    return os.path.expanduser(token)
-
-
-def _expand_globs(args: list[str]) -> list[str]:
-    expanded = []
-    for arg in args:
-        if any(c in arg for c in ("*", "?", "[")):
-            matches = sorted(glob.glob(arg))
-            expanded.extend(matches if matches else [arg])
-        else:
-            expanded.append(arg)
-    return expanded
-
-
-def _strip_supported_redirection(tokens: list[str]) -> tuple[list[str], bool]:
-    """Remove the only supported redirection form (`2>/dev/null`)."""
-    cleaned, suppress, i = [], False, 0
-    while i < len(tokens):
-        if tokens[i] == "2>/dev/null":
-            suppress = True
-        elif (
-            tokens[i] == "2>"
-            and i + 1 < len(tokens)
-            and tokens[i + 1] == "/dev/null"
-        ):
-            suppress = True
-            i += 1
-        else:
-            cleaned.append(tokens[i])
-        i += 1
-    return cleaned, suppress
-
-
-def _split_on_separator(command: str, sep: str) -> list[str]:
-    """Split command on sep, respecting double-quoted strings."""
-    parts, cur, in_dq, i = [], [], False, 0
-    while i < len(command):
-        ch = command[i]
-        if ch == '"':
-            in_dq = not in_dq
-            cur.append(ch)
-        elif not in_dq and command[i:i + len(sep)] == sep:
-            parts.append("".join(cur).strip())
-            cur = []
-            i += len(sep) - 1
-        else:
-            cur.append(ch)
-        i += 1
-    parts.append("".join(cur).strip())
-    return parts
-
-
-def _split_pipes(command: str) -> list[str]:
-    return _split_on_separator(command, "|")
-
-
-def _split_chained_commands(command: str) -> list[str]:
-    return _split_on_separator(command, "&&")
 
 
 # ---------------------------------------------------------------------------
@@ -182,15 +96,11 @@ def _check_blocked_binary(resolved: str, results_ref: list) -> dict | None:
     return None
 
 
-# ---------------------------------------------------------------------------
-#  Restricted command parsing
-# ---------------------------------------------------------------------------
-
 # sudo options that cannot affect execution through the privileged wrapper and
 # are dropped instead of being treated as the target binary.
 _SUDO_BOOLEAN_OPTIONS = frozenset({
-    "-n", "--non-interactive",  # wrapper call is always non-interactive
-    "-k", "-K",                 # timestamp caching is irrelevant (NOPASSWD)
+    "-n", "--non-interactive",  # the wrapper call is never interactive
+    "-k", "-K",                 # dropped; the token is supplied per call
     "-E", "--preserve-env",     # environment preservation is not forwarded
 })
 # sudo options that change the execution target; dropping them would silently
@@ -199,7 +109,13 @@ _SUDO_TARGET_OPTIONS = frozenset({"-u", "--user", "-g", "--group"})
 # Short letters that are harmless alongside a privilege-listing invocation.
 _SUDO_LIST_SHORT_LETTERS = frozenset("nkKEl")
 _SUDO_LIST_INVOCATION_RE = re.compile(
-    r"(?<![^\s])sudo(?P<options>(?:\s+(?:--|-{1,2}[A-Za-z][A-Za-z=-]*))*)(?=\s|$)"
+    r"(?:^\s*|(?<=[;&|()\n])\s*)sudo"
+    r"(?P<options>(?:\s+(?:--|-{1,2}[A-Za-z][A-Za-z=-]*))*)(?=\s|$)"
+)
+_SUDO_INVOCATION_RE = re.compile(
+    r"(?P<prefix>^\s*|(?<=[;&|()\n])\s*)sudo"
+    r"(?P<options>(?:\s+(?:--|-{1,2}[A-Za-z][A-Za-z=-]*))*)"
+    r"\s+(?P<binary>\S+)"
 )
 
 
@@ -237,9 +153,9 @@ def _sudo_list_invocation(command: str) -> bool:
 
 def _privileged_list_notice_payload(command: str) -> dict:
     message = (
-        "sudo is allowed passwordless in this environment. "
-        "Privileged commands are routed automatically and "
-        " authorized by the user; there is no need to probe with sudo -l."
+        "Privileged commands are routed through the openterm wrapper; "
+        "the user authenticates sudo once per session and approves each "
+        "command. There is no need to probe with sudo -l."
     )
     return {
         "ok": True,
@@ -253,188 +169,6 @@ def _privileged_list_notice_payload(command: str) -> dict:
             }
         ],
     }
-
-
-def _partition_sudo_options(tokens: list[str]) -> tuple[list[str], dict | None]:
-    """Strip leading `sudo` options from a token list.
-
-    Boolean options that cannot affect wrapper execution are dropped;
-    target-selection options (-u/-g) and unknown options produce an error,
-    since silently dropping them would change what the command does.
-    """
-    for index, token in enumerate(tokens):
-        if token == "--":
-            return tokens[index + 1:], None
-        if not token.startswith("-"):
-            return tokens[index:], None
-        base = token.split("=", 1)[0]
-        if base in _SUDO_TARGET_OPTIONS:
-            return None, {
-                "ok": False,
-                "error": f"sudo {base} is not supported through the privileged wrapper",
-            }
-        if base in _SUDO_BOOLEAN_OPTIONS:
-            continue
-        return None, {"ok": False, "error": f"Unsupported sudo option: {token}"}
-    return [], None
-
-
-def _build_cmd(tokens: list[str], results_ref: list, privileged_approved: bool = False):
-    privileged = tokens[0] == "sudo"
-    if privileged:
-        tokens = tokens[1:]
-        stripped, err = _partition_sudo_options(tokens)
-        if err:
-            return None, {**err, "results": results_ref}
-        tokens = stripped
-    if not tokens:
-        return None, {"ok": False, "error": "Empty command after stripping sudo", "results": results_ref}
-
-    tokens = [_expand_supported_vars(t) for t in tokens]
-    binary, args = tokens[0], _expand_globs(tokens[1:])
-
-    for arg in args:
-        if not _is_safe_arg(arg):
-            return None, {"ok": False, "error": f"Forbidden character in argument: {arg!r}", "results": results_ref}
-
-    if not (resolved := shutil.which(binary)):
-        return None, {"ok": False, "error": f"Command not found: {binary}", "results": results_ref}
-
-    if err := _check_blocked_binary(resolved, results_ref):
-        return None, err
-
-    if privileged:
-        if not os.path.isfile(PRIVILEGED_WRAPPER):
-            return None, {
-                "ok": False,
-                "error": (
-                    "Privileged execution is unavailable because the "
-                    "privileged integration is not installed on this system."
-                ),
-                "results": results_ref,
-            }
-        if not privileged_approved:
-            return None, {
-                "ok": False,
-                "error": f"Privileged command requires approval: {resolved}",
-                "approval_required": True,
-                "approval_kind": "privileged_whitelist",
-                "binary": resolved,
-                "results": results_ref,
-            }
-        return ["sudo", "--non-interactive", PRIVILEGED_WRAPPER, resolved] + args, None
-
-    return [resolved] + args, None
-
-
-def _build_pipe_procs(pipe_segments: list[str], results_ref: list, privileged_approved: bool = False):
-    commands = []
-    for seg in pipe_segments:
-        seg = seg.strip()
-        if not seg:
-            return [], {"ok": False, "error": "Empty pipe segment", "results": results_ref}
-        try:
-            tokens = shlex.split(seg)
-        except ValueError as e:
-            return [], {"ok": False, "error": f"Command parse error in pipe segment {seg!r}: {e}", "results": results_ref}
-        if not tokens:
-            return [], {"ok": False, "error": "Empty pipe segment after parsing", "results": results_ref}
-        tokens, suppress_stderr = _strip_supported_redirection(tokens)
-        cmd, err = _build_cmd(tokens, results_ref, privileged_approved=privileged_approved)
-        if err:
-            return [], err
-        commands.append(ResolvedCommand(cmd, suppress_stderr=suppress_stderr))
-    return commands, None
-
-
-def _parse_command_part(cmd_str: str, results_ref: list, privileged_approved: bool = False):
-    pipe_segments = _split_pipes(cmd_str)
-    if len(pipe_segments) > 1:
-        commands, err = _build_pipe_procs(pipe_segments, results_ref, privileged_approved=privileged_approved)
-        if err:
-            return None, err
-        return ParsedCommandPart(argv_list=commands), None
-
-    try:
-        tokens = shlex.split(cmd_str)
-    except ValueError as e:
-        return None, {"ok": False, "error": f"Command parse error: {e}", "results": results_ref}
-
-    if not tokens:
-        return ParsedCommandPart(argv_list=[]), None
-
-    tokens, suppress_stderr = _strip_supported_redirection(tokens)
-    if not tokens:
-        return ParsedCommandPart(argv_list=[], suppress_stderr=suppress_stderr), None
-
-    cmd, err = _build_cmd(tokens, results_ref, privileged_approved=privileged_approved)
-    if err:
-        return None, err
-    return ParsedCommandPart(argv_list=[ResolvedCommand(cmd)], suppress_stderr=suppress_stderr), None
-
-
-# ---------------------------------------------------------------------------
-#  Pipeline execution (synchronous, non-streaming)
-# ---------------------------------------------------------------------------
-
-def _run_pipeline(argv_list: list, cmd_str: str) -> dict:
-    procs = []
-    try:
-        for command in argv_list:
-            stdin = procs[-1].stdout if procs else None
-            proc = subprocess.Popen(
-                command.argv,
-                stdin=stdin,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL if command.suppress_stderr else subprocess.PIPE,
-                text=True,
-                start_new_session=True,
-            )
-            if procs:
-                procs[-1].stdout.close()
-            procs.append(proc)
-
-        last = procs[-1]
-        while True:
-            if is_tool_cancelled():
-                for p in procs:
-                    _terminate_process_group(p)
-                return {"ok": False, "error": "Tool execution cancelled"}
-            try:
-                stdout_data, stderr_data = last.communicate(timeout=0.1)
-                break
-            except subprocess.TimeoutExpired:
-                continue
-
-        for p in procs[:-1]:
-            while p.poll() is None:
-                if is_tool_cancelled():
-                    for proc in procs:
-                        _terminate_process_group(proc)
-                    return {"ok": False, "error": "Tool execution cancelled"}
-                try:
-                    p.wait(timeout=0.1)
-                except subprocess.TimeoutExpired:
-                    continue
-            if p.stderr:
-                p.stderr.close()
-        for stream in (last.stdout, last.stderr):
-            if stream:
-                stream.close()
-
-        return {"command": cmd_str, "stdout": stdout_data, "stderr": stderr_data, "returncode": last.returncode}
-    except Exception as e:
-        for p in procs:
-            try:
-                p.kill()
-            except Exception:
-                pass
-        for p in procs:
-            try:
-                p.wait()
-            except Exception:
-                pass
-        return {"ok": False, "error": str(e)}
 
 
 # ---------------------------------------------------------------------------
@@ -499,11 +233,17 @@ def _finalize_bash_payload(payload: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 def _uses_privileged_wrapper(argv: list[str]) -> bool:
-    return len(argv) >= 4 and argv[0] == "sudo" and argv[2] == PRIVILEGED_WRAPPER
+    return len(argv) >= 3 and argv[0] == "sudo" and PRIVILEGED_WRAPPER in argv
 
 
 def _requires_pty_streaming(argv: list[str]) -> bool:
-    return _uses_privileged_wrapper(argv) and os.path.basename(argv[3]) in _PTY_BINARIES
+    if not _uses_privileged_wrapper(argv):
+        return False
+    wrapper_index = argv.index(PRIVILEGED_WRAPPER)
+    return (
+        wrapper_index + 1 < len(argv)
+        and os.path.basename(argv[wrapper_index + 1]) in _PTY_BINARIES
+    )
 
 
 def _command_requires_pty_streaming(command: str) -> bool:
@@ -564,7 +304,7 @@ def _terminate_process_group(proc):
         pass
 
 
-def _stream_subprocess(argv, cmd_str, results, suppress_stderr, use_pty):
+def _stream_subprocess(argv, cmd_str, results, suppress_stderr, use_pty, session_token=None):
     output_lines = {"stdout": [], "stderr": []}
     pending = {"stdout": "", "stderr": ""}
     fd_to_stream = {}  # fd -> stream_name
@@ -572,6 +312,15 @@ def _stream_subprocess(argv, cmd_str, results, suppress_stderr, use_pty):
     proc = None
     slave_fd = None
     completed = False
+
+    # The session token is forwarded to privileged wrapper invocations via
+    # the environment (sudoers env_keep); nothing travels through stdin,
+    # so pipelines keep working unmodified.
+    env = (
+        {**os.environ, TOKEN_ENV_VAR: session_token}
+        if session_token is not None
+        else None
+    )
 
     try:
         if use_pty:
@@ -583,6 +332,7 @@ def _stream_subprocess(argv, cmd_str, results, suppress_stderr, use_pty):
                 stderr=slave_fd if not suppress_stderr else subprocess.DEVNULL,
                 close_fds=True,
                 start_new_session=True,
+                env=env,
             )
             os.close(slave_fd)
             slave_fd = None
@@ -596,6 +346,7 @@ def _stream_subprocess(argv, cmd_str, results, suppress_stderr, use_pty):
                 bufsize=0,
                 close_fds=True,
                 start_new_session=True,
+                env=env,
             )
             fd_to_stream = {proc.stdout.fileno(): "stdout"}
             if not suppress_stderr:
@@ -623,6 +374,13 @@ def _stream_subprocess(argv, cmd_str, results, suppress_stderr, use_pty):
             )
             for fd in exceptional:
                 fd_to_stream.pop(fd, None)
+
+            if not readable and not exceptional and proc.poll() is not None:
+                # The child exited and its output is fully drained; close
+                # the master so the loop can finish without waiting for an
+                # EIO that may never arrive.
+                fd_to_stream.clear()
+                break
 
             for fd in readable:
                 stream_name = fd_to_stream.get(fd)
@@ -680,37 +438,28 @@ def _stream_subprocess(argv, cmd_str, results, suppress_stderr, use_pty):
     }, None
 
 
-def _stream_command_with_pty(argv, cmd_str, results, suppress_stderr=False):
+def _stream_command_with_pty(argv, cmd_str, results, suppress_stderr=False, session_token=None):
     """Stream a single command through a pseudo-terminal (for apt/snap/etc.
     that detect a tty before prompting)."""
     return _stream_subprocess(
         argv, cmd_str, results, suppress_stderr, use_pty=True,
+        session_token=session_token,
     )
 
 
-def _stream_command(argv, cmd_str, results, suppress_stderr):
+def _stream_command(argv, cmd_str, results, suppress_stderr, session_token=None):
     """Stream a single command through regular pipes."""
     return _stream_subprocess(
         argv, cmd_str, results, suppress_stderr, use_pty=False,
+        session_token=session_token,
     )
-
-
-def _restricted_failure_payload(cmd_str, result_entry, results):
-    if result_entry.get("ok") is False:
-        return {"ok": False, "error": result_entry["error"], "results": results}
-    if result_entry["returncode"] != 0 and not result_entry["stdout"].strip():
-        error_msg = f"Command failed: {cmd_str}"
-        if stderr := result_entry.get("stderr", "").strip():
-            error_msg += f"\n{stderr}"
-        return {"ok": False, "error": error_msg, "results": results}
-    return None
 
 
 def _request_privileged_approval(approve_privileged, err, cmd_str):
     """Ask the client to approve a privileged binary and return the decision.
 
     The server updates the whitelist before reporting a positive decision, so
-    callers simply re-parse the command afterwards. Without an approval
+    callers simply re-prepare the command afterwards. Without an approval
     channel the request is denied.
     """
     if approve_privileged is None:
@@ -718,6 +467,7 @@ def _request_privileged_approval(approve_privileged, err, cmd_str):
     return bool(approve_privileged({
         "approval_kind": err.get("approval_kind", "privileged_whitelist"),
         "binary": err.get("binary", ""),
+        "binaries": err.get("binaries", []),
         "command": cmd_str,
     }))
 
@@ -730,86 +480,33 @@ def _privileged_denied_payload(err, results):
     }
 
 
-# ---------------------------------------------------------------------------
-#  Restricted execution (single generator drives both streaming and run modes)
-# ---------------------------------------------------------------------------
+def _resolve_session_token(session_token):
+    """Return the session token from the injected provider.
 
-def _exec_restricted(command, approve_privileged=None):
-    """Generator: yields stream frames then a final result frame."""
-    results = []
-
-    if _sudo_list_invocation(command):
-        yield {"type": "result", **_finalize_bash_payload(_privileged_list_notice_payload(command))}
-        return
-
-    commands = _split_chained_commands(command)
-    for command_index, cmd_str in enumerate(commands):
-        parsed, err = _parse_command_part(cmd_str, results)
-        if err and err.get("approval_required"):
-            if not _request_privileged_approval(approve_privileged, err, cmd_str):
-                yield {"type": "result", **_privileged_denied_payload(err, results)}
-                return
-            parsed, err = _parse_command_part(cmd_str, results, privileged_approved=True)
-        if err:
-            if err.get("approval_required"):
-                yield {
-                    "type": "result",
-                    "ok": False,
-                    "error": f"Privileged command failed after approval: {err.get('binary', '')}",
-                    "results": results,
-                }
-            else:
-                yield {"type": "result", **err}
-            return
-
-        if not parsed.argv_list:
-            continue
-
-        if len(parsed.argv_list) == 1:
-            rc = parsed.argv_list[0]
-            suppress = parsed.suppress_stderr or rc.suppress_stderr
-            streamer = _stream_command_with_pty if _requires_pty_streaming(rc.argv) else _stream_command
-            entry, err = yield from streamer(
-                rc.argv, cmd_str, results,
-                suppress_stderr=suppress,
-            )
-            if err:
-                yield {"type": "result", **err}
-                return
-            if entry is None:
-                continue
-        else:
-            entry = _run_pipeline(parsed.argv_list, cmd_str)
-            if entry.get("ok") is False:
-                yield {"type": "result", **entry, "results": results}
-                return
-            for fd in ("stdout", "stderr"):
-                if not entry.get(fd):
-                    continue
-                for line in entry[fd].splitlines():
-                    yield {"type": "stream", "fd": fd, "line": line, "end": "\n"}
-
-        results.append(entry)
-        if failure := _restricted_failure_payload(cmd_str, entry, results):
-            yield {"type": "result", **_finalize_bash_payload(failure)}
-            return
-
-    yield {"type": "result", **_finalize_bash_payload({"ok": True, "command": command, "results": results})}
+    The MCP server injects a zero-arg callable (which may block on the
+    out-of-band auth exchange); tests and direct callers may pass a plain
+    string. Anything resolving falsy means no credentials are available.
+    """
+    if callable(session_token):
+        return session_token()
+    return session_token
 
 
-# ---------------------------------------------------------------------------
-#  Unrestricted execution
-# ---------------------------------------------------------------------------
+def _prepare_shell_command(
+    command: str,
+    always_approve: bool = False,
+    privileged_approved: bool = False,
+) -> tuple[str | None, dict | None]:
+    """Rewrite sudo invocations while leaving all other shell syntax intact.
 
-def _prepare_unrestricted(command: str) -> tuple[str | None, dict | None]:
-    # Matches `sudo` followed by option-like tokens (single-token forms only;
-    # separated values such as `-u user` are caught by option validation) and
-    # the target binary, so the whole invocation can be rewritten.
-    invocation_re = re.compile(
-        r"(?<![^\s])sudo(?P<options>(?:\s+(?:--|-{1,2}[A-Za-z][A-Za-z=-]*))*)\s+(?P<binary>\S+)"
-    )
+    The shell is deliberately not parsed here. The small amount of inspection
+    is only to keep sudo invocations on the wrapper path and to validate the
+    options that the wrapper cannot represent.
+    """
     sudo_replacements = []
-    for m in invocation_re.finditer(command):
+    privileged_binaries = []
+    invocations = list(_SUDO_INVOCATION_RE.finditer(command))
+    for m in invocations:
         for token in m.group("options").split():
             base = token.split("=", 1)[0]
             if base in _SUDO_TARGET_OPTIONS:
@@ -826,8 +523,37 @@ def _prepare_unrestricted(command: str) -> tuple[str | None, dict | None]:
                 }
         binary_token = m.group("binary")
         if not (resolved := shutil.which(binary_token)):
-            continue
-        if not get_config().is_privileged_binary_allowed(resolved):
+            return None, {
+                "ok": False,
+                "error": f"Command not found: {binary_token}",
+                "results": [],
+            }
+        if err := _check_blocked_binary(resolved, []):
+            return None, err
+        if not os.path.isfile(PRIVILEGED_WRAPPER):
+            return None, {
+                "ok": False,
+                "error": (
+                    "Privileged execution is unavailable because the "
+                    "privileged integration is not installed on this system."
+                ),
+                "results": [],
+            }
+        privileged_binaries.append(resolved)
+
+    if always_approve and privileged_binaries and not privileged_approved:
+        return None, {
+            "ok": False,
+            "error": f"Privileged command requires approval: {privileged_binaries[0]}",
+            "approval_required": True,
+            "approval_kind": "privileged_whitelist",
+            "binary": privileged_binaries[0],
+            "binaries": privileged_binaries,
+            "results": [],
+        }
+
+    for resolved in privileged_binaries:
+        if not always_approve and not get_config().is_privileged_binary_allowed(resolved):
             return None, {
                 "ok": False,
                 "error": f"Privileged command requires approval: {resolved}",
@@ -836,13 +562,15 @@ def _prepare_unrestricted(command: str) -> tuple[str | None, dict | None]:
                 "binary": resolved,
                 "results": [],
             }
-        sudo_replacements.append((m.start(), m.end("binary"), resolved))
+
+    for m, resolved in zip(invocations, privileged_binaries):
+        sudo_replacements.append((m.start(), m.end("binary"), resolved, m.group("prefix")))
 
     if sudo_replacements:
         parts, last_end = [], 0
-        for start, end, resolved in sudo_replacements:
+        for start, end, resolved, prefix in sudo_replacements:
             parts.append(command[last_end:start])
-            parts.append(f"sudo --non-interactive {PRIVILEGED_WRAPPER} {resolved}")
+            parts.append(f"{prefix}sudo -n {PRIVILEGED_WRAPPER} {resolved}")
             last_end = end
         parts.append(command[last_end:])
         command = "".join(parts)
@@ -859,16 +587,32 @@ def _prepare_unrestricted(command: str) -> tuple[str | None, dict | None]:
     return command, None
 
 
-def _exec_unrestricted(command, approve_privileged=None):
+def _exec_shell(
+    command,
+    approve_privileged=None,
+    session_token=None,
+    always_approve=False,
+):
     """Generator: yields stream frames then a final result frame."""
     if _sudo_list_invocation(command):
         yield {"type": "result", **_finalize_bash_payload(_privileged_list_notice_payload(command))}
         return
-    prepared, err = _prepare_unrestricted(command)
+
+    prepared, err = _prepare_shell_command(command, always_approve=always_approve)
     seen = set()
+    approval_granted = False
     while err and err.get("approval_required"):
         binary = err.get("binary", "")
-        if binary in seen:
+        if always_approve:
+            if approval_granted:
+                yield {
+                    "type": "result",
+                    "ok": False,
+                    "error": f"Privileged command failed after approval: {binary}",
+                    "results": [],
+                }
+                return
+        elif binary in seen:
             yield {
                 "type": "result",
                 "ok": False,
@@ -876,14 +620,34 @@ def _exec_unrestricted(command, approve_privileged=None):
                 "results": [],
             }
             return
+
         seen.add(binary)
         if not _request_privileged_approval(approve_privileged, err, command):
             yield {"type": "result", **_privileged_denied_payload(err, [])}
             return
-        prepared, err = _prepare_unrestricted(command)
+        approval_granted = True
+        prepared, err = _prepare_shell_command(
+            command,
+            always_approve=always_approve,
+            privileged_approved=always_approve,
+        )
     if err:
         yield {"type": "result", **err}
         return
+
+    token = None
+    if PRIVILEGED_WRAPPER in prepared:
+        token = _resolve_session_token(session_token)
+        if not token:
+            # Fail closed: no session token available, so the broker would
+            # refuse the wrapper invocation.
+            yield {
+                "type": "result",
+                "ok": False,
+                "error": "sudo authentication required; the user must authenticate this session",
+                "results": [],
+            }
+            return
 
     argv = ["/bin/bash", "-c", prepared]
     results = []
@@ -891,36 +655,42 @@ def _exec_unrestricted(command, approve_privileged=None):
     streamer = _stream_command_with_pty if _command_requires_pty_streaming(prepared) else _stream_command
     entry, err = yield from streamer(
         argv, command, results, suppress_stderr=False,
+        session_token=token,
     )
     if err:
         yield {"type": "result", **err}
         return
 
     ok = entry["returncode"] == 0 or bool(entry["stdout"].strip())
-    yield {"type": "result", **_finalize_bash_payload({"ok": ok, "command": command, "results": [entry]})}
+    payload = {"ok": ok, "command": command, "results": [entry]}
+    if not ok:
+        error = f"Command failed: {command}"
+        if stderr := entry.get("stderr", "").strip():
+            error += f"\n{stderr}"
+        payload["error"] = error
+    yield {"type": "result", **_finalize_bash_payload(payload)}
 
 
 # ---------------------------------------------------------------------------
 #  Public API — thin wrappers
 # ---------------------------------------------------------------------------
 
-def _run_restricted(command, approve_privileged=None):
-    for frame in _exec_restricted(command, approve_privileged=approve_privileged):
+def _run_shell(command, approve_privileged=None, session_token=None, always_approve=False):
+    for frame in _exec_shell(
+        command,
+        approve_privileged=approve_privileged,
+        session_token=session_token,
+        always_approve=always_approve,
+    ):
         if frame.get("type") == "result":
             return {k: v for k, v in frame.items() if k != "type"}
     return {"ok": False, "error": "No result from bash execution"}
 
 
-def _run_unrestricted(command, approve_privileged=None):
-    for frame in _exec_unrestricted(command, approve_privileged=approve_privileged):
-        if frame.get("type") == "result":
-            return {k: v for k, v in frame.items() if k != "type"}
-    return {"ok": False, "error": "No result from bash execution"}
-
-
-def _stream_restricted(command, approve_privileged=None):
-    return _exec_restricted(command, approve_privileged=approve_privileged)
-
-
-def _stream_unrestricted(command, approve_privileged=None):
-    return _exec_unrestricted(command, approve_privileged=approve_privileged)
+def _stream_shell(command, approve_privileged=None, session_token=None, always_approve=False):
+    return _exec_shell(
+        command,
+        approve_privileged=approve_privileged,
+        session_token=session_token,
+        always_approve=always_approve,
+    )

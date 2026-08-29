@@ -90,6 +90,23 @@ class ConfigSchemaTests(unittest.TestCase):
         self.assertIn(Config.SMALL_MODEL, saved[Config.ATTRIBUTES])
         self.assertIsNone(saved[Config.ATTRIBUTES][Config.SMALL_MODEL])
 
+    def test_proactive_auth_defaults_to_enabled_and_can_be_disabled(self):
+        config = Config()
+        self.assertTrue(config.proactive_auth)
+
+        config.set(Config.PROACTIVE_AUTH, False)
+
+        self.assertFalse(config.proactive_auth)
+        saved = json.loads(config.path.read_text())
+        self.assertFalse(saved[Config.ATTRIBUTES][Config.PROACTIVE_AUTH])
+
+    def test_missing_proactive_auth_in_existing_config_defaults_to_enabled(self):
+        path = Path(self.tmp.name) / ".openterm" / "config" / "config.json"
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps({"providers": {}, "attributes": {}}))
+
+        self.assertTrue(Config().proactive_auth)
+
     def test_provider_values_are_never_written_to_attributes(self):
         config = Config()
         config.set(Config.OLLAMA_SERVER_URL, "http://ollama.example:11434")

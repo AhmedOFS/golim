@@ -19,10 +19,8 @@ from .vars import (
 from .utils.bash_utils import (
     _is_unrestricted_mode,
     _requires_pty_streaming,
-    _run_restricted,
-    _run_unrestricted,
-    _stream_restricted,
-    _stream_unrestricted,
+    _run_shell,
+    _stream_shell,
     _terminate_process_group,
 )
 from .utils.cancellation import is_tool_cancelled
@@ -344,29 +342,32 @@ def read_file(path: str, page: int = 1) -> dict:
         return {"ok": False, "error": str(e)}
 
 @tool
-def bash(command: str, stream: bool = False, _approve_privileged=None) -> dict:
+def bash(command: str, stream: bool = False, _approve_privileged=None, _session_token=None) -> dict:
     """
-    Executes command lines.
+    Executes a command through ``/bin/bash -c``.
 
-    When `unrestricted_mode` is true full shell access is given (pipes,
-    redirections, subshells, here-docs, etc.). The only remaining restriction
-
-    When `unrestricted_mode` is false (the default) a safe argv
-    parser is used. It supports unquoted `&&` chaining, unquoted `|` pipelines,
-    quoted arguments, environment-variable and `~` expansion, glob expansion,
-    and `2>/dev/null` stderr suppression. Other redirection and shell-only
-    syntax are rejected.
+    Both modes support normal shell syntax. In restricted mode, every command
+    containing sudo requires a user approval. In unrestricted mode, approval is
+    requested only when the sudo target is not already whitelisted. Approved
+    sudo commands are routed through the openterm privileged wrapper.
 
     In both modes, `stream=True` yields incremental output chunks followed by
     a final result dict.
     """
-    if _is_unrestricted_mode():
-        runner, streamer = _run_unrestricted, _stream_unrestricted
-    else:
-        runner, streamer = _run_restricted, _stream_restricted
+    always_approve = not _is_unrestricted_mode()
     if stream:
-        return streamer(command, approve_privileged=_approve_privileged)
-    return runner(command, approve_privileged=_approve_privileged)
+        return _stream_shell(
+            command,
+            approve_privileged=_approve_privileged,
+            session_token=_session_token,
+            always_approve=always_approve,
+        )
+    return _run_shell(
+        command,
+        approve_privileged=_approve_privileged,
+        session_token=_session_token,
+        always_approve=always_approve,
+    )
 
 
 @tool

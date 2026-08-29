@@ -49,6 +49,9 @@ class AgentEvents(Protocol):
     def request_binary_approval(self, binary: str) -> bool:
         ...
 
+    def request_sudo_password(self) -> str | None:
+        ...
+
     def request_python_approval(self, code: str) -> bool:
         ...
 

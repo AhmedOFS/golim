@@ -4,7 +4,7 @@
 OUTPUT_LINE_LIMIT = 200
 READ_FILE_PAGE_SIZE = 200
 PRIVILEGED_WRAPPER = "/usr/lib/openterm/openterm-privileged"
-FORBIDDEN_CHARS = set("><`\\'()")
+TOKEN_ENV_VAR = "OPENTERM_SESSION_TOKEN"
 _BLOCKED_BINARIES = {}
 _PTY_BINARIES = {"apt", "apt-get", "snap"}
 _COMMAND_SEPARATORS = ("&&", "||", "|", ";", "&", "(", ")")

@@ -22,6 +22,32 @@ class _RecordingSpinner:
         self.stopped = True
 
 
+class BasicUiSudoAuthTests(unittest.TestCase):
+    def test_request_sudo_password_uses_hidden_input(self):
+        ui = TerminalUI(config=object())
+
+        with patch("openterm.ui.basic.basic.getpass.getpass", return_value="sekret") as getpass_mock:
+            password = ui.request_sudo_password()
+
+        self.assertEqual(password, "sekret")
+        getpass_mock.assert_called_once()
+
+    def test_request_sudo_password_returns_none_on_interrupt(self):
+        ui = TerminalUI(config=object())
+
+        def interrupt(prompt):
+            raise KeyboardInterrupt
+
+        with patch("openterm.ui.basic.basic.getpass.getpass", side_effect=interrupt):
+            self.assertIsNone(ui.request_sudo_password())
+
+    def test_request_sudo_password_treats_empty_as_decline(self):
+        ui = TerminalUI(config=object())
+
+        with patch("openterm.ui.basic.basic.getpass.getpass", return_value=""):
+            self.assertIsNone(ui.request_sudo_password())
+
+
 class _TtyBuffer(io.StringIO):
     def isatty(self):
         return True

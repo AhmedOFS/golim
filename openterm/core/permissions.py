@@ -48,6 +48,16 @@ class Permissions:
         ui = self._require_ui()
         return bool(ui.request_binary_approval(approval.get("binary", "")))
 
+    def request_sudo_password(self, _auth=None) -> str | None:
+        """Collect the session sudo password through the active UI.
+
+        Wired as the client's ``on_auth_request`` callback; the password
+        travels only through the transport layer and is validated once by
+        the MCP server before being discarded.
+        """
+        ui = self._require_ui()
+        return ui.request_sudo_password()
+
     def _gate_embedded_python(self, args: dict) -> dict | None:
         command = str(args.get("command", ""))
         py_code = _detect_python_in_bash(command)

@@ -346,6 +346,24 @@ def init_command(binary: str = "ollama") -> int:
             config.set(Config.STREAM_THINKING_TRACES, False)
             print("✓ Thinking trace streaming disabled")
 
+    current_proactive_auth = config.proactive_auth
+    prompt = (
+        f"Proactively authenticate sudo at startup? "
+        f"[{'Y/n' if current_proactive_auth else 'y/N'}]: "
+    )
+    try:
+        choice = input(prompt).strip().lower()
+    except (KeyboardInterrupt, EOFError):
+        choice = ""
+    if choice in ("y", "yes"):
+        if not current_proactive_auth:
+            config.set(Config.PROACTIVE_AUTH, True)
+            print("✓ Proactive sudo authentication enabled")
+    elif choice in ("n", "no"):
+        if current_proactive_auth:
+            config.set(Config.PROACTIVE_AUTH, False)
+            print("✓ Proactive sudo authentication disabled")
+
     print("\nYou can now use openterm:")
     print('  openterm "Hello, how are you?"')
     return 0

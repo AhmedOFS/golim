@@ -60,6 +60,44 @@ class TextualToolOutputTests(unittest.TestCase):
         ui = TUIAgentEventsHandler(app, 1, threading.Event(), transcript=transcript)
         return ui, app
 
+    def test_request_sudo_password_prompts_and_returns_answer(self):
+        ui, app = self.make_ui()
+        app.prompt_requests = []
+
+        def start_sudo_password_prompt(request):
+            app.prompt_requests.append(request)
+
+        app.start_sudo_password_prompt = start_sudo_password_prompt
+
+        result = {}
+
+        def ask():
+            result["password"] = ui.request_sudo_password()
+
+        worker = threading.Thread(target=ask, daemon=True)
+        worker.start()
+        for _ in range(200):
+            if app.prompt_requests:
+                break
+            threading.Event().wait(0.01)
+        request = app.prompt_requests[0]
+        request.password = "sekret"
+        request.event.set()
+        worker.join(5)
+
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(result["password"], "sekret")
+
+    def test_request_sudo_password_returns_none_when_run_inactive(self):
+        ui, app = self.make_ui()
+
+        def inactive_run(_run_id):
+            return False
+
+        app.is_run_active = inactive_run
+
+        self.assertIsNone(ui.request_sudo_password())
+
     def test_system_info_done_expands_to_formatted_data(self):
         ui, app = self.make_ui()
         ui.tool_call("system_info", {})

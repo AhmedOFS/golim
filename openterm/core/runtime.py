@@ -115,6 +115,8 @@ class Runtime:
             # Out-of-band privileged approvals resolve through Permissions,
             # which asks the currently bound UI handler.
             self.mcp_client.on_approval_request = self.permissions.approve_binary
+            # Out-of-band sudo-auth requests resolve through the same UI.
+            self.mcp_client.on_auth_request = self.permissions.request_sudo_password
         return self.mcp_client
 
     @staticmethod
@@ -220,6 +222,57 @@ class Runtime:
             else:
                 raise RuntimeError("Failed to retrieve tool list.") from last_error
 
+    def authenticate_sudo(self) -> None:
+        """Proactively authenticate privileged execution at app start.
+
+        The password is registered with the root-side broker, which verifies
+        it via sudo/PAM and issues the session token the MCP server holds in
+        memory; the privileged wrapper then verifies that token per
+        invocation. Skipped silently when the wrapper or broker is not
+        installed, the session is already authenticated, no UI is
+        interactive enough to ask, or the transport predates the auth
+        protocol. If startup authentication is declined or later expires,
+        missing tokens are recovered when a sudo command uses the out-of-band
+        auth request path.
+        """
+        if self.mcp_client is None:
+            return
+        try:
+            status = self.mcp_client.auth_status()
+        except Exception as exc:
+            logger.debug("sudo_auth_status_unavailable error=%s", exc)
+            return
+        if not status.get("ok") or not status.get("wrapper_installed"):
+            return
+        if not status.get("broker_available", True):
+            ui = self._active_ui()
+            ui.message(
+                "Privileged commands are unavailable: the openterm token "
+                "broker is not running on this system."
+            )
+            return
+        if status.get("authenticated"):
+            return
+        ui = self._active_ui()
+        ui.status("Authenticating sudo")
+        try:
+            password = ui.request_sudo_password()
+            if password is None:
+                ui.message(
+                    "Sudo authentication skipped; privileged commands "
+                    "cannot run until authenticated."
+                )
+                return
+            result = self.mcp_client.authenticate(password)
+            if result.get("ok"):
+                ui.message("sudo authenticated for this session")
+            else:
+                ui.message(
+                    f"sudo authentication failed: {result.get('error', 'unknown error')}"
+                )
+        finally:
+            ui.clear_status()
+
     def select_skills(self, user_message: str):
         ui = self._active_ui()
         loader = SkillsLoader()
@@ -321,6 +374,8 @@ class Runtime:
         self._active_ui()
         self.ensure_mcp_server()
         self.initialize_tools()
+        if self.config.proactive_auth:
+            self.authenticate_sudo()
         selected_skills, skills_prompt = self.select_skills(user_message)
 
         tools = self._build_tools(self.tools)

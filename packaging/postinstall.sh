@@ -3,6 +3,8 @@ set -e
 
 SUDOERS_FILE="/etc/sudoers.d/openterm"
 WRAPPER="/usr/lib/openterm/openterm-privileged"
+BROKER="/usr/lib/openterm/openterm-broker"
+BROKER_SERVICE="/usr/lib/systemd/system/openterm-broker.service"
 DEFAULT_ALLOWED=( /usr/bin/apt /usr/bin/apt-get /usr/bin/tee /usr/bin/snap )
 
 # ── Colours ──────────────────────────────────────────────────────────────────
@@ -41,71 +43,145 @@ chown "$REAL_USER:$REAL_USER" "$WHITELIST"
 chmod 0644 "$WHITELIST"
 ok "Installed privileged whitelist at $WHITELIST."
 
-# 2. Install the privileged wrapper script
-mkdir -p "$(dirname "$WRAPPER")"
+# 2. Install the privileged wrapper script.
+#    The wrapper runs as root via a NOPASSWD sudoers rule, so it must
+#    verify the caller's session token with the broker before executing
+#    anything, and fail closed whenever the broker cannot confirm it.
 cat > "$WRAPPER" << 'EOF'
-#!/bin/bash
-# openterm privileged wrapper - called only by openterm_server
-# Reads the invoking user's openterm whitelist before executing a binary.
-set -e
+#!/usr/bin/python3
+"""openterm privileged wrapper.
 
-if [ "$#" -lt 1 ]; then
-  echo "Usage: openterm-privileged <binary> [args...]" >&2
-  exit 1
-fi
+Executed as root through a NOPASSWD sudoers rule, so the sudo password
+gate does not apply: access control lives entirely in the session token
+verified by the openterm broker. The token travels in the environment
+(OPENTERM_SESSION_TOKEN) set by the MCP tool server for privileged
+invocations only. Any failure to verify the token is fatal (fail closed).
+"""
 
-BINARY="$(readlink -f "$1")"
-# Exec the path as invoked, not its canonical form: symlink-dispatched
-# multiplexers (kmod applets such as modprobe -> kmod) pick their behavior
-# from argv[0], so canonicalizing here would break them. The whitelist check
-# below still compares canonical paths.
-REQUESTED="$1"
-shift
+import json
+import os
+import pwd
+import socket
+import sys
 
-REAL_USER="${SUDO_USER:-}"
-if [ -z "$REAL_USER" ] || [ "$REAL_USER" = "root" ]; then
-  echo "openterm-privileged: could not determine invoking user" >&2
-  exit 1
-fi
+BROKER_SOCKET = "/run/openterm/broker.sock"
+TOKEN_ENV_VAR = "OPENTERM_SESSION_TOKEN"
+BROKER_TIMEOUT_SECONDS = 5
 
-REAL_HOME="$(getent passwd "$REAL_USER" | cut -d: -f6)"
-if [ -z "$REAL_HOME" ]; then
-  echo "openterm-privileged: could not determine home for $REAL_USER" >&2
-  exit 1
-fi
 
-WHITELIST="${OPENTERM_PRIVILEGED_WHITELIST:-$REAL_HOME/.openterm/privileged_whitelist}"
+def fail(message):
+    print(f"openterm-privileged: {message}", file=sys.stderr)
+    sys.exit(1)
 
-if [ ! -r "$WHITELIST" ]; then
-  echo "openterm-privileged: whitelist not readable: $WHITELIST" >&2
-  exit 1
-fi
 
-while IFS= read -r allowed || [ -n "$allowed" ]; do
-  allowed="${allowed%%#*}"
-  allowed="$(echo "$allowed" | xargs)"
-  [ -n "$allowed" ] || continue
-  allowed="$(readlink -f "$allowed")"
-  if [ "$BINARY" = "$allowed" ]; then
-    case "$REQUESTED" in
-      */*) exec "$REQUESTED" "$@" ;;
-      *)   exec "$BINARY" "$@" ;;
-    esac
-  fi
-done < "$WHITELIST"
+def verify_token_with_broker(user, token):
+    try:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(BROKER_TIMEOUT_SECONDS)
+        sock.connect(BROKER_SOCKET)
+        try:
+            request = {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "verify",
+                "params": {"user": user, "token": token},
+            }
+            sock.sendall((json.dumps(request) + "\n").encode("utf-8"))
+            buf = b""
+            while b"\n" not in buf:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    return False
+                buf += chunk
+            reply = json.loads(buf.split(b"\n", 1)[0].decode("utf-8"))
+            result = reply.get("result") or {}
+            return bool(result.get("ok") and result.get("valid"))
+        finally:
+            sock.close()
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError, ValueError):
+        return False
 
-echo "openterm-privileged: binary not allowed: $BINARY" >&2
-exit 1
+
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: openterm-privileged <binary> [args...]", file=sys.stderr)
+        sys.exit(1)
+
+    real_user = os.environ.get("SUDO_USER", "")
+    if not real_user or real_user == "root":
+        fail("could not determine invoking user")
+
+    token = os.environ.get(TOKEN_ENV_VAR, "")
+    if not token:
+        fail("no session token provided")
+
+    if not verify_token_with_broker(real_user, token):
+        fail("session token not verified by the openterm broker")
+
+    # Canonicalize for the whitelist check but exec the path as invoked:
+    # symlink-dispatched multiplexers (kmod applets such as modprobe -> kmod)
+    # pick their behavior from argv[0].
+    requested = sys.argv[1]
+    args = sys.argv[2:]
+    binary = os.path.realpath(requested)
+
+    whitelist = os.environ.get(
+        "OPENTERM_PRIVILEGED_WHITELIST",
+        os.path.join(pwd.getpwnam(real_user).pw_dir, ".openterm/privileged_whitelist"),
+    )
+    try:
+        with open(whitelist, "r", encoding="utf-8") as handle:
+            entries = handle.read().splitlines()
+    except OSError:
+        fail(f"whitelist not readable: {whitelist}")
+
+    for entry in entries:
+        entry = entry.split("#", 1)[0].strip()
+        if not entry:
+            continue
+        if binary == os.path.realpath(entry):
+            # Drop the token from the child's environment before exec.
+            os.environ.pop(TOKEN_ENV_VAR, None)
+            if "/" in requested:
+                os.execv(requested, [requested] + args)
+            os.execv(binary, [binary] + args)
+
+    fail(f"binary not allowed: {binary}")
+
+
+if __name__ == "__main__":
+    main()
 EOF
 chmod 0755 "$WRAPPER"
 chown root:root "$WRAPPER"
 ok "Installed wrapper at $WRAPPER."
 
-# 3. Sudoers fragment — scoped to the wrapper only, not to snap/apt directly
-#    This means: sudo snap in a normal terminal still asks for a password
+# 3. The token broker and its system service are package files installed
+#    by dpkg (/usr/lib/openterm/openterm-broker and the systemd unit); here
+#    they are enabled and started.
+if [ -f "$BROKER" ] && [ -f "$BROKER_SERVICE" ]; then
+  chown root:root "$BROKER"
+  chmod 0755 "$BROKER"
+  chown root:root "$BROKER_SERVICE"
+  chmod 0644 "$BROKER_SERVICE"
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    systemctl enable --now openterm-broker.service >/dev/null 2>&1 || \
+      warn "Could not start openterm-broker.service automatically."
+  fi
+  ok "Token broker installed at $BROKER."
+else
+  die "Token broker files missing from the package installation."
+fi
+
+# 4. Sudoers fragment — NOPASSWD on the wrapper only, with the session
+#    token forwarded to it. The wrapper independently verifies the token
+#    with the broker, so the NOPASSWD rule grants nothing on its own.
+#    This means: sudo snap in a normal terminal still asks for a password.
 cat > "$SUDOERS_FILE" << EOF
 # openterm MCP server - restricted privileged commands
-# Managed by dev_setup.sh - do not edit manually
+# Managed by packaging/postinstall.sh - do not edit manually
+Defaults!$WRAPPER env_keep += "OPENTERM_SESSION_TOKEN"
 $REAL_USER ALL=(root) NOPASSWD: $WRAPPER
 EOF
 

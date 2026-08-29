@@ -13,6 +13,7 @@ class FastMCPClient:
         self._active_sockets = set()
         self._socket_lock = threading.Lock()
         self.on_approval_request = None
+        self.on_auth_request = None
 
     def _handle_approval_request(self, approval):
         """Ask the wired-in user UI for a binary approval decision.
@@ -30,6 +31,37 @@ class FastMCPClient:
             "approval_id": approval_id,
             "approved": bool(approved),
         })
+
+    def _handle_auth_request(self, auth):
+        """Ask the wired-in user UI for the session sudo password.
+
+        The password travels only through the transport layer, is validated
+        once by the server, and is never returned to the model.
+        """
+        callback = self.on_auth_request
+        if callback is None:
+            return None
+        return callback(auth)
+
+    def _send_auth_response(self, auth_id, password):
+        self._send_request("auth/respond", {
+            "auth_id": auth_id,
+            "password": password,
+        })
+
+    def auth_status(self):
+        """Return the server's privileged-session status."""
+        response = self._send_request("auth/status")
+        if "error" in response:
+            error = response["error"]
+            message = error.get("message", "Unknown error") if isinstance(error, dict) else str(error)
+            raise RuntimeError(f"auth/status failed: {message}")
+        return response.get("result", {})
+
+    def authenticate(self, password):
+        """Validate the sudo password once and receive a broker session token."""
+        response = self._send_request("auth/sudo_password", {"password": password})
+        return response.get("result", {"ok": False, "error": "No result from server"})
 
     def _open_socket(self):
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -66,6 +98,11 @@ class FastMCPClient:
             approval = frame["approval_request"]
             approved = self._handle_approval_request(approval)
             self._send_approval_response(approval.get("approval_id"), approved)
+            return True
+        if "auth_request" in frame:
+            auth = frame["auth_request"]
+            password = self._handle_auth_request(auth)
+            self._send_auth_response(auth.get("auth_id"), password)
             return True
         if "result" in frame or "error" in frame:
             return False

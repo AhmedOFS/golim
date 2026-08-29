@@ -6,6 +6,8 @@ set -u
 # user's Openterm state created for this installation.
 SUDOERS_FILE="/etc/sudoers.d/openterm"
 WRAPPER="/usr/lib/openterm/openterm-privileged"
+BROKER="/usr/lib/openterm/openterm-broker"
+BROKER_SERVICE="/usr/lib/systemd/system/openterm-broker.service"
 SERVICE="/usr/lib/systemd/user/openterm-mcp.service"
 
 # dpkg calls this script with an action argument. During ``upgrade`` the
@@ -43,8 +45,16 @@ else
   warn "Could not identify the installing user; user Openterm state was left untouched."
 fi
 
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl disable --now openterm-broker.service >/dev/null 2>&1 || true
+  systemctl daemon-reload >/dev/null 2>&1 || true
+fi
+
 rm -f -- "$SERVICE"
 rm -f -- "$WRAPPER"
+rm -f -- "$BROKER"
+rm -f -- "$BROKER_SERVICE"
 rm -f -- "$SUDOERS_FILE"
+rm -rf -- /run/openterm
 rmdir --ignore-fail-on-non-empty /usr/lib/openterm 2>/dev/null || true
 ok "Removed Openterm privileged and system integration files."

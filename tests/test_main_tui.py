@@ -239,6 +239,40 @@ class MainTuiTests(unittest.TestCase):
 
         asyncio.run(run_case())
 
+    @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
+    def test_settings_menu_exposes_proactive_auth_toggle(self):
+        from openterm.ui.tui.app.app_tui import OpentermApp
+        from openterm.config import Config
+
+        async def run_case():
+            config = MagicMock()
+            config.stream_thinking_traces = False
+            config.unrestricted_mode = False
+            config.proactive_auth = True
+            config.max_iteration_limit = 50
+            config.dark_mode = False
+
+            def set_value(key, value):
+                if key == Config.PROACTIVE_AUTH:
+                    config.proactive_auth = value
+
+            config.set.side_effect = set_value
+            app = OpentermApp("model", model="main", config=config)
+            with patch("openterm.ui.tui.app.app_tui.get_config", return_value=config):
+                async with app.run_test() as pilot:
+                    app._show_menu()
+                    app._show_settings_menu()
+                    options = app.query_one("#menu_options")
+                    labels = [str(options.get_option_at_index(i).prompt) for i in range(options.option_count)]
+                    self.assertIn("Proactive sudo auth: on", labels)
+
+                    app._handle_menu_selected(2)
+                    self.assertFalse(config.proactive_auth)
+                    config.set.assert_called_with(Config.PROACTIVE_AUTH, False)
+                    await pilot.pause()
+
+        asyncio.run(run_case())
+
 
 if __name__ == "__main__":
     unittest.main()

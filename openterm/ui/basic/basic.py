@@ -1,5 +1,6 @@
 """Thin terminal UI layer for openterm client output."""
 
+import getpass
 import re
 import sys
 
@@ -148,6 +149,18 @@ class TerminalUI(AgentEvents):
             except (EOFError, KeyboardInterrupt):
                 return False
         return answer.strip().lower() in {"y", "yes"}
+
+    def request_sudo_password(self):
+        if self._spinner:
+            self._spinner.stop()
+            self._spinner = None
+        self._write_output("\n\033[1mPrivileged commands require sudo authentication.\033[0m")
+        sys.stderr.flush()
+        try:
+            password = getpass.getpass("Sudo password (input hidden): ")
+        except (EOFError, KeyboardInterrupt):
+            return None
+        return password or None
     
     def _show_python(self, code):
         self._write_output("\033[38;5;248m" + "-" * 40 + "\033[0m")

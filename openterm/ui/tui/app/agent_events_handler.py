@@ -85,6 +85,13 @@ class ApprovalRequest:
     code: str | None = None
 
 
+@dataclass
+class SudoAuthRequest:
+    run_id: int
+    event: threading.Event
+    password: str | None = None
+
+
 def _language_for_path(path: str) -> str:
     ext = os.path.splitext(str(path))[1].lower()
     return {
@@ -450,6 +457,15 @@ class TUIAgentEventsHandler(AgentEvents):
         self.app.call_from_thread(self.app.start_approval_prompt, request)
         event.wait()
         return bool(request.answer)
+
+    def request_sudo_password(self):
+        if not self._ensure_active():
+            return None
+        event = threading.Event()
+        request = SudoAuthRequest(self.run_id, event)
+        self.app.call_from_thread(self.app.start_sudo_password_prompt, request)
+        event.wait()
+        return request.password
 
     def python_code(self, code):
         if not self._ensure_active():

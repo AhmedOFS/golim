@@ -65,6 +65,7 @@ class Config:
     ATTRIBUTES = "attributes"
     SMALL_MODEL = "small_model"
     UNRESTRICTED_MODE = "unrestricted_mode"
+    PROACTIVE_AUTH = "proactive_auth"
     STREAM_THINKING_TRACES = "thinking_traces"
     MAX_ITERATION_LIMIT = "max_iteration_limit"
     DARK_MODE = "dark_mode"
@@ -85,6 +86,7 @@ class Config:
         SMALL_MODEL: None,
         STREAM_THINKING_TRACES: False,
         UNRESTRICTED_MODE: False,
+        PROACTIVE_AUTH: True,
         MAX_ITERATION_LIMIT: 50,
         DARK_MODE: False,
         WEBSEARCH_PROVIDER: EXA,
@@ -220,6 +222,8 @@ class Config:
     def small_model(self): return self.get(self.SMALL_MODEL)
     @property
     def unrestricted_mode(self): return bool(self.get(self.UNRESTRICTED_MODE))
+    @property
+    def proactive_auth(self): return bool(self.get(self.PROACTIVE_AUTH, True))
     @property
     def stream_thinking_traces(self): return bool(self.get(self.STREAM_THINKING_TRACES))
     @property

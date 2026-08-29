@@ -15,8 +15,8 @@ plain text, a dim tone for secondary/trail lines, and red reserved for
 actual errors.
 
 The branching/stateful logic (provider selection, Ollama server start/retry
-loop, model listing, optional small-model selection, unrestricted-bash and
-thinking-trace toggles) is expressed as a small state machine (see
+loop, model listing, optional small-model selection, unrestricted-bash,
+proactive-auth, and thinking-trace toggles) is expressed as a small state machine (see
 ``STATE_HANDLERS`` / ``run_config``) that runs in a background worker thread
 and talks to the UI through event-based prompt requests — the same
 handshake pattern already used for privileged-binary approval prompts in
@@ -463,6 +463,22 @@ def _state_common_thinking(config: Config, ui: ConfigPromptHandle, binary: str) 
     elif not enable and current_thinking:
         config.set(Config.STREAM_THINKING_TRACES, False)
         ui.log("✓ Thinking trace streaming disabled", STYLE_SUCCESS)
+    return "COMMON_PROACTIVE_AUTH"
+
+
+def _state_common_proactive_auth(config: Config, ui: ConfigPromptHandle, binary: str) -> str:
+    current_proactive_auth = config.proactive_auth
+    enable = ui.confirm(
+        f"Proactively authenticate sudo at startup?"
+        f"{' (currently enabled)' if current_proactive_auth else ''}",
+        default_yes=current_proactive_auth,
+    )
+    if enable and not current_proactive_auth:
+        config.set(Config.PROACTIVE_AUTH, True)
+        ui.log("✓ Proactive sudo authentication enabled", STYLE_SUCCESS)
+    elif not enable and current_proactive_auth:
+        config.set(Config.PROACTIVE_AUTH, False)
+        ui.log("✓ Proactive sudo authentication disabled", STYLE_SUCCESS)
     return "DONE"
 
 
@@ -484,6 +500,7 @@ STATE_HANDLERS: dict[str, Callable[[Config, ConfigPromptHandle, str], str]] = {
     "OPENAI_COMPATIBLE_SMALL_MODEL": _state_openai_compatible_small_model,
     "COMMON_BASH": _state_common_bash,
     "COMMON_THINKING": _state_common_thinking,
+    "COMMON_PROACTIVE_AUTH": _state_common_proactive_auth,
 }
 
 _NON_INTERACTIVE_STATES = frozenset({

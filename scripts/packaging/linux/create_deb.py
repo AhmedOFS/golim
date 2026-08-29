@@ -18,6 +18,8 @@ APP_DIST = ROOT / "dist" / "linux"
 RELEASE_DIR = ROOT / "release"
 DEB_DIR = RELEASE_DIR / "linux"
 SERVICE_SOURCE = ROOT / "packaging" / "openterm-mcp.service"
+BROKER_SERVICE_SOURCE = ROOT / "packaging" / "openterm-broker.service"
+BROKER_SOURCE = ROOT / "packaging" / "openterm-broker.py"
 POSTINSTALL_SOURCE = ROOT / "packaging" / "postinstall.sh"
 POSTRM_SOURCE = ROOT / "packaging" / "postrm.sh"
 
@@ -82,16 +84,21 @@ def populate_package_tree(staging: Path, app_dist: Path) -> Path:
     debian_dir = staging / "DEBIAN"
     app_target = staging / "usr" / "lib" / "openterm"
     bin_dir = staging / "usr" / "bin"
-    service_dir = staging / "usr" / "lib" / "systemd" / "user"
+    user_service_dir = staging / "usr" / "lib" / "systemd" / "user"
+    system_service_dir = staging / "usr" / "lib" / "systemd" / "system"
 
     debian_dir.mkdir(parents=True)
     app_target.parent.mkdir(parents=True)
     bin_dir.mkdir(parents=True)
-    service_dir.mkdir(parents=True)
+    user_service_dir.mkdir(parents=True)
+    system_service_dir.mkdir(parents=True)
 
     shutil.copytree(app_dist, app_target, symlinks=True)
     (bin_dir / "openterm").symlink_to("../lib/openterm/openterm")
-    write_service(service_dir / "openterm-mcp.service")
+    write_service(user_service_dir / "openterm-mcp.service")
+    shutil.copy2(BROKER_SOURCE, app_target / "openterm-broker")
+    (app_target / "openterm-broker").chmod(0o755)
+    shutil.copy2(BROKER_SERVICE_SOURCE, system_service_dir / "openterm-broker.service")
     shutil.copy2(POSTINSTALL_SOURCE, debian_dir / "postinst")
     (debian_dir / "postinst").chmod(0o755)
     shutil.copy2(POSTRM_SOURCE, debian_dir / "postrm")

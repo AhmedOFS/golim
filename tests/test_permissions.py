@@ -28,6 +28,9 @@ class FakeUI:
         self.approval_prompts.append(binary)
         return self.approved
 
+    def request_sudo_password(self):
+        return "session-password"
+
     def request_python_approval(self, code):
         self.approval_prompts.append(("python", code))
         return self.approved
@@ -179,6 +182,18 @@ class PermissionsTests(unittest.TestCase):
         approval = {"approval_id": "1:0", "binary": "/usr/bin/apt"}
         self.assertFalse(client.on_approval_request(approval))
         self.assertEqual(ui.approval_prompts, ["/usr/bin/apt"])
+
+    def test_runtime_wires_sudo_auth_callback_with_transport_request(self):
+        ui = FakeUI()
+        runtime = Runtime(model="main")
+        runtime.bind_ui(ui)
+
+        client = runtime.create_mcp_client("/tmp/openterm-auth-test.sock")
+
+        self.assertEqual(
+            client.on_auth_request({"auth_id": "1:auth:0", "kind": "sudo_password"}),
+            "session-password",
+        )
 
     def test_rebinding_ui_refreshes_permissions_handler(self):
         ui_a = FakeUI(approved=True)

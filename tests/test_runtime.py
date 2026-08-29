@@ -5,8 +5,11 @@ from openterm.core.runtime import Runtime
 
 
 class FakeUI:
+    def __init__(self):
+        self.messages = []
+
     def message(self, text):
-        pass
+        self.messages.append(text)
 
     def status(self, message):
         pass
@@ -32,6 +35,9 @@ class FakeUI:
     def request_binary_approval(self, binary):
         return False
 
+    def request_sudo_password(self):
+        return None
+
     def request_python_approval(self, code):
         return False
 
@@ -43,6 +49,36 @@ class FakeMCPClient:
     async def list_tools(self):
         self.list_count += 1
         return []
+
+
+class AuthFakeMCPClient:
+    def __init__(self, wrapper_installed=True, authenticated=False, auth_ok=True):
+        self._wrapper_installed = wrapper_installed
+        self._authenticated = authenticated
+        self._auth_ok = auth_ok
+        self.authenticate_calls = []
+
+    def auth_status(self):
+        return {
+            "ok": True,
+            "wrapper_installed": self._wrapper_installed,
+            "authenticated": self._authenticated,
+        }
+
+    def authenticate(self, password):
+        self.authenticate_calls.append(password)
+        return {"ok": self._auth_ok}
+
+
+class PromptingFakeUI(FakeUI):
+    def __init__(self, password="session-password"):
+        super().__init__()
+        self._password = password
+        self.prompts = 0
+
+    def request_sudo_password(self):
+        self.prompts += 1
+        return self._password
 
 
 class RuntimeTests(unittest.TestCase):
@@ -242,6 +278,111 @@ class RuntimeTests(unittest.TestCase):
         self.assertTrue(runtime.should_interrupt())
         self.assertTrue(runtime.should_hard_cancel())
         runtime.mcp_client.close.assert_not_called()
+
+    def test_sudo_auth_skipped_when_ticket_already_valid(self):
+        ui = PromptingFakeUI()
+        runtime = Runtime(model="main")
+        runtime.bind_ui(ui)
+        runtime.mcp_client = AuthFakeMCPClient(authenticated=True)
+
+        runtime.authenticate_sudo()
+
+        self.assertEqual(ui.prompts, 0)
+
+    def test_sudo_auth_skipped_when_wrapper_not_installed(self):
+        ui = PromptingFakeUI()
+        runtime = Runtime(model="main")
+        runtime.bind_ui(ui)
+        runtime.mcp_client = AuthFakeMCPClient(wrapper_installed=False)
+
+        runtime.authenticate_sudo()
+
+        self.assertEqual(ui.prompts, 0)
+
+    def test_sudo_auth_prompts_once_and_authenticates_session(self):
+        ui = PromptingFakeUI(password="session-password")
+        runtime = Runtime(model="main")
+        runtime.bind_ui(ui)
+        client = AuthFakeMCPClient(authenticated=False, auth_ok=True)
+        runtime.mcp_client = client
+
+        runtime.authenticate_sudo()
+
+        self.assertEqual(ui.prompts, 1)
+        self.assertEqual(client.authenticate_calls, ["session-password"])
+        self.assertTrue(any("authenticated" in message for message in ui.messages))
+
+    def test_sudo_auth_reports_failure_without_retry(self):
+        ui = PromptingFakeUI(password="wrong")
+        runtime = Runtime(model="main")
+        runtime.bind_ui(ui)
+        client = AuthFakeMCPClient(authenticated=False, auth_ok=False)
+        runtime.mcp_client = client
+
+        runtime.authenticate_sudo()
+
+        self.assertEqual(ui.prompts, 1)
+        self.assertEqual(client.authenticate_calls, ["wrong"])
+        self.assertTrue(any("failed" in message for message in ui.messages))
+
+    def test_sudo_auth_skipped_when_user_declines_prompt(self):
+        ui = PromptingFakeUI(password=None)
+        runtime = Runtime(model="main")
+        runtime.bind_ui(ui)
+        client = AuthFakeMCPClient(authenticated=False)
+        runtime.mcp_client = client
+
+        runtime.authenticate_sudo()
+
+        self.assertEqual(ui.prompts, 1)
+        self.assertEqual(client.authenticate_calls, [])
+        self.assertTrue(any("skipped" in message for message in ui.messages))
+
+    def test_sudo_auth_survives_transport_without_auth_support(self):
+        ui = PromptingFakeUI()
+        runtime = Runtime(model="main")
+        runtime.bind_ui(ui)
+        runtime.mcp_client = FakeMCPClient()
+
+        runtime.authenticate_sudo()
+
+        self.assertEqual(ui.prompts, 0)
+
+    def test_run_authenticates_sudo_after_tools_before_skills(self):
+        runtime = Runtime(model="main")
+        runtime.bind_ui(FakeUI())
+        runtime.mcp_client = FakeMCPClient()
+        order = []
+
+        def fake_chat(model, messages, tools=None, binary="ollama", response_format=None):
+            return {"message": {"role": "assistant", "content": "Done."}}
+
+        with patch.object(runtime, "ensure_mcp_server", return_value="/tmp/openterm-test.sock"), \
+             patch.object(runtime, "initialize_tools", side_effect=lambda: order.append("tools")), \
+             patch.object(runtime, "authenticate_sudo", side_effect=lambda: order.append("auth")), \
+             patch.object(runtime, "select_skills", side_effect=lambda _msg: order.append("skills") or ([], "")), \
+             patch("openterm.core.agent.chat_with_model_api", side_effect=fake_chat):
+            runtime.run("Do work.")
+
+        self.assertEqual(order, ["tools", "auth", "skills"])
+
+    def test_run_skips_proactive_sudo_auth_when_disabled(self):
+        config = MagicMock()
+        config.proactive_auth = False
+        runtime = Runtime(config=config, model="main")
+        runtime.bind_ui(FakeUI())
+        runtime.mcp_client = FakeMCPClient()
+
+        def fake_chat(model, messages, tools=None, binary="ollama", response_format=None):
+            return {"message": {"role": "assistant", "content": "Done."}}
+
+        with patch.object(runtime, "ensure_mcp_server", return_value="/tmp/openterm-test.sock"), \
+             patch.object(runtime, "select_skills", return_value=([], "")), \
+             patch.object(runtime, "authenticate_sudo") as authenticate, \
+             patch("openterm.core.agent.chat_with_model_api", side_effect=fake_chat):
+            runtime.run("Do work.")
+
+        authenticate.assert_not_called()
 
 if __name__ == "__main__":
     unittest.main()

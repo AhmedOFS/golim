@@ -153,6 +153,138 @@ class MCPClientTests(unittest.TestCase):
         self.assertTrue(consumed)
         self.assertEqual(streams, [("stderr", "warn", "\n")])
 
+    def test_auth_request_defaults_to_no_password_without_callback(self):
+        client = FastMCPClient("/tmp")
+
+        self.assertIsNone(client._handle_auth_request({"auth_id": "1:auth:0"}))
+
+    def test_auth_request_uses_callback_when_set(self):
+        client = FastMCPClient("/tmp")
+        client.on_auth_request = lambda auth: "sekret"
+
+        self.assertEqual(
+            client._handle_auth_request({"auth_id": "1:auth:0", "kind": "sudo_password"}),
+            "sekret",
+        )
+
+    @staticmethod
+    def _auth_server_behaviors():
+        auth_frame = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "auth_request": {"auth_id": "1:auth:0", "kind": "sudo_password"},
+        }
+        final_frame = {"jsonrpc": "2.0", "id": 1, "result": {"ok": True, "results": []}}
+        return [
+            [
+                ("recv",),
+                ("send", auth_frame),
+                ("send", final_frame),
+                ("close",),
+            ],
+            [
+                ("recv",),
+                ("send", {"jsonrpc": "2.0", "id": 2, "result": {"resolved": True}}),
+                ("close",),
+            ],
+        ]
+
+    def test_stream_request_handles_auth_round_trip(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            socket_path = Path(tmp) / "mcp.sock"
+            received = []
+            passwords = []
+            thread = self._run_fake_server(
+                socket_path, self._auth_server_behaviors(), received,
+            )
+            client = FastMCPClient(socket_path)
+            client.on_auth_request = lambda auth: passwords.append(auth) or "sekret"
+
+            frame = client._stream_request(
+                "tools/call",
+                {"name": "bash", "arguments": {"command": "sudo apt update"}},
+            )
+            thread.join(5)
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(frame["result"], {"ok": True, "results": []})
+        self.assertEqual(passwords[0]["kind"], "sudo_password")
+        self.assertEqual(
+            received[1],
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "auth/respond",
+                "params": {"auth_id": "1:auth:0", "password": "sekret"},
+            },
+        )
+
+    def test_stream_request_reports_no_password_without_callback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            socket_path = Path(tmp) / "mcp.sock"
+            received = []
+            thread = self._run_fake_server(
+                socket_path, self._auth_server_behaviors(), received,
+            )
+            client = FastMCPClient(socket_path)
+
+            frame = client._stream_request(
+                "tools/call",
+                {"name": "bash", "arguments": {"command": "sudo apt update"}},
+            )
+            thread.join(5)
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(
+            received[1]["params"],
+            {"auth_id": "1:auth:0", "password": None},
+        )
+
+    def test_auth_status_round_trip(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            socket_path = Path(tmp) / "mcp.sock"
+            received = []
+            thread = self._run_fake_server(
+                socket_path,
+                [[
+                    ("recv",),
+                    ("send", {"jsonrpc": "2.0", "id": 1, "result": {
+                        "ok": True, "wrapper_installed": True, "authenticated": False,
+                    }}),
+                    ("close",),
+                ]],
+                received,
+            )
+            client = FastMCPClient(socket_path)
+            status = client.auth_status()
+            thread.join(5)
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(status, {"ok": True, "wrapper_installed": True, "authenticated": False})
+        self.assertEqual(received[0]["method"], "auth/status")
+
+    def test_authenticate_sends_password_via_transport(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            socket_path = Path(tmp) / "mcp.sock"
+            received = []
+            thread = self._run_fake_server(
+                socket_path,
+                [[
+                    ("recv",),
+                    ("send", {"jsonrpc": "2.0", "id": 1, "result": {"ok": True}}),
+                    ("close",),
+                ]],
+                received,
+            )
+            client = FastMCPClient(socket_path)
+            result = client.authenticate("sekret")
+            thread.join(5)
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(result, {"ok": True})
+        self.assertEqual(received[0]["method"], "auth/sudo_password")
+        self.assertEqual(received[0]["params"], {"password": "sekret"})
+
     def test_unknown_notification_is_ignored_without_callback(self):
         client = FastMCPClient("/tmp")
 

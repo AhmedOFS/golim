@@ -64,8 +64,17 @@ class PromptLine(Horizontal):
         prompt.value = ""
         prompt.focus()
 
+    def start_password(self) -> None:
+        prompt = self.query_one("#prompt", Input)
+        prompt.disabled = False
+        prompt.password = True
+        prompt.placeholder = "sudo password (input hidden)"
+        prompt.value = ""
+        prompt.focus()
+
     def finish_approval(self, busy: bool, has_completed: bool) -> None:
         prompt = self.query_one("#prompt", Input)
+        prompt.password = False
         prompt.placeholder = RUNNING_PROMPT_PLACEHOLDER if busy else (
             DONE_PROMPT_PLACEHOLDER if has_completed else INITIAL_PROMPT_PLACEHOLDER
         )

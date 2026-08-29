@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from openterm.mcp.utils.cancellation import is_tool_cancelled
+from openterm.mcp import sudo_auth
 from openterm.mcp.server import MCPServer
 from openterm.mcp.tools import bash, exec_python
 
@@ -74,7 +75,7 @@ class _ApprovalTools:
     def __init__(self):
         self.decisions = []
 
-    def gated(self, _approve_privileged=None):
+    def gated(self, _approve_privileged=None, **_kwargs):
         decision = _approve_privileged({
             "approval_kind": "privileged_whitelist",
             "binary": "/usr/bin/apt",
@@ -82,6 +83,16 @@ class _ApprovalTools:
         })
         self.decisions.append(decision)
         return {"ok": decision}
+
+
+class _AuthTools:
+    def __init__(self):
+        self.results = []
+
+    def secured(self, _session_token=None, **_kwargs):
+        token = _session_token() if callable(_session_token) else _session_token
+        self.results.append(token)
+        return {"ok": bool(token)}
 
 
 class _GatedBashTools:
@@ -110,6 +121,10 @@ class _CaptureWriter:
 
 
 class MCPServerTests(unittest.TestCase):
+    def setUp(self):
+        # The sudo password cache is process-global; keep tests independent.
+        sudo_auth.clear_session_token()
+
     @staticmethod
     async def _wait_thread_event(event, timeout=2):
         deadline = time.monotonic() + timeout
@@ -141,6 +156,15 @@ class MCPServerTests(unittest.TestCase):
             "id": 7,
             "method": "approval/respond",
             "params": {"approval_id": approval_id, "approved": approved},
+        })
+
+    @staticmethod
+    def _auth_respond_request(auth_id, password):
+        return json.dumps({
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "auth/respond",
+            "params": {"auth_id": auth_id, "password": password},
         })
 
     def test_broken_client_closes_streaming_generator(self):
@@ -394,6 +418,186 @@ class MCPServerTests(unittest.TestCase):
             self.assertEqual(server._pending_approvals, {})
 
         asyncio.run(run())
+
+    def test_auth_request_frame_is_sent_and_respond_resolves_it(self):
+        async def run():
+            tools = _AuthTools()
+            server = MCPServer(tools)
+            task, reader, writer = await self._start_tool_call(
+                server, tools, "secured", {}, 1, inject_approval=True,
+            )
+            self.assertTrue(await self._wait_for_frames(writer))
+            frame = json.loads(writer.frames[0].decode())
+            self.assertEqual(frame["id"], 1)
+            self.assertEqual(frame["auth_request"]["kind"], "sudo_password")
+            auth_id = frame["auth_request"]["auth_id"]
+
+            respond_writer = _CaptureWriter()
+            with patch("openterm.mcp.server.sudo_auth.register_session", return_value="tok") as register:
+                await server.handle_request(
+                    self._auth_respond_request(auth_id, "sekret"),
+                    respond_writer,
+                )
+                self.assertTrue(await asyncio.wait_for(task, 2))
+            register.assert_called_once_with("sekret")
+            self.assertEqual(tools.results[0], "tok")
+            result_frame = json.loads(writer.frames[-1].decode())
+            self.assertEqual(result_frame["result"], {"ok": True})
+            self.assertEqual(server._pending_auths, {})
+            reader.close()
+
+        asyncio.run(run())
+
+    def test_auth_respond_password_never_appears_in_written_frames(self):
+        async def run():
+            tools = _AuthTools()
+            server = MCPServer(tools)
+            task, reader, writer = await self._start_tool_call(
+                server, tools, "secured", {}, 1, inject_approval=True,
+            )
+            self.assertTrue(await self._wait_for_frames(writer))
+            auth_id = json.loads(writer.frames[0].decode())["auth_request"]["auth_id"]
+
+            with patch("openterm.mcp.server.sudo_auth.register_session", return_value="tok"):
+                await server.handle_request(
+                    self._auth_respond_request(auth_id, "sekret"),
+                    _CaptureWriter(),
+                )
+                self.assertTrue(await asyncio.wait_for(task, 2))
+            reader.close()
+            raw = b"".join(writer.frames).decode()
+            self.assertNotIn("sekret", raw)
+
+        asyncio.run(run())
+
+    def test_auth_respond_invalid_password_fails_the_tool(self):
+        async def run():
+            tools = _AuthTools()
+            server = MCPServer(tools)
+            task, reader, writer = await self._start_tool_call(
+                server, tools, "secured", {}, 1, inject_approval=True,
+            )
+            self.assertTrue(await self._wait_for_frames(writer))
+            auth_id = json.loads(writer.frames[0].decode())["auth_request"]["auth_id"]
+
+            with patch("openterm.mcp.server.sudo_auth.register_session", return_value=None):
+                await server.handle_request(
+                    self._auth_respond_request(auth_id, "wrong"),
+                    _CaptureWriter(),
+                )
+                self.assertTrue(await asyncio.wait_for(task, 2))
+            self.assertIsNone(tools.results[0])
+            result_frame = json.loads(writer.frames[-1].decode())
+            self.assertFalse(result_frame["result"]["ok"])
+            reader.close()
+
+        asyncio.run(run())
+
+    def test_disconnect_releases_pending_auth_without_password(self):
+        async def run():
+            tools = _AuthTools()
+            server = MCPServer(tools)
+            task, reader, writer = await self._start_tool_call(
+                server, tools, "secured", {}, 1, inject_approval=True,
+            )
+            self.assertTrue(await self._wait_for_frames(writer))
+            reader.close()
+            self.assertFalse(await asyncio.wait_for(task, 2))
+            self.assertIsNone(tools.results[0])
+            self.assertEqual(server._pending_auths, {})
+
+        asyncio.run(run())
+
+    def test_notification_tool_call_auto_denies_auth_request(self):
+        async def run():
+            tools = _AuthTools()
+            server = MCPServer(tools)
+            writer = _CaptureWriter()
+            task = asyncio.create_task(server._run_tool_call(
+                getattr(tools, "secured"), {}, None, writer, reader=None,
+                inject_approval=True, emit=False,
+            ))
+            self.assertTrue(await asyncio.wait_for(task, 2))
+            self.assertIsNone(tools.results[0])
+            self.assertEqual(writer.frames, [])
+            self.assertEqual(server._pending_auths, {})
+
+        asyncio.run(run())
+
+    def test_auth_status_reports_wrapper_and_ticket_state(self):
+        async def run():
+            server = MCPServer(_Tools())
+            writer = _CaptureWriter()
+            with patch("openterm.mcp.server.sudo_auth.wrapper_installed", return_value=True), \
+                 patch("openterm.mcp.server.sudo_auth.broker_available", return_value=True), \
+                 patch("openterm.mcp.server.sudo_auth.has_valid_session_token", return_value=False):
+                await server.handle_request(
+                    json.dumps({"jsonrpc": "2.0", "id": 3, "method": "auth/status"}),
+                    writer,
+                )
+            frame = json.loads(writer.frames[0].decode())
+            self.assertEqual(frame["result"], {
+                "ok": True,
+                "wrapper_installed": True,
+                "broker_available": True,
+                "authenticated": False,
+            })
+
+        asyncio.run(run())
+
+    def test_auth_sudo_password_method_validates_once(self):
+        async def run():
+            server = MCPServer(_Tools())
+            writer = _CaptureWriter()
+            with patch("openterm.mcp.server.sudo_auth.register_session", return_value="tok"):
+                await server.handle_request(
+                    json.dumps({
+                        "jsonrpc": "2.0",
+                        "id": 3,
+                        "method": "auth/sudo_password",
+                        "params": {"password": "sekret"},
+                    }),
+                    writer,
+                )
+            frame = json.loads(writer.frames[0].decode())
+            self.assertEqual(frame["result"], {"ok": True})
+            self.assertTrue(sudo_auth.has_session_token())
+            sudo_auth.clear_session_token()
+
+            denied_writer = _CaptureWriter()
+            with patch("openterm.mcp.server.sudo_auth.register_session", return_value=None):
+                await server.handle_request(
+                    json.dumps({
+                        "jsonrpc": "2.0",
+                        "id": 4,
+                        "method": "auth/sudo_password",
+                        "params": {"password": "bad"},
+                    }),
+                    denied_writer,
+                )
+            denied = json.loads(denied_writer.frames[0].decode())
+            self.assertFalse(denied["result"]["ok"])
+
+        asyncio.run(run())
+
+    def test_redaction_scrubs_password_fields_from_raw_frames(self):
+        from openterm.mcp.server import _redact_secrets
+
+        raw = '{"jsonrpc":"2.0","id":1,"method":"auth/respond","params":{"auth_id":"1:auth:0","password":"sekret"}}'
+        redacted = _redact_secrets(raw)
+        self.assertNotIn("sekret", redacted)
+        self.assertIn('"password":"***"', redacted)
+        self.assertIn('"auth_id":"1:auth:0"', redacted)
+
+    def test_redaction_handles_escaped_and_long_passwords(self):
+        from openterm.mcp.server import _redact_secrets
+
+        password = 'a"' + ("secret" * 30)
+        raw = json.dumps({"password": password})
+        redacted = _redact_secrets(raw)
+        self.assertNotIn(password, redacted)
+        self.assertNotIn("secret", redacted)
+        self.assertIn('"password": "***"', redacted)
 
     def test_unknown_approval_respond_reports_unresolved(self):
         from openterm.mcp.tools import mcp

@@ -1,8 +1,11 @@
 import unittest
+import json
 import os
 import pwd
+import socket
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 from unittest.mock import patch
 
@@ -13,7 +16,7 @@ from openterm.mcp.vars import OUTPUT_LINE_LIMIT
 POSTINSTALL_SCRIPT = Path(__file__).resolve().parent.parent / "packaging" / "postinstall.sh"
 
 
-class BashParsingTests(unittest.TestCase):
+class BashExecutionTests(unittest.TestCase):
     def setUp(self):
         self.unrestricted_patch = patch("openterm.mcp.tools._is_unrestricted_mode", return_value=False)
         self.unrestricted_patch.start()
@@ -31,7 +34,7 @@ class BashParsingTests(unittest.TestCase):
         result = bash("definitely_missing_openterm_command")
 
         self.assertFalse(result["ok"], result)
-        self.assertIn("Command not found", result["error"])
+        self.assertIn("command not found", result["error"].lower())
 
     def test_nonzero_without_stdout_still_fails(self):
         result = bash("false")
@@ -58,7 +61,7 @@ class BashParsingTests(unittest.TestCase):
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["results"][0]["stdout"], "a|b")
 
-    def test_sudo_returns_approval_required_even_when_binary_is_whitelisted(self):
+    def test_restricted_sudo_requires_approval_even_when_binary_is_whitelisted(self):
         with tempfile.TemporaryDirectory() as tmp:
             wrapper = Path(tmp) / "openterm-privileged"
             wrapper.write_text("#!/bin/sh\n", encoding="utf-8")
@@ -70,9 +73,11 @@ class BashParsingTests(unittest.TestCase):
 
             with patch.dict(os.environ, {"OPENTERM_PRIVILEGED_WHITELIST": str(whitelist)}), \
                  patch.object(bash_utils, "PRIVILEGED_WRAPPER", str(wrapper)):
-                parsed, err = bash_utils._parse_command_part("sudo test -d /", [])
+                prepared, err = bash_utils._prepare_shell_command(
+                    "sudo test -d /", always_approve=True,
+                )
 
-        self.assertIsNone(parsed)
+        self.assertIsNone(prepared)
         self.assertFalse(err["ok"], err)
         self.assertTrue(err["approval_required"], err)
         self.assertEqual(err["approval_kind"], "privileged_whitelist")
@@ -82,7 +87,7 @@ class BashParsingTests(unittest.TestCase):
         calls = []
         approvals = []
 
-        def fake_stream_command(argv, cmd_str, results, suppress_stderr):
+        def fake_stream_command(argv, cmd_str, results, suppress_stderr, session_token=None):
             calls.append(argv)
             return {"command": cmd_str, "stdout": "ok", "stderr": "", "returncode": 0}, None
             yield
@@ -100,9 +105,11 @@ class BashParsingTests(unittest.TestCase):
             with patch.dict(os.environ, {"OPENTERM_PRIVILEGED_WHITELIST": str(whitelist)}), \
                  patch.object(bash_utils, "PRIVILEGED_WRAPPER", str(wrapper)), \
                  patch.object(bash_utils, "_stream_command", fake_stream_command):
-                result = bash_utils._run_restricted(
+                result = bash_utils._run_shell(
                     "sudo test -d /",
                     approve_privileged=approve,
+                    session_token="token",
+                    always_approve=True,
                 )
                 whitelist_lines = whitelist.read_text(encoding="utf-8").splitlines()
 
@@ -111,7 +118,7 @@ class BashParsingTests(unittest.TestCase):
         self.assertEqual(approvals[0]["binary"], resolved_test)
         self.assertEqual(
             calls[0],
-            ["sudo", "--non-interactive", str(wrapper), resolved_test, "-d", "/"],
+            ["/bin/bash", "-c", f"sudo -n {wrapper} {resolved_test} -d /"],
         )
         self.assertIn(resolved_test, whitelist_lines)
 
@@ -123,9 +130,10 @@ class BashParsingTests(unittest.TestCase):
 
             with patch.dict(os.environ, {"OPENTERM_PRIVILEGED_WHITELIST": str(whitelist)}), \
                  patch.object(bash_utils, "PRIVILEGED_WRAPPER", str(wrapper)):
-                result = bash_utils._run_restricted(
+                result = bash_utils._run_shell(
                     "sudo test -d /",
                     approve_privileged=lambda info: False,
+                    always_approve=True,
                 )
                 whitelist_exists = whitelist.exists()
 
@@ -137,7 +145,7 @@ class BashParsingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, \
              patch.dict(os.environ, {"OPENTERM_PRIVILEGED_WHITELIST": str(Path(tmp) / "privileged_whitelist")}), \
              patch.object(bash_utils.os.path, "isfile", return_value=False):
-            result = bash_utils._run_restricted("sudo test -d /")
+            result = bash_utils._run_shell("sudo test -d /", always_approve=True)
 
         self.assertFalse(result["ok"], result)
         self.assertIn("privileged integration is not installed", result["error"])
@@ -146,30 +154,30 @@ class BashParsingTests(unittest.TestCase):
     def test_sudo_list_invocation_returns_guidance_without_executing(self):
         calls = []
 
-        def fake_stream_command(argv, cmd_str, results, suppress_stderr):
+        def fake_stream_command(argv, cmd_str, results, suppress_stderr, session_token=None):
             calls.append(cmd_str)
             return {"command": cmd_str, "stdout": "ok", "stderr": "", "returncode": 0}, None
             yield
 
         with patch.object(bash_utils, "_stream_command", fake_stream_command):
-            result = bash_utils._run_restricted("sudo -l")
+            result = bash_utils._run_shell("sudo -l", always_approve=True)
 
         self.assertTrue(result["ok"], result)
-        self.assertIn("passwordless", result["results"][0]["stdout"])
+        self.assertIn("authenticates sudo once per session", result["results"][0]["stdout"])
         self.assertNotIn(str(bash_utils.PRIVILEGED_WRAPPER), str(result))
         self.assertEqual(calls, [])
 
     def test_unrestricted_sudo_list_invocation_returns_guidance(self):
         calls = []
 
-        def fake_stream_command(argv, cmd_str, results, suppress_stderr=False):
+        def fake_stream_command(argv, cmd_str, results, suppress_stderr=False, session_token=None):
             calls.append(cmd_str)
             return {"command": cmd_str, "stdout": "ok", "stderr": "", "returncode": 0}, None
             yield
 
         with patch("openterm.mcp.tools._is_unrestricted_mode", return_value=True), \
              patch.object(bash_utils, "_stream_command", fake_stream_command):
-            result = bash_utils._run_unrestricted(
+            result = bash_utils._run_shell(
                 'whoami; echo "---"; sudo --list 2>&1 | head'
             )
 
@@ -187,7 +195,7 @@ class BashParsingTests(unittest.TestCase):
     def test_sudo_boolean_options_are_stripped_and_routed(self):
         calls = []
 
-        def fake_stream_command(argv, cmd_str, results, suppress_stderr):
+        def fake_stream_command(argv, cmd_str, results, suppress_stderr, session_token=None):
             calls.append(argv)
             return {"command": cmd_str, "stdout": "ok", "stderr": "", "returncode": 0}, None
             yield
@@ -204,16 +212,18 @@ class BashParsingTests(unittest.TestCase):
             with patch.dict(os.environ, {"OPENTERM_PRIVILEGED_WHITELIST": str(whitelist)}), \
                  patch.object(bash_utils, "PRIVILEGED_WRAPPER", str(wrapper)), \
                  patch.object(bash_utils, "_stream_command", fake_stream_command):
-                result = bash_utils._run_restricted(
+                result = bash_utils._run_shell(
                     "sudo -n -k test -d /",
                     approve_privileged=approve,
+                    session_token="token",
+                    always_approve=True,
                 )
 
         resolved_test = bash_utils.shutil.which("test")
         self.assertTrue(result["ok"], result)
         self.assertEqual(
             calls[0],
-            ["sudo", "--non-interactive", str(wrapper), resolved_test, "-d", "/"],
+            ["/bin/bash", "-c", f"sudo -n {wrapper} {resolved_test} -d /"],
         )
 
     def test_sudo_target_option_is_rejected_without_approval(self):
@@ -222,9 +232,10 @@ class BashParsingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             whitelist = Path(tmp) / "privileged_whitelist"
             with patch.dict(os.environ, {"OPENTERM_PRIVILEGED_WHITELIST": str(whitelist)}):
-                result = bash_utils._run_restricted(
+                result = bash_utils._run_shell(
                     "sudo -u root test -d /",
                     approve_privileged=lambda info: approvals.append(info) or True,
+                    always_approve=True,
                 )
 
         self.assertFalse(result["ok"], result)
@@ -235,9 +246,10 @@ class BashParsingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             whitelist = Path(tmp) / "privileged_whitelist"
             with patch.dict(os.environ, {"OPENTERM_PRIVILEGED_WHITELIST": str(whitelist)}):
-                result = bash_utils._run_restricted(
+                result = bash_utils._run_shell(
                     "sudo -p myprompt test -d /",
                     approve_privileged=lambda info: True,
+                    always_approve=True,
                 )
 
         self.assertFalse(result["ok"], result)
@@ -245,18 +257,18 @@ class BashParsingTests(unittest.TestCase):
 
     def test_unrestricted_sudo_flag_form_routes_through_wrapper(self):
         with patch.object(bash_utils.get_config(), "is_privileged_binary_allowed", return_value=True):
-            prepared, err = bash_utils._prepare_unrestricted("sudo -n snap install spotify")
+            prepared, err = bash_utils._prepare_shell_command("sudo -n snap install spotify")
 
         resolved_snap = bash_utils.shutil.which("snap")
         self.assertIsNone(err)
         self.assertEqual(
             prepared,
-            f"sudo --non-interactive {bash_utils.PRIVILEGED_WRAPPER} {resolved_snap} install spotify",
+            f"sudo -n {bash_utils.PRIVILEGED_WRAPPER} {resolved_snap} install spotify",
         )
 
     def test_unrestricted_sudo_target_option_fails_without_rewrite(self):
         with patch.object(bash_utils.get_config(), "is_privileged_binary_allowed", return_value=True):
-            prepared, err = bash_utils._prepare_unrestricted("sudo -u root apt install curl")
+            prepared, err = bash_utils._prepare_shell_command("sudo -u root apt install curl")
 
         self.assertIsNone(prepared)
         self.assertFalse(err["ok"], err)
@@ -265,7 +277,7 @@ class BashParsingTests(unittest.TestCase):
 
     def test_unrestricted_sudo_unknown_option_fails_without_rewrite(self):
         with patch.object(bash_utils.get_config(), "is_privileged_binary_allowed", return_value=True):
-            prepared, err = bash_utils._prepare_unrestricted("sudo -p x ls /")
+            prepared, err = bash_utils._prepare_shell_command("sudo -p x ls /")
 
         self.assertIsNone(prepared)
         self.assertFalse(err["ok"], err)
@@ -276,23 +288,23 @@ class BashParsingTests(unittest.TestCase):
     def test_privileged_snap_and_apt_stream_with_pty(self):
         wrapper = bash_utils.PRIVILEGED_WRAPPER
 
-        self.assertTrue(_should_stream_with_pty(["sudo", "--non-interactive", wrapper, "/usr/bin/snap", "install", "spotify"]))
-        self.assertTrue(_should_stream_with_pty(["sudo", "--non-interactive", wrapper, "/usr/bin/apt", "install", "spotify"]))
-        self.assertTrue(_should_stream_with_pty(["sudo", "--non-interactive", wrapper, "/usr/bin/apt-get", "install", "spotify"]))
+        self.assertTrue(_should_stream_with_pty(["sudo", "-n", wrapper, "/usr/bin/snap", "install", "spotify"]))
+        self.assertTrue(_should_stream_with_pty(["sudo", "-n", wrapper, "/usr/bin/apt", "install", "spotify"]))
+        self.assertTrue(_should_stream_with_pty(["sudo", "-n", wrapper, "/usr/bin/apt-get", "install", "spotify"]))
         self.assertFalse(_should_stream_with_pty(["/usr/bin/snap", "run", "spotify"]))
-        self.assertFalse(_should_stream_with_pty(["sudo", "--non-interactive", wrapper, "/usr/bin/chmod", "666", "file"]))
+        self.assertFalse(_should_stream_with_pty(["sudo", "-n", wrapper, "/usr/bin/chmod", "666", "file"]))
 
     def test_unrestricted_privileged_apt_command_requires_pty(self):
         wrapper = bash_utils.PRIVILEGED_WRAPPER
 
         self.assertTrue(
             bash_utils._command_requires_pty_streaming(
-                f"sudo --non-interactive {wrapper} /usr/bin/apt install spotify"
+                f"sudo -n {wrapper} /usr/bin/apt install spotify"
             )
         )
         self.assertFalse(
             bash_utils._command_requires_pty_streaming(
-                f"sudo --non-interactive {wrapper} /usr/bin/chmod 666 file"
+                f"sudo -n {wrapper} /usr/bin/chmod 666 file"
             )
         )
 
@@ -312,13 +324,13 @@ class BashParsingTests(unittest.TestCase):
         with patch("openterm.mcp.tools._is_unrestricted_mode", return_value=True), \
              patch.object(bash_utils.get_config(), "is_privileged_binary_allowed", return_value=True), \
              patch.object(bash_utils, "_stream_command_with_pty", fake_stream_command_with_pty):
-            frames = list(bash("sudo apt install spotify", stream=True))
+            frames = list(bash("sudo apt install spotify", stream=True, _session_token="token"))
 
         resolved_apt = bash_utils.shutil.which("apt")
         self.assertEqual(len(calls), 1)
         self.assertEqual(
             calls[0][0],
-            ["/bin/bash", "-c", f"sudo --non-interactive {bash_utils.PRIVILEGED_WRAPPER} {resolved_apt} install spotify"],
+            ["/bin/bash", "-c", f"sudo -n {bash_utils.PRIVILEGED_WRAPPER} {resolved_apt} install spotify"],
         )
         self.assertEqual(calls[0][1], "sudo apt install spotify")
         self.assertEqual(frames[0]["line"], "pty output")
@@ -327,7 +339,7 @@ class BashParsingTests(unittest.TestCase):
     def test_unrestricted_sudo_result_echoes_original_command(self):
         captured = {}
 
-        def fake_stream_command(argv, cmd_str, results, suppress_stderr=False):
+        def fake_stream_command(argv, cmd_str, results, suppress_stderr=False, session_token=None):
             captured["argv"] = argv
             captured["cmd_str"] = cmd_str
             return {"command": cmd_str, "stdout": "ok", "stderr": "", "returncode": 0}, None
@@ -336,7 +348,7 @@ class BashParsingTests(unittest.TestCase):
         with patch("openterm.mcp.tools._is_unrestricted_mode", return_value=True), \
              patch.object(bash_utils.get_config(), "is_privileged_binary_allowed", return_value=True), \
              patch.object(bash_utils, "_stream_command", fake_stream_command):
-            result = bash_utils._run_unrestricted("sudo test -d /")
+            result = bash_utils._run_shell("sudo test -d /", session_token="token")
 
         resolved_test = bash_utils.shutil.which("test")
         self.assertTrue(result["ok"], result)
@@ -345,7 +357,7 @@ class BashParsingTests(unittest.TestCase):
         self.assertEqual(captured["argv"], [
             "/bin/bash",
             "-c",
-            f"sudo --non-interactive {bash_utils.PRIVILEGED_WRAPPER} {resolved_test} -d /",
+            f"sudo -n {bash_utils.PRIVILEGED_WRAPPER} {resolved_test} -d /",
         ])
         self.assertEqual(result["command"], "sudo test -d /")
         self.assertEqual(result["results"][0]["command"], "sudo test -d /")
@@ -356,39 +368,56 @@ class BashParsingTests(unittest.TestCase):
         self.assertTrue(frames[-1]["ok"], frames)
         self.assertEqual(frames[-1]["results"][0]["stdout"], "hello")
 
-    def test_chain_sudo_denial_preserves_earlier_results(self):
+    def test_restricted_sudo_denial_happens_before_shell_execution(self):
         with patch.object(bash_utils.os.path, "isfile", return_value=True):
             result = bash("printf first && sudo echo second")
 
         self.assertFalse(result["ok"], result)
         self.assertIn("not approved", result["error"])
-        self.assertNotIn("retry_command", result)
-        self.assertEqual(result["results"][0]["stdout"], "first")
+        self.assertEqual(result["results"], [])
 
-    def test_chain_sudo_approval_executes_remaining_links(self):
+    def test_restricted_sudo_approval_happens_once_per_bash_call(self):
         calls = []
+        approvals = []
 
-        def fake_stream_command(argv, cmd_str, results, suppress_stderr):
-            calls.append(cmd_str)
+        def fake_stream_command(argv, cmd_str, results, suppress_stderr, session_token=None):
+            calls.append((argv, cmd_str, session_token))
             return {"command": cmd_str, "stdout": "x", "stderr": "", "returncode": 0}, None
             yield
 
         with patch.object(bash_utils.os.path, "isfile", return_value=True), \
              patch.object(bash_utils, "_stream_command", fake_stream_command):
-            result = bash_utils._run_restricted(
-                "printf first && sudo echo second",
-                approve_privileged=lambda info: True,
+            result = bash_utils._run_shell(
+                "sudo echo first && sudo echo second",
+                approve_privileged=lambda info: approvals.append(info) or True,
+                session_token="token",
+                always_approve=True,
             )
 
         self.assertTrue(result["ok"], result)
-        self.assertEqual(calls, ["printf first", "sudo echo second"])
+        resolved_echo = bash_utils.shutil.which("echo")
+        self.assertEqual(len(approvals), 1)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(
+            calls[0],
+            (
+                [
+                    "/bin/bash",
+                    "-c",
+                    f"sudo -n {bash_utils.PRIVILEGED_WRAPPER} {resolved_echo} first "
+                    f"&& sudo -n {bash_utils.PRIVILEGED_WRAPPER} {resolved_echo} second",
+                ],
+                "sudo echo first && sudo echo second",
+                "token",
+            ),
+        )
 
-    def test_expands_home_variable_without_shell(self):
+    def test_shell_expands_home_variable(self):
         result = bash("test -d $HOME")
 
         self.assertTrue(result["ok"], result)
 
-    def test_expands_tilde_without_shell(self):
+    def test_shell_expands_tilde(self):
         result = bash("test -d ~")
 
         self.assertTrue(result["ok"], result)
@@ -405,17 +434,20 @@ class BashParsingTests(unittest.TestCase):
         self.assertFalse(result["ok"], result)
         self.assertEqual(result["results"][0]["stderr"], "")
 
-    def test_chained_commands_still_work(self):
+    def test_shell_chaining_still_works(self):
         result = bash("test -d $HOME && test -d ~")
 
         self.assertTrue(result["ok"], result)
-        self.assertEqual(len(result["results"]), 2)
+        self.assertEqual(len(result["results"]), 1)
 
-    def test_rejects_other_redirection(self):
-        result = bash("echo hello >/tmp/openterm-test")
+    def test_restricted_mode_accepts_shell_redirection(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_path = Path(tmp) / "output.txt"
+            result = bash(f"printf hello > {output_path}")
+            content = output_path.read_text(encoding="utf-8")
 
-        self.assertFalse(result["ok"], result)
-        self.assertIn("Forbidden character", result["error"])
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(content, "hello")
 
     def test_supports_stderr_suppression_in_pipeline(self):
         result = bash("ls /definitely_missing_openterm_path 2>/dev/null | wc -l")
@@ -558,8 +590,8 @@ class BashParsingTests(unittest.TestCase):
 class PrivilegedWrapperScriptTests(unittest.TestCase):
     """Exercise the real wrapper script from packaging/postinstall.sh.
 
-    Runs without root: the wrapper only needs SUDO_USER and a readable
-    whitelist, both provided here through the environment.
+    Runs without root using a local fake broker; the real wrapper still has
+    to present a valid session token before it reads the whitelist.
     """
 
     @classmethod
@@ -574,7 +606,12 @@ class PrivilegedWrapperScriptTests(unittest.TestCase):
 
     def _install_wrapper(self, tmp: Path) -> Path:
         wrapper = tmp / "openterm-privileged"
-        wrapper.write_text(self.wrapper_source, encoding="utf-8")
+        broker_socket = tmp / "broker.sock"
+        source = self.wrapper_source.replace(
+            'BROKER_SOCKET = "/run/openterm/broker.sock"',
+            f'BROKER_SOCKET = {str(broker_socket)!r}',
+        )
+        wrapper.write_text(source, encoding="utf-8")
         wrapper.chmod(0o755)
         return wrapper
 
@@ -582,9 +619,33 @@ class PrivilegedWrapperScriptTests(unittest.TestCase):
         env = dict(os.environ)
         env["SUDO_USER"] = pwd.getpwuid(os.getuid()).pw_name
         env["OPENTERM_PRIVILEGED_WHITELIST"] = str(whitelist)
-        return subprocess.run(
-            [str(wrapper), *argv], env=env, capture_output=True, text=True
-        )
+        env["OPENTERM_SESSION_TOKEN"] = "test-token"
+        broker_socket = wrapper.parent / "broker.sock"
+        broker = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        broker.bind(str(broker_socket))
+        broker.listen(1)
+
+        def serve_once():
+            try:
+                conn, _ = broker.accept()
+                with conn:
+                    conn.recv(4096)
+                    conn.sendall((json.dumps({
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "result": {"ok": True, "valid": True},
+                    }) + "\n").encode("utf-8"))
+            finally:
+                broker.close()
+
+        thread = threading.Thread(target=serve_once)
+        thread.start()
+        try:
+            return subprocess.run(
+                [str(wrapper), *argv], env=env, capture_output=True, text=True
+            )
+        finally:
+            thread.join(timeout=5)
 
     def test_symlinked_multiplexer_keeps_invoked_name(self):
         with tempfile.TemporaryDirectory() as tmp:

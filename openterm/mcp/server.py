@@ -6,6 +6,7 @@ and shuts down after a period of inactivity.
 """
 import logging
 import os
+import re
 import time
 import threading
 import asyncio
@@ -19,9 +20,19 @@ import types
 
 from openterm.mcp.vars import INACTIVITY_TIMEOUT_SECONDS
 from openterm.mcp.config import get_config
+from openterm.mcp import sudo_auth
 from openterm.mcp.utils.cancellation import bind_tool_cancellation
 
 logger = logging.getLogger(__name__)
+
+_SECRET_REDACTION_RE = re.compile(
+    r'("(?:password|token)"\s*:\s*)"(?:\\.|[^"\\])*"'
+)
+
+
+def _redact_secrets(text: str) -> str:
+    """Scrub secret fields before raw protocol text reaches any log."""
+    return _SECRET_REDACTION_RE.sub(r'\1"***"', text)
 
 
 class _PendingApproval:
@@ -31,6 +42,14 @@ class _PendingApproval:
         self.info = info
         self.event = threading.Event()
         self.approved = False
+
+
+class _PendingAuth:
+    """Sudo-authentication state held while a tool call waits for a password."""
+
+    def __init__(self):
+        self.event = threading.Event()
+        self.password: str | None = None
 
 def get_socket_path() -> Path:
     """Returns the UDS path based on the current user (using UID for robustness)."""
@@ -47,6 +66,7 @@ class MCPServer:
         self.last_activity = time.time()
         self._approvals_lock = threading.Lock()
         self._pending_approvals = {}
+        self._pending_auths = {}
         self._approval_seq = itertools.count()
 
     def update_activity(self):
@@ -54,15 +74,27 @@ class MCPServer:
         self.last_activity = time.time()
 
     def _resolve_approval(self, approval_id, approved):
-        """Resolve a pending approval; whitelist the binary on approval."""
+        """Resolve a pending approval; whitelist its command binaries."""
         with self._approvals_lock:
             pending = self._pending_approvals.pop(approval_id, None)
         if pending is None:
             return False
-        binary = pending.info.get("binary")
-        if approved and binary:
-            get_config().add_privileged_binary(binary)
+        binaries = pending.info.get("binaries") or [pending.info.get("binary")]
+        if approved:
+            for binary in binaries:
+                if binary:
+                    get_config().add_privileged_binary(binary)
         pending.approved = bool(approved)
+        pending.event.set()
+        return True
+
+    def _resolve_auth(self, auth_id, password):
+        """Resolve a pending sudo-auth request with a client password."""
+        with self._approvals_lock:
+            pending = self._pending_auths.pop(auth_id, None)
+        if pending is None:
+            return False
+        pending.password = password
         pending.event.set()
         return True
     
@@ -111,11 +143,13 @@ class MCPServer:
 
         ``emit=False`` marks a JSON-RPC notification call: the tool still
         runs to completion, but no frames are written and privileged
-        approvals auto-deny because no client is awaiting an answer.
+        approvals and sudo-auth requests auto-deny because no client is
+        awaiting an answer.
         """
         events = queue.Queue()
         cancel_event = threading.Event()
         local_approvals = []
+        local_auths = []
 
         def request_approval(info):
             """Block the tool worker until the client answers the approval."""
@@ -131,9 +165,48 @@ class MCPServer:
             pending.event.wait()
             return pending.approved
 
+        def request_sudo_password():
+            """Block the tool worker until the client returns a password.
+
+            The password is validated once against sudo, held in memory for
+            the session, and never returned to the model.
+            """
+            if not emit:
+                return None
+            with self._approvals_lock:
+                seq = next(self._approval_seq)
+                auth_id = f"{request_id}:auth:{seq}"
+                pending = _PendingAuth()
+                self._pending_auths[auth_id] = pending
+            local_auths.append(auth_id)
+            events.put(("auth", auth_id))
+            pending.event.wait()
+            return pending.password
+
+        def obtain_session_token():
+            """Return the broker session token, registering if needed.
+
+            A cached token is reused for every wrapper invocation;
+            otherwise one password is collected out-of-band, registered
+            with the broker (which verifies it via sudo/PAM), and the
+            returned token is held in memory for the session.
+            """
+            if sudo_auth.has_session_token() and sudo_auth.has_valid_session_token():
+                return sudo_auth.session_token()
+            sudo_auth.clear_session_token()
+            password = request_sudo_password()
+            if not password:
+                return None
+            token = sudo_auth.register_session(password)
+            if not token:
+                return None
+            sudo_auth.set_session_token(token)
+            return token
+
         call_arguments = dict(arguments)
         if inject_approval:
             call_arguments["_approve_privileged"] = request_approval
+            call_arguments["_session_token"] = obtain_session_token
         worker = self._start_tool_worker(tool_func, call_arguments, events, cancel_event)
         worker_finished = False
         disconnect_task = (
@@ -144,6 +217,8 @@ class MCPServer:
         def release_pending_approvals():
             for approval_id in local_approvals:
                 self._resolve_approval(approval_id, False)
+            for auth_id in local_auths:
+                self._resolve_auth(auth_id, None)
 
         def send(obj: dict):
             writer.write((json.dumps(obj) + "\n").encode("utf-8"))
@@ -175,7 +250,21 @@ class MCPServer:
                             "approval_id": approval_id,
                             "approval_kind": info.get("approval_kind", "privileged_whitelist"),
                             "binary": info.get("binary", ""),
+                            "binaries": info.get("binaries", []),
                             "command": info.get("command", ""),
+                        },
+                    })
+                    await writer.drain()
+                    continue
+
+                if event_type == "auth":
+                    auth_id = value
+                    send({
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "auth_request": {
+                            "auth_id": auth_id,
+                            "kind": "sudo_password",
                         },
                     })
                     await writer.drain()
@@ -252,9 +341,12 @@ class MCPServer:
 
         A held bash tool call can also emit an approval frame:
           {"jsonrpc":"2.0","id":N,"approval_request":{"approval_id":...,"binary":...}}
-        resolved by a separate `approval/respond` request. The approval
-        exchange is never returned to the model as a tool result.
-
+        resolved by a separate `approval/respond` request, or a sudo-auth
+        frame:
+          {"jsonrpc":"2.0","id":N,"auth_request":{"auth_id":...,"kind":"sudo_password"}}
+        resolved by a separate `auth/respond` request carrying the password.
+        Approval and auth exchanges are never returned to the model as tool
+        results, and passwords never appear in logs.
         Non-streaming tools send a single result frame as before.
 
         Frames without an "id" are JSON-RPC 2.0 notifications: they are
@@ -352,6 +444,52 @@ class MCPServer:
                         "result": {"resolved": resolved},
                     })
 
+            elif method == "auth/status":
+                if has_response_id:
+                    send({
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "result": {
+                            "ok": True,
+                            "wrapper_installed": sudo_auth.wrapper_installed(),
+                            "broker_available": sudo_auth.broker_available(),
+                            "authenticated": sudo_auth.has_valid_session_token(),
+                        },
+                    })
+
+            elif method == "auth/sudo_password":
+                # The password is registered with the root-side broker,
+                # which verifies it via sudo/PAM and issues the session
+                # token held here. Never logged or echoed in any frame.
+                password = str(params.get("password") or "")
+                token = (
+                    sudo_auth.register_session(password) if password else None
+                )
+                ok = bool(token)
+                if ok:
+                    sudo_auth.set_session_token(token)
+                if has_response_id:
+                    send({
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "result": (
+                            {"ok": True}
+                            if ok
+                            else {"ok": False, "error": "sudo authentication failed"}
+                        ),
+                    })
+
+            elif method == "auth/respond":
+                auth_id = params.get("auth_id")
+                password = params.get("password")
+                resolved = self._resolve_auth(auth_id, password if password else None)
+                if has_response_id:
+                    send({
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "result": {"resolved": resolved},
+                    })
+
             else:
                 if has_response_id:
                     send({
@@ -417,8 +555,9 @@ def run_server():
         server_socket.bind(str(socket_path))
         server_socket.listen(5)
         
-        # Make socket world-readable (but not world-writable)
-        os.chmod(socket_path, 0o666)
+        # Restrict the socket to the owning user: sudo passwords traverse
+        # this socket, so no other local account may connect to it.
+        os.chmod(socket_path, 0o600)
         
         logger.debug("Socket created at %s", socket_path)
 
@@ -433,7 +572,9 @@ def run_server():
                     return
                 
                 request_text = data.decode('utf-8').strip()
-                logger.debug("Received request: %s...", request_text[:100])
+                logger.debug(
+                    "Received request: %s...", _redact_secrets(request_text)[:100]
+                )
 
                 # Process the request, streaming frames directly to writer
                 await mcp_server.handle_request(request_text, writer, reader)
@@ -479,6 +620,7 @@ def run_server():
         logger.exception("Server loop failed: %s", e)
     finally:
         # Cleanup
+        sudo_auth.clear_session_token()
         if server:
             server.close()
             mcp_loop.run_until_complete(server.wait_closed())
