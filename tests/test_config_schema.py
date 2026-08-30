@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from openterm.config import Config, ConfigSchemaError, get_config, init_config
+from openterm.config.app_home import resolve_app_home
 from openterm.config.utils import (
     get_configured_model_choices,
     get_openai_compatible_models,
@@ -21,6 +22,7 @@ class ConfigSchemaTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.old_home = os.environ.get("HOME")
         os.environ["HOME"] = self.tmp.name
+        resolve_app_home()
 
     def tearDown(self):
         if self.old_home is None:
@@ -59,6 +61,16 @@ class ConfigSchemaTests(unittest.TestCase):
         models_path.write_text(json.dumps([{"model": "model", "provider": "ollama"}]))
 
         self.assertTrue(Config().is_complete())
+
+    def test_malformed_model_history_is_ignored(self):
+        models_path = Path(self.tmp.name) / ".openterm" / "data" / "models.json"
+        models_path.parent.mkdir(parents=True, exist_ok=True)
+        models_path.write_text("null")
+
+        config = Config()
+
+        self.assertEqual(config.recent_models(), [])
+        self.assertIsNone(config.selected_model)
 
     def test_legacy_flat_config_is_rejected(self):
         path = Path(self.tmp.name) / ".openterm" / "config" / "config.json"
@@ -181,10 +193,9 @@ class ConfigSchemaTests(unittest.TestCase):
         self.assertEqual(second.api_provider, Config.OPEN_ROUTER)
 
     def test_worker_threads_share_the_session_bound_config(self):
-        # Regression: per-request LLM threads run with an empty contextvar
-        # context, so get_config() must not construct a fresh Config there;
-        # it would re-seed the provider/model from models.json on disk and
-        # dispatch another instance's latest choice mid-run.
+        # Regression: per-request LLM threads must not construct a fresh
+        # Config; it would re-seed the provider/model from models.json on
+        # disk and dispatch another instance's latest choice mid-run.
         config = init_config()
         config.set(Config.OLLAMA_SERVER_URL, "http://localhost:11434")
         config.choose_model("mine/model", Config.OLLAMA)

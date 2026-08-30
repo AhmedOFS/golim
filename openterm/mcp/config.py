@@ -18,14 +18,14 @@ class ServerConfig:
 
     @property
     def config_path(self) -> Path:
-        return get_app_home() / "config" / "config.json"
+        return self.app_home / "config" / "config.json"
 
     @property
     def whitelist_path(self) -> Path:
         override = os.environ.get("OPENTERM_PRIVILEGED_WHITELIST")
         if override:
             return Path(override)
-        return get_app_home() / "privileged_whitelist"
+        return self.app_home / "privileged_whitelist"
 
     def read(self) -> dict:
         path = self.config_path
@@ -98,7 +98,7 @@ _server_config: ServerConfig | None = None
 
 
 def init_config() -> ServerConfig:
-    """Create and bind the MCP config singleton for the current app home."""
+    """Create and install the MCP config singleton for the current app home."""
     global _server_config
     _server_config = ServerConfig()
     return _server_config
@@ -109,5 +109,4 @@ def get_config() -> ServerConfig:
     app_home = get_app_home()
     if _server_config is None or getattr(_server_config, "app_home", None) != app_home:
         _server_config = ServerConfig()
-        _server_config.app_home = app_home
     return _server_config

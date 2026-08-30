@@ -5,6 +5,7 @@ import tempfile
 import unittest
 
 from openterm import config
+from openterm.config.app_home import resolve_app_home
 from openterm.mcp.config import ServerConfig, get_config, init_config
 
 
@@ -13,6 +14,7 @@ class McpConfigSchemaTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.old_home = os.environ.get("HOME")
         os.environ["HOME"] = self.tmp.name
+        resolve_app_home()
 
     def tearDown(self):
         if self.old_home is None:

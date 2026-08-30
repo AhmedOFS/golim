@@ -1,7 +1,6 @@
 """Configuration and recent-model persistence for openterm."""
 from __future__ import annotations
 
-import contextvars
 import json
 from pathlib import Path
 import threading
@@ -9,7 +8,6 @@ import threading
 from openterm.config.app_home import get_app_home
 
 
-_config_context: contextvars.ContextVar[Config | None] = contextvars.ContextVar("_config_context", default=None)
 _shared_config: Config | None = None
 _shared_config_lock = threading.Lock()
 
@@ -17,16 +15,10 @@ _shared_config_lock = threading.Lock()
 def get_config() -> Config:
     """Return this process's shared Config instance.
 
-    Model/provider choice is per-instance session state held on one Config
-    object.  Worker threads (per-request LLM threads, Textual workers) start
-    with an empty contextvar context, so resolution must not construct a
-    fresh Config there: it would re-seed the session pair from models.json
-    on disk and pick up what another running instance wrote.  All threads
-    therefore converge on the same process-wide singleton.
+    Model/provider choice is session state held on one Config object. Worker
+    threads use this same process-wide object rather than constructing fresh
+    instances that could re-seed the session pair from models.json mid-run.
     """
-    config = _config_context.get()
-    if config is not None:
-        return config
     with _shared_config_lock:
         global _shared_config
         if _shared_config is None:
@@ -35,12 +27,11 @@ def get_config() -> Config:
 
 
 def init_config() -> Config:
-    """Construct a fresh shared Config and bind it for this process."""
+    """Construct and install a fresh shared Config for this process."""
     global _shared_config
     with _shared_config_lock:
         _shared_config = Config()
         config = _shared_config
-    _config_context.set(config)
     return config
 
 
@@ -100,7 +91,8 @@ class Config:
     }
 
     def __init__(self):
-        cfg_dir = get_app_home() / "config"
+        self.app_home = get_app_home()
+        cfg_dir = self.app_home / "config"
         cfg_dir.mkdir(parents=True, exist_ok=True)
         self.path = cfg_dir / "config.json"
         self.data = self._load()
@@ -112,7 +104,7 @@ class Config:
 
     @property
     def models_path(self) -> Path:
-        data_dir = get_app_home() / "data"
+        data_dir = self.app_home / "data"
         data_dir.mkdir(parents=True, exist_ok=True)
         return data_dir / "models.json"
 
@@ -193,6 +185,8 @@ class Config:
             models = json.loads(self.models_path.read_text()) if self.models_path.exists() else []
         except (OSError, json.JSONDecodeError):
             return []
+        if not isinstance(models, list):
+            return []
         return [item for item in models if isinstance(item, dict) and isinstance(item.get("model"), str) and isinstance(item.get("provider"), str)]
 
     def latest_model(self) -> dict[str, str] | None:
@@ -243,7 +237,7 @@ class Config:
     @property
     def openai_compatible_api_key(self): return self.provider(self.OPENAI_COMPATIBLE).get(self.PROVIDER_API_KEY)
     @property
-    def websearch_provider(self): return self.get(self.WEBSEARCH_PROVIDER)
+    def websearch_provider(self): return self.get(self.WEBSEARCH_PROVIDER, self.EXA)
     @property
     def exa_api_key(self): return self.get(self.EXA_API_KEY)
     @property
