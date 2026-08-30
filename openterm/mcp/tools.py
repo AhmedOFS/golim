@@ -65,6 +65,7 @@ def finder(
     ```
     Matching is performed against basenames only and is case-insensitive.
 
+
     system_inclusive=False:
         - excludes hidden files/directories
         - excludes common system locations
@@ -115,6 +116,14 @@ def finder(
             "ok": False,
             "error": "finder requires an explicit pattern argument",
         }
+
+    pattern = str(pattern)
+
+    if not pattern.startswith("*"):
+        pattern = "*" + pattern
+
+    if not pattern.endswith("*"):
+        pattern += "*"
 
     include = coerce_glob_list(include)
     if include is None:

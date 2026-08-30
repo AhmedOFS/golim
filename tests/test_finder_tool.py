@@ -41,6 +41,36 @@ class FinderToolTests(unittest.TestCase):
             [str(Path(tmp, "Inside")).replace("\\", "/")],
         )
 
+    def test_pattern_is_wildcarded_by_default(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "Ahmed_CV.pdf").write_text("resume")
+            Path(tmp, "my_cool_video.txt").write_text("video")
+            Path(tmp, "notes.txt").write_text("notes")
+
+            bare = finder(tmp, pattern="cv", type_filter="file")
+            both_sides = finder(tmp, pattern="*CV*", type_filter="file")
+            partial = finder(tmp, pattern="c*v", type_filter="file")
+            trailing = finder(tmp, pattern="cv*", type_filter="file")
+
+        self.assertTrue(bare["ok"])
+        self.assertEqual(
+            bare["matches"],
+            [str(Path(tmp, "Ahmed_CV.pdf")).replace("\\", "/")],
+        )
+        self.assertEqual(bare["matches"], both_sides["matches"])
+        self.assertEqual(bare["matches"], trailing["matches"])
+        self.assertEqual(
+            partial["matches"],
+            [
+                str(Path(tmp, "Ahmed_CV.pdf")).replace("\\", "/"),
+                str(Path(tmp, "my_cool_video.txt")).replace("\\", "/"),
+            ],
+        )
+        self.assertNotIn(
+            str(Path(tmp, "notes.txt")),
+            bare["matches"],
+        )
+
     def test_empty_pattern_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             result = finder(tmp, pattern="")
