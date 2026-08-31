@@ -4,6 +4,7 @@ __pycache__/
 /release/
 /update.sh
 *.egg-info/
+openterm/_version.py
 
 # The scripts tree is source code, including directories named build/release.
 !/scripts/
