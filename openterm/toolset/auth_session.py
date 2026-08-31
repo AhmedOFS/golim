@@ -1,14 +1,14 @@
-"""Session-token client for the openterm privileged broker.
+"""Session-token client for openterm-authd.
 
 The privileged wrapper runs through a NOPASSWD sudoers rule and gates
-access on a session token issued by the root-side broker daemon. The
-user may be proactively offered sudo authentication at app start. If that
-is disabled or declined, or the token later expires, the MCP server asks
-again when a sudo command needs a token. The server registers the password
-with the broker (which verifies it via sudo/PAM as the user), caches the
-returned token in memory for the session, and the wrapper verifies it per
-invocation. The token never appears on disk, in argv, or in logs; the
-broker stores only its SHA-256 digest.
+access on a session token issued by the root-side openterm-authd daemon.
+The user may be proactively offered sudo authentication at app start. If
+that is disabled or declined, or the token later expires, the MCP server
+asks again when a sudo command needs a token. The server registers the
+password with openterm-authd (which verifies it via sudo/PAM as the user),
+caches the returned token in memory for the session, and the wrapper
+verifies it per invocation. The token never appears on disk, in argv, or
+in logs; openterm-authd stores only its SHA-256 digest.
 """
 
 import json
@@ -16,10 +16,10 @@ import os
 import socket
 import threading
 
-from openterm.mcp.vars import PRIVILEGED_WRAPPER
+from openterm.toolset.vars import PRIVILEGED_WRAPPER
 
-BROKER_SOCKET_PATH = "/run/openterm/broker.sock"
-BROKER_TIMEOUT_SECONDS = 60
+AUTHD_SOCKET_PATH = "/run/openterm/authd.sock"
+AUTHD_TIMEOUT_SECONDS = 60
 
 _cached_token: bytearray | None = None
 _token_lock = threading.RLock()
@@ -38,23 +38,23 @@ def wrapper_installed() -> bool:
     return os.path.isfile(PRIVILEGED_WRAPPER)
 
 
-def broker_available() -> bool:
-    return os.path.exists(BROKER_SOCKET_PATH)
+def authd_available() -> bool:
+    return os.path.exists(AUTHD_SOCKET_PATH)
 
 
-def _broker_request(method, params):
-    """Send one request to the broker and return its result."""
+def _authd_request(method, params):
+    """Send one request to openterm-authd and return its result."""
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    sock.settimeout(BROKER_TIMEOUT_SECONDS)
+    sock.settimeout(AUTHD_TIMEOUT_SECONDS)
     try:
-        sock.connect(BROKER_SOCKET_PATH)
+        sock.connect(AUTHD_SOCKET_PATH)
         request = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
         sock.sendall((json.dumps(request) + "\n").encode("utf-8"))
         buf = b""
         while b"\n" not in buf:
             chunk = sock.recv(4096)
             if not chunk:
-                raise ConnectionError("No response from broker")
+                raise ConnectionError("No response from openterm-authd")
             buf += chunk
         reply = json.loads(buf.split(b"\n", 1)[0].decode("utf-8"))
     finally:
@@ -62,19 +62,19 @@ def _broker_request(method, params):
     if "error" in reply:
         error = reply["error"]
         message = error.get("message", "unknown error") if isinstance(error, dict) else str(error)
-        raise RuntimeError(f"broker error: {message}")
+        raise RuntimeError(f"authd error: {message}")
     result = reply.get("result", {})
     if not isinstance(result, dict):
-        raise ValueError("invalid broker response")
+        raise ValueError("invalid authd response")
     return result
 
 
 def register_session(password: str) -> str | None:
-    """Verify the password with the broker and return the session token."""
-    if not password or not broker_available():
+    """Verify the password with openterm-authd and return the session token."""
+    if not password or not authd_available():
         return None
     try:
-        result = _broker_request(
+        result = _authd_request(
             "register", {"user": current_user(), "password": password}
         )
     except (OSError, RuntimeError, json.JSONDecodeError, ValueError):
@@ -96,12 +96,12 @@ def session_token() -> str | None:
 
 
 def has_valid_session_token() -> bool:
-    """Check the cached token against the broker without exposing it."""
+    """Check the cached token against openterm-authd without exposing it."""
     token = session_token()
-    if not token or not broker_available():
+    if not token or not authd_available():
         return False
     try:
-        result = _broker_request(
+        result = _authd_request(
             "verify", {"user": current_user(), "token": token}
         )
     except (OSError, RuntimeError, json.JSONDecodeError, ValueError):

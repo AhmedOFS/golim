@@ -6,9 +6,9 @@ set -u
 # user's Openterm state created for this installation.
 SUDOERS_FILE="/etc/sudoers.d/openterm"
 WRAPPER="/usr/lib/openterm/openterm-privileged"
-BROKER="/usr/lib/openterm/openterm-broker"
-BROKER_SERVICE="/usr/lib/systemd/system/openterm-broker.service"
-SERVICE="/usr/lib/systemd/user/openterm-mcp.service"
+AUTHD="/usr/lib/openterm/openterm-authd"
+AUTHD_SERVICE="/usr/lib/systemd/system/openterm-authd.service"
+SERVICE="/usr/lib/systemd/user/openterm-tools.service"
 
 # dpkg calls this script with an action argument. During ``upgrade`` the
 # old package's postrm runs while the new package is unpacked but not yet
@@ -32,7 +32,7 @@ if [ -n "$REAL_USER" ] && [ "$REAL_USER" != "root" ]; then
   USER_UID="$(id -u "$REAL_USER")"
   if command -v runuser >/dev/null 2>&1 && command -v systemctl >/dev/null 2>&1; then
     runuser -u "$REAL_USER" -- env XDG_RUNTIME_DIR="/run/user/$USER_UID" \
-      systemctl --user disable --now openterm-mcp.service >/dev/null 2>&1 || true
+      systemctl --user disable --now openterm-tools.service >/dev/null 2>&1 || true
     runuser -u "$REAL_USER" -- env XDG_RUNTIME_DIR="/run/user/$USER_UID" \
       systemctl --user daemon-reload >/dev/null 2>&1 || true
   fi
@@ -46,14 +46,14 @@ else
 fi
 
 if command -v systemctl >/dev/null 2>&1; then
-  systemctl disable --now openterm-broker.service >/dev/null 2>&1 || true
+  systemctl disable --now openterm-authd.service >/dev/null 2>&1 || true
   systemctl daemon-reload >/dev/null 2>&1 || true
 fi
 
 rm -f -- "$SERVICE"
 rm -f -- "$WRAPPER"
-rm -f -- "$BROKER"
-rm -f -- "$BROKER_SERVICE"
+rm -f -- "$AUTHD"
+rm -f -- "$AUTHD_SERVICE"
 rm -f -- "$SUDOERS_FILE"
 rm -rf -- /run/openterm
 rmdir --ignore-fail-on-non-empty /usr/lib/openterm 2>/dev/null || true

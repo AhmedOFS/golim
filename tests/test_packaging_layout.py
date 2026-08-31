@@ -26,7 +26,7 @@ class PrivilegedPackagingTests(unittest.TestCase):
         self.assertIn("$REAL_USER ALL=(root) NOPASSWD: $WRAPPER", sudoers)
         self.assertNotIn("timestamp_type", sudoers)
 
-    def test_wrapper_requires_broker_verified_session_token(self):
+    def test_wrapper_requires_authd_verified_session_token(self):
         wrapper = (PACKAGING_DIR / "postinstall.sh").read_text(encoding="utf-8")
         self.assertIn('TOKEN_ENV_VAR = "OPENTERM_SESSION_TOKEN"', wrapper)
         self.assertIn('method": "verify"', wrapper)

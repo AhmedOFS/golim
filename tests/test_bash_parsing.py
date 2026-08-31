@@ -9,16 +9,16 @@ import threading
 from pathlib import Path
 from unittest.mock import patch
 
-from openterm.mcp.tools import bash, read_file, _should_stream_with_pty
-from openterm.mcp.utils import bash_utils
-from openterm.mcp.vars import OUTPUT_LINE_LIMIT
+from openterm.toolset.tools import bash, read_file, _should_stream_with_pty
+from openterm.toolset.utils import bash_utils
+from openterm.toolset.vars import OUTPUT_LINE_LIMIT
 
 POSTINSTALL_SCRIPT = Path(__file__).resolve().parent.parent / "packaging" / "postinstall.sh"
 
 
 class BashExecutionTests(unittest.TestCase):
     def setUp(self):
-        self.unrestricted_patch = patch("openterm.mcp.tools._is_unrestricted_mode", return_value=False)
+        self.unrestricted_patch = patch("openterm.toolset.tools._is_unrestricted_mode", return_value=False)
         self.unrestricted_patch.start()
 
     def tearDown(self):
@@ -175,7 +175,7 @@ class BashExecutionTests(unittest.TestCase):
             return {"command": cmd_str, "stdout": "ok", "stderr": "", "returncode": 0}, None
             yield
 
-        with patch("openterm.mcp.tools._is_unrestricted_mode", return_value=True), \
+        with patch("openterm.toolset.tools._is_unrestricted_mode", return_value=True), \
              patch.object(bash_utils, "_stream_command", fake_stream_command):
             result = bash_utils._run_shell(
                 'whoami; echo "---"; sudo --list 2>&1 | head'
@@ -321,7 +321,7 @@ class BashExecutionTests(unittest.TestCase):
                 "returncode": 0,
             }, None
 
-        with patch("openterm.mcp.tools._is_unrestricted_mode", return_value=True), \
+        with patch("openterm.toolset.tools._is_unrestricted_mode", return_value=True), \
              patch.object(bash_utils.get_config(), "is_privileged_binary_allowed", return_value=True), \
              patch.object(bash_utils, "_stream_command_with_pty", fake_stream_command_with_pty):
             frames = list(bash("sudo apt install spotify", stream=True, _session_token="token"))
@@ -345,7 +345,7 @@ class BashExecutionTests(unittest.TestCase):
             return {"command": cmd_str, "stdout": "ok", "stderr": "", "returncode": 0}, None
             yield
 
-        with patch("openterm.mcp.tools._is_unrestricted_mode", return_value=True), \
+        with patch("openterm.toolset.tools._is_unrestricted_mode", return_value=True), \
              patch.object(bash_utils.get_config(), "is_privileged_binary_allowed", return_value=True), \
              patch.object(bash_utils, "_stream_command", fake_stream_command):
             result = bash_utils._run_shell("sudo test -d /", session_token="token")
@@ -590,7 +590,7 @@ class BashExecutionTests(unittest.TestCase):
 class PrivilegedWrapperScriptTests(unittest.TestCase):
     """Exercise the real wrapper script from packaging/postinstall.sh.
 
-    Runs without root using a local fake broker; the real wrapper still has
+    Runs without root using a local fake authd; the real wrapper still has
     to present a valid session token before it reads the whitelist.
     """
 
@@ -606,10 +606,10 @@ class PrivilegedWrapperScriptTests(unittest.TestCase):
 
     def _install_wrapper(self, tmp: Path) -> Path:
         wrapper = tmp / "openterm-privileged"
-        broker_socket = tmp / "broker.sock"
+        authd_socket = tmp / "authd.sock"
         source = self.wrapper_source.replace(
-            'BROKER_SOCKET = "/run/openterm/broker.sock"',
-            f'BROKER_SOCKET = {str(broker_socket)!r}',
+            'AUTHD_SOCKET = "/run/openterm/authd.sock"',
+            f'AUTHD_SOCKET = {str(authd_socket)!r}',
         )
         wrapper.write_text(source, encoding="utf-8")
         wrapper.chmod(0o755)
@@ -620,14 +620,14 @@ class PrivilegedWrapperScriptTests(unittest.TestCase):
         env["SUDO_USER"] = pwd.getpwuid(os.getuid()).pw_name
         env["OPENTERM_PRIVILEGED_WHITELIST"] = str(whitelist)
         env["OPENTERM_SESSION_TOKEN"] = "test-token"
-        broker_socket = wrapper.parent / "broker.sock"
-        broker = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        broker.bind(str(broker_socket))
-        broker.listen(1)
+        authd_socket = wrapper.parent / "authd.sock"
+        authd = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        authd.bind(str(authd_socket))
+        authd.listen(1)
 
         def serve_once():
             try:
-                conn, _ = broker.accept()
+                conn, _ = authd.accept()
                 with conn:
                     conn.recv(4096)
                     conn.sendall((json.dumps({
@@ -636,7 +636,7 @@ class PrivilegedWrapperScriptTests(unittest.TestCase):
                         "result": {"ok": True, "valid": True},
                     }) + "\n").encode("utf-8"))
             finally:
-                broker.close()
+                authd.close()
 
         thread = threading.Thread(target=serve_once)
         thread.start()

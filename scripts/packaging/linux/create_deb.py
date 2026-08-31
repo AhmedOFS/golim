@@ -18,9 +18,9 @@ BUILD_VERSION_FILE = ROOT / "openterm" / "_version.py"
 APP_DIST = ROOT / "dist" / "linux"
 RELEASE_DIR = ROOT / "release"
 DEB_DIR = RELEASE_DIR / "linux"
-SERVICE_SOURCE = ROOT / "packaging" / "openterm-mcp.service"
-BROKER_SERVICE_SOURCE = ROOT / "packaging" / "openterm-broker.service"
-BROKER_SOURCE = ROOT / "packaging" / "openterm-broker.py"
+SERVICE_SOURCE = ROOT / "packaging" / "openterm-tools.service"
+AUTHD_SERVICE_SOURCE = ROOT / "packaging" / "openterm-authd.service"
+AUTHD_SOURCE = ROOT / "packaging" / "openterm-authd.py"
 POSTINSTALL_SOURCE = ROOT / "packaging" / "postinstall.sh"
 POSTRM_SOURCE = ROOT / "packaging" / "postrm.sh"
 
@@ -102,10 +102,10 @@ def populate_package_tree(staging: Path, app_dist: Path) -> Path:
 
     shutil.copytree(app_dist, app_target, symlinks=True)
     (bin_dir / "openterm").symlink_to("../lib/openterm/openterm")
-    write_service(user_service_dir / "openterm-mcp.service")
-    shutil.copy2(BROKER_SOURCE, app_target / "openterm-broker")
-    (app_target / "openterm-broker").chmod(0o755)
-    shutil.copy2(BROKER_SERVICE_SOURCE, system_service_dir / "openterm-broker.service")
+    write_service(user_service_dir / "openterm-tools.service")
+    shutil.copy2(AUTHD_SOURCE, app_target / "openterm-authd")
+    (app_target / "openterm-authd").chmod(0o755)
+    shutil.copy2(AUTHD_SERVICE_SOURCE, system_service_dir / "openterm-authd.service")
     shutil.copy2(POSTINSTALL_SOURCE, debian_dir / "postinst")
     (debian_dir / "postinst").chmod(0o755)
     shutil.copy2(POSTRM_SOURCE, debian_dir / "postrm")

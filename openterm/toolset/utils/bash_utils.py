@@ -639,8 +639,8 @@ def _exec_shell(
     if PRIVILEGED_WRAPPER in prepared:
         token = _resolve_session_token(session_token)
         if not token:
-            # Fail closed: no session token available, so the broker would
-            # refuse the wrapper invocation.
+            # Fail closed: no session token available, so openterm-authd
+            # would refuse the wrapper invocation.
             yield {
                 "type": "result",
                 "ok": False,

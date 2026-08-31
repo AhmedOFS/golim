@@ -13,7 +13,7 @@ from openterm.core.agent import ToolAgent
 from openterm.core.mcp_client import FastMCPClient
 from openterm.core.runtime import Runtime
 from openterm.core.utils import get_socket_path
-from openterm.mcp.utils import bash_utils
+from openterm.toolset.utils import bash_utils
 
 
 class _UI:
@@ -34,7 +34,7 @@ class ResilienceTests(unittest.TestCase):
         with patch("openterm.core.utils.pwd.getpwuid") as lookup, \
              patch("openterm.core.utils.os.getuid", return_value=123):
             lookup.return_value.pw_name = "service-user"
-            self.assertEqual(get_socket_path(), Path("/tmp/openterm_mcp_service-user.sock"))
+            self.assertEqual(get_socket_path(), Path("/tmp/openterm_tools_service-user.sock"))
             lookup.assert_called_once_with(123)
 
     def test_request_failures_retry_three_times(self):
@@ -79,8 +79,8 @@ class ResilienceTests(unittest.TestCase):
         self.assertEqual(
             [call.args[0] for call in run.call_args_list],
             [
-                ["systemctl", "--user", "start", "openterm-mcp.service"],
-                ["systemctl", "--user", "restart", "openterm-mcp.service"],
+                ["systemctl", "--user", "start", "openterm-tools.service"],
+                ["systemctl", "--user", "restart", "openterm-tools.service"],
             ],
         )
 
@@ -93,7 +93,7 @@ class ResilienceTests(unittest.TestCase):
             started.append(proc)
             return proc
 
-        with patch("openterm.mcp.utils.bash_utils.subprocess.Popen", side_effect=tracking_popen):
+        with patch("openterm.toolset.utils.bash_utils.subprocess.Popen", side_effect=tracking_popen):
             stream = bash_utils._stream_subprocess(
                 ["/bin/sh", "-c", "printf 'ready\\n'; sleep 30"],
                 "test command",

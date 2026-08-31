@@ -59,7 +59,7 @@ class FastMCPClient:
         return response.get("result", {})
 
     def authenticate(self, password):
-        """Validate the sudo password once and receive a broker session token."""
+        """Validate the sudo password once and receive an authd session token."""
         response = self._send_request("auth/sudo_password", {"password": password})
         return response.get("result", {"ok": False, "error": "No result from server"})
 

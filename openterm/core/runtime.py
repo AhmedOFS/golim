@@ -153,7 +153,7 @@ class Runtime:
         systemd_started = False
         try:
             subprocess.run(
-                ["systemctl", "--user", "start", "openterm-mcp.service"],
+                ["systemctl", "--user", "start", "openterm-tools.service"],
                 check=True,
                 capture_output=True,
                 text=True,
@@ -166,7 +166,7 @@ class Runtime:
             # server directly as a local fallback.
             logger.warning("systemd user service unavailable; starting MCP server directly: %s", exc)
             subprocess.Popen(
-                [sys.executable, "-m", "openterm.mcp.server"],
+                [sys.executable, "-m", "openterm.toolset.server"],
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -183,7 +183,7 @@ class Runtime:
         if systemd_started:
             try:
                 subprocess.run(
-                    ["systemctl", "--user", "restart", "openterm-mcp.service"],
+                    ["systemctl", "--user", "restart", "openterm-tools.service"],
                     check=True,
                     capture_output=True,
                     text=True,
@@ -225,11 +225,11 @@ class Runtime:
     def authenticate_sudo(self) -> None:
         """Proactively authenticate privileged execution at app start.
 
-        The password is registered with the root-side broker, which verifies
-        it via sudo/PAM and issues the session token the MCP server holds in
-        memory; the privileged wrapper then verifies that token per
-        invocation. Skipped silently when the wrapper or broker is not
-        installed, the session is already authenticated, no UI is
+        The password is registered with the root-side openterm-authd, which
+        verifies it via sudo/PAM and issues the session token the MCP server
+        holds in memory; the privileged wrapper then verifies that token per
+        invocation. Skipped silently when the wrapper or openterm-authd is
+        not installed, the session is already authenticated, no UI is
         interactive enough to ask, or the transport predates the auth
         protocol. If startup authentication is declined or later expires,
         missing tokens are recovered when a sudo command uses the out-of-band
@@ -240,15 +240,15 @@ class Runtime:
         try:
             status = self.mcp_client.auth_status()
         except Exception as exc:
-            logger.debug("sudo_auth_status_unavailable error=%s", exc)
+            logger.debug("auth_session_status_unavailable error=%s", exc)
             return
         if not status.get("ok") or not status.get("wrapper_installed"):
             return
-        if not status.get("broker_available", True):
+        if not status.get("authd_available", True):
             ui = self._active_ui()
             ui.message(
-                "Privileged commands are unavailable: the openterm token "
-                "broker is not running on this system."
+                "Privileged commands are unavailable: openterm-authd is "
+                "not running on this system."
             )
             return
         if status.get("authenticated"):

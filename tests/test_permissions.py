@@ -183,7 +183,7 @@ class PermissionsTests(unittest.TestCase):
         self.assertFalse(client.on_approval_request(approval))
         self.assertEqual(ui.approval_prompts, ["/usr/bin/apt"])
 
-    def test_runtime_wires_sudo_auth_callback_with_transport_request(self):
+    def test_runtime_wires_auth_session_callback_with_transport_request(self):
         ui = FakeUI()
         runtime = Runtime(model="main")
         runtime.bind_ui(ui)

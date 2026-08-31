@@ -1,4 +1,4 @@
-"""Broker session-token handling for privileged wrapper execution."""
+"""Authd session-token handling for privileged wrapper execution."""
 
 import os
 import tempfile
@@ -6,82 +6,82 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from openterm.mcp import sudo_auth
-from openterm.mcp.utils import bash_utils
+from openterm.toolset import auth_session
+from openterm.toolset.utils import bash_utils
 
 
 class SudoSessionTokenTests(unittest.TestCase):
     def tearDown(self):
-        sudo_auth.clear_session_token()
+        auth_session.clear_session_token()
 
     def test_wrapper_installed_checks_wrapper_path(self):
-        with patch.object(sudo_auth, "PRIVILEGED_WRAPPER", "/nonexistent/openterm-privileged"):
-            self.assertFalse(sudo_auth.wrapper_installed())
+        with patch.object(auth_session, "PRIVILEGED_WRAPPER", "/nonexistent/openterm-privileged"):
+            self.assertFalse(auth_session.wrapper_installed())
 
-    def test_broker_available_checks_socket_presence(self):
-        with patch.object(sudo_auth, "BROKER_SOCKET_PATH", "/nonexistent/broker.sock"):
-            self.assertFalse(sudo_auth.broker_available())
+    def test_authd_available_checks_socket_presence(self):
+        with patch.object(auth_session, "AUTHD_SOCKET_PATH", "/nonexistent/authd.sock"):
+            self.assertFalse(auth_session.authd_available())
         with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "broker.sock"
+            path = Path(tmp) / "authd.sock"
             path.touch()
-            with patch.object(sudo_auth, "BROKER_SOCKET_PATH", str(path)):
-                self.assertTrue(sudo_auth.broker_available())
+            with patch.object(auth_session, "AUTHD_SOCKET_PATH", str(path)):
+                self.assertTrue(auth_session.authd_available())
 
     def test_token_cache_round_trip_and_zero_on_clear(self):
-        sudo_auth.set_session_token("sekret-token")
-        self.assertTrue(sudo_auth.has_session_token())
-        self.assertEqual(sudo_auth.session_token(), "sekret-token")
+        auth_session.set_session_token("sekret-token")
+        self.assertTrue(auth_session.has_session_token())
+        self.assertEqual(auth_session.session_token(), "sekret-token")
 
-        sudo_auth.clear_session_token()
-        self.assertFalse(sudo_auth.has_session_token())
-        self.assertIsNone(sudo_auth.session_token())
+        auth_session.clear_session_token()
+        self.assertFalse(auth_session.has_session_token())
+        self.assertIsNone(auth_session.session_token())
 
     def test_set_session_token_replaces_previous_secret(self):
-        sudo_auth.set_session_token("first")
-        sudo_auth.set_session_token("second")
+        auth_session.set_session_token("first")
+        auth_session.set_session_token("second")
 
-        self.assertEqual(sudo_auth.session_token(), "second")
+        self.assertEqual(auth_session.session_token(), "second")
 
-    def test_register_session_returns_broker_token(self):
-        with patch.object(sudo_auth, "broker_available", return_value=True), \
-             patch.object(sudo_auth, "_broker_request", return_value={"ok": True, "token": "tok"}) as request_mock:
-            token = sudo_auth.register_session("sekret")
+    def test_register_session_returns_authd_token(self):
+        with patch.object(auth_session, "authd_available", return_value=True), \
+             patch.object(auth_session, "_authd_request", return_value={"ok": True, "token": "tok"}) as request_mock:
+            token = auth_session.register_session("sekret")
 
         self.assertEqual(token, "tok")
         request_mock.assert_called_once_with(
-            "register", {"user": sudo_auth.current_user(), "password": "sekret"}
+            "register", {"user": auth_session.current_user(), "password": "sekret"}
         )
 
     def test_register_session_caches_nothing_itself(self):
-        with patch.object(sudo_auth, "broker_available", return_value=True), \
-             patch.object(sudo_auth, "_broker_request", return_value={"ok": True, "token": "tok"}):
-            sudo_auth.register_session("sekret")
+        with patch.object(auth_session, "authd_available", return_value=True), \
+             patch.object(auth_session, "_authd_request", return_value={"ok": True, "token": "tok"}):
+            auth_session.register_session("sekret")
 
-        self.assertFalse(sudo_auth.has_session_token())
+        self.assertFalse(auth_session.has_session_token())
 
-    def test_register_session_rejects_bad_password_and_broker_failure(self):
-        with patch.object(sudo_auth, "_broker_request", return_value={"ok": False}):
-            self.assertIsNone(sudo_auth.register_session("wrong"))
-        with patch.object(sudo_auth, "_broker_request", side_effect=RuntimeError("broker down")):
-            self.assertIsNone(sudo_auth.register_session("sekret"))
-        with patch.object(sudo_auth, "broker_available", return_value=False):
-            self.assertIsNone(sudo_auth.register_session("sekret"))
+    def test_register_session_rejects_bad_password_and_authd_failure(self):
+        with patch.object(auth_session, "_authd_request", return_value={"ok": False}):
+            self.assertIsNone(auth_session.register_session("wrong"))
+        with patch.object(auth_session, "_authd_request", side_effect=RuntimeError("authd down")):
+            self.assertIsNone(auth_session.register_session("sekret"))
+        with patch.object(auth_session, "authd_available", return_value=False):
+            self.assertIsNone(auth_session.register_session("sekret"))
 
-    def test_has_valid_session_token_checks_broker(self):
-        sudo_auth.set_session_token("sekret-token")
-        with patch.object(sudo_auth, "broker_available", return_value=True), \
-             patch.object(sudo_auth, "_broker_request", return_value={"ok": True, "valid": True}) as request_mock:
-            self.assertTrue(sudo_auth.has_valid_session_token())
+    def test_has_valid_session_token_checks_authd(self):
+        auth_session.set_session_token("sekret-token")
+        with patch.object(auth_session, "authd_available", return_value=True), \
+             patch.object(auth_session, "_authd_request", return_value={"ok": True, "valid": True}) as request_mock:
+            self.assertTrue(auth_session.has_valid_session_token())
 
         request_mock.assert_called_once_with(
-            "verify", {"user": sudo_auth.current_user(), "token": "sekret-token"}
+            "verify", {"user": auth_session.current_user(), "token": "sekret-token"}
         )
 
-    def test_has_valid_session_token_rejects_broker_failure(self):
-        sudo_auth.set_session_token("sekret-token")
-        with patch.object(sudo_auth, "broker_available", return_value=True), \
-             patch.object(sudo_auth, "_broker_request", side_effect=OSError("down")):
-            self.assertFalse(sudo_auth.has_valid_session_token())
+    def test_has_valid_session_token_rejects_authd_failure(self):
+        auth_session.set_session_token("sekret-token")
+        with patch.object(auth_session, "authd_available", return_value=True), \
+             patch.object(auth_session, "_authd_request", side_effect=OSError("down")):
+            self.assertFalse(auth_session.has_valid_session_token())
 
 
 class BashSessionTokenTests(unittest.TestCase):

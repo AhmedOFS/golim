@@ -161,10 +161,10 @@ def assemble_runtime(config: ReleaseConfig, platform_name: str) -> None:
     flatten_site_packages(config.release_dir)
     if platform_name == "linux":
         compile_linux_launcher(config.release_dir)
-        compile_linux_launcher(config.release_dir, output_name="openterm-mcp", entry_module="openterm.mcp.server", entry_function="run_server")
+        compile_linux_launcher(config.release_dir, output_name="openterm-tools", entry_module="openterm.toolset.server", entry_function="run_server")
     else:
         compile_macos_launcher(config.release_dir)
-        compile_macos_launcher(config.release_dir, output_name="openterm-mcp", entry_module="openterm.mcp.server")
+        compile_macos_launcher(config.release_dir, output_name="openterm-tools", entry_module="openterm.toolset.server")
     compile_application(config.release_dir)
     remove_development_files(config.release_dir, platform_name)
     remove_interpreter_tools(config.release_dir, config.keep_interpreter)

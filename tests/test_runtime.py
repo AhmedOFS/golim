@@ -279,7 +279,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertTrue(runtime.should_hard_cancel())
         runtime.mcp_client.close.assert_not_called()
 
-    def test_sudo_auth_skipped_when_ticket_already_valid(self):
+    def test_auth_session_skipped_when_ticket_already_valid(self):
         ui = PromptingFakeUI()
         runtime = Runtime(model="main")
         runtime.bind_ui(ui)
@@ -289,7 +289,7 @@ class RuntimeTests(unittest.TestCase):
 
         self.assertEqual(ui.prompts, 0)
 
-    def test_sudo_auth_skipped_when_wrapper_not_installed(self):
+    def test_auth_session_skipped_when_wrapper_not_installed(self):
         ui = PromptingFakeUI()
         runtime = Runtime(model="main")
         runtime.bind_ui(ui)
@@ -299,7 +299,7 @@ class RuntimeTests(unittest.TestCase):
 
         self.assertEqual(ui.prompts, 0)
 
-    def test_sudo_auth_prompts_once_and_authenticates_session(self):
+    def test_auth_session_prompts_once_and_authenticates_session(self):
         ui = PromptingFakeUI(password="session-password")
         runtime = Runtime(model="main")
         runtime.bind_ui(ui)
@@ -312,7 +312,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(client.authenticate_calls, ["session-password"])
         self.assertTrue(any("authenticated" in message for message in ui.messages))
 
-    def test_sudo_auth_reports_failure_without_retry(self):
+    def test_auth_session_reports_failure_without_retry(self):
         ui = PromptingFakeUI(password="wrong")
         runtime = Runtime(model="main")
         runtime.bind_ui(ui)
@@ -325,7 +325,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(client.authenticate_calls, ["wrong"])
         self.assertTrue(any("failed" in message for message in ui.messages))
 
-    def test_sudo_auth_skipped_when_user_declines_prompt(self):
+    def test_auth_session_skipped_when_user_declines_prompt(self):
         ui = PromptingFakeUI(password=None)
         runtime = Runtime(model="main")
         runtime.bind_ui(ui)
@@ -338,7 +338,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(client.authenticate_calls, [])
         self.assertTrue(any("skipped" in message for message in ui.messages))
 
-    def test_sudo_auth_survives_transport_without_auth_support(self):
+    def test_auth_session_survives_transport_without_auth_support(self):
         ui = PromptingFakeUI()
         runtime = Runtime(model="main")
         runtime.bind_ui(ui)
@@ -366,7 +366,7 @@ class RuntimeTests(unittest.TestCase):
 
         self.assertEqual(order, ["tools", "auth", "skills"])
 
-    def test_run_skips_proactive_sudo_auth_when_disabled(self):
+    def test_run_skips_proactive_auth_session_when_disabled(self):
         config = MagicMock()
         config.proactive_auth = False
         runtime = Runtime(config=config, model="main")

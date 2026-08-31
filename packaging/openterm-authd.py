@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""openterm privileged-session token broker.
+"""openterm privileged-session token daemon.
 
 A small root-side service that anchors the privileged wrapper's access
 control. The user authenticates sudo once per session (a single password
-entry at openterm start); this broker verifies that password via sudo/PAM,
-mints a random session token, and answers token-verification requests from
-the privileged wrapper. Sudo runs the wrapper through a NOPASSWD rule, so
-this broker is the only gate — it must fail closed.
+entry at openterm start); openterm-authd verifies that password via
+sudo/PAM, mints a random session token, and answers token-verification
+requests from the privileged wrapper. Sudo runs the wrapper through a
+NOPASSWD rule, so openterm-authd is the only gate — it must fail closed.
 
 Protocol: newline-delimited JSON-RPC-ish frames over a unix socket.
   register {user, password} -> {ok, token}   (peer uid must match user)
@@ -33,7 +33,7 @@ import sys
 import threading
 import time
 
-SOCKET_PATH = "/run/openterm/broker.sock"
+SOCKET_PATH = "/run/openterm/authd.sock"
 TOKEN_TTL_SECONDS = 12 * 3600
 REGISTER_FAILURE_LIMIT = 5
 REGISTER_BAN_SECONDS = 300
@@ -50,7 +50,7 @@ def peer_credentials(conn):
     return struct.unpack("3i", creds)
 
 
-class Broker:
+class AuthD:
     def __init__(self, socket_path=SOCKET_PATH, token_ttl=TOKEN_TTL_SECONDS):
         self.socket_path = socket_path
         self.token_ttl = token_ttl
@@ -223,7 +223,7 @@ class Broker:
         server.bind(self.socket_path)
         os.chmod(self.socket_path, 0o666)
         server.listen(16)
-        print(f"openterm-broker listening on {self.socket_path}", flush=True)
+        print(f"openterm-authd listening on {self.socket_path}", flush=True)
 
         def cleanup_loop():
             while True:
@@ -280,15 +280,15 @@ class Broker:
             return {
                 "jsonrpc": "2.0",
                 "id": request_id,
-                "error": {"code": -32000, "message": f"broker error: {exc}"},
+                "error": {"code": -32000, "message": f"authd error: {exc}"},
             }
         return {"jsonrpc": "2.0", "id": request_id, "result": result}
 
 
 def main():
-    broker = Broker()
+    authd = AuthD()
     try:
-        broker.serve_forever()
+        authd.serve_forever()
     except KeyboardInterrupt:
         pass
 

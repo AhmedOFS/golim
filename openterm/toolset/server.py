@@ -18,10 +18,10 @@ import pwd
 import queue
 import types
 
-from openterm.mcp.vars import INACTIVITY_TIMEOUT_SECONDS
-from openterm.mcp.config import get_config
-from openterm.mcp import sudo_auth
-from openterm.mcp.utils.cancellation import bind_tool_cancellation
+from openterm.toolset.vars import INACTIVITY_TIMEOUT_SECONDS
+from openterm.toolset.config import get_config
+from openterm.toolset import auth_session
+from openterm.toolset.utils.cancellation import bind_tool_cancellation
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +57,7 @@ def get_socket_path() -> Path:
         username = pwd.getpwuid(os.getuid()).pw_name
     except Exception:
         username = os.environ.get('USER', 'default')
-    return Path(f"/tmp/openterm_mcp_{username}.sock")
+    return Path(f"/tmp/openterm_tools_{username}.sock")
 
 class MCPServer:
     """Wrapper to handle MCP protocol over UDS"""
@@ -184,23 +184,23 @@ class MCPServer:
             return pending.password
 
         def obtain_session_token():
-            """Return the broker session token, registering if needed.
+            """Return the authd session token, registering if needed.
 
             A cached token is reused for every wrapper invocation;
             otherwise one password is collected out-of-band, registered
-            with the broker (which verifies it via sudo/PAM), and the
+            with openterm-authd (which verifies it via sudo/PAM), and the
             returned token is held in memory for the session.
             """
-            if sudo_auth.has_session_token() and sudo_auth.has_valid_session_token():
-                return sudo_auth.session_token()
-            sudo_auth.clear_session_token()
+            if auth_session.has_session_token() and auth_session.has_valid_session_token():
+                return auth_session.session_token()
+            auth_session.clear_session_token()
             password = request_sudo_password()
             if not password:
                 return None
-            token = sudo_auth.register_session(password)
+            token = auth_session.register_session(password)
             if not token:
                 return None
-            sudo_auth.set_session_token(token)
+            auth_session.set_session_token(token)
             return token
 
         call_arguments = dict(arguments)
@@ -451,23 +451,24 @@ class MCPServer:
                         "id": request_id,
                         "result": {
                             "ok": True,
-                            "wrapper_installed": sudo_auth.wrapper_installed(),
-                            "broker_available": sudo_auth.broker_available(),
-                            "authenticated": sudo_auth.has_valid_session_token(),
+                            "wrapper_installed": auth_session.wrapper_installed(),
+                            "authd_available": auth_session.authd_available(),
+                            "authenticated": auth_session.has_valid_session_token(),
                         },
                     })
 
             elif method == "auth/sudo_password":
-                # The password is registered with the root-side broker,
-                # which verifies it via sudo/PAM and issues the session
-                # token held here. Never logged or echoed in any frame.
+                # The password is registered with the root-side
+                # openterm-authd, which verifies it via sudo/PAM and issues
+                # the session token held here. Never logged or echoed in
+                # any frame.
                 password = str(params.get("password") or "")
                 token = (
-                    sudo_auth.register_session(password) if password else None
+                    auth_session.register_session(password) if password else None
                 )
                 ok = bool(token)
                 if ok:
-                    sudo_auth.set_session_token(token)
+                    auth_session.set_session_token(token)
                 if has_response_id:
                     send({
                         "jsonrpc": "2.0",
@@ -511,11 +512,11 @@ class MCPServer:
 def run_server():
     """Starts the MCP server on UDS with inactivity timeout."""
     from openterm.config.app_home import resolve_app_home
-    from openterm.mcp.config import init_config
+    from openterm.toolset.config import init_config
 
     resolve_app_home()
     init_config()
-    from openterm.mcp.tools import mcp
+    from openterm.toolset.tools import mcp
 
     print("Starting openterm MCP tool server...")
     
@@ -620,7 +621,7 @@ def run_server():
         logger.exception("Server loop failed: %s", e)
     finally:
         # Cleanup
-        sudo_auth.clear_session_token()
+        auth_session.clear_session_token()
         if server:
             server.close()
             mcp_loop.run_until_complete(server.wait_closed())

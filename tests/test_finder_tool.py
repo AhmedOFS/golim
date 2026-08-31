@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from openterm.mcp.tools import finder
+from openterm.toolset.tools import finder
 
 
 class FinderToolTests(unittest.TestCase):

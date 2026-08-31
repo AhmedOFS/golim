@@ -3,8 +3,8 @@ set -e
 
 SUDOERS_FILE="/etc/sudoers.d/openterm"
 WRAPPER="/usr/lib/openterm/openterm-privileged"
-BROKER="/usr/lib/openterm/openterm-broker"
-BROKER_SERVICE="/usr/lib/systemd/system/openterm-broker.service"
+AUTHD="/usr/lib/openterm/openterm-authd"
+AUTHD_SERVICE="/usr/lib/systemd/system/openterm-authd.service"
 DEFAULT_ALLOWED=( /usr/bin/apt /usr/bin/apt-get /usr/bin/tee /usr/bin/snap )
 
 # ── Colours ──────────────────────────────────────────────────────────────────
@@ -22,7 +22,7 @@ REAL_USER="${SUDO_USER:-$USER}"
 REAL_HOME="$(getent passwd "$REAL_USER" | cut -d: -f6)"
 [ -n "$REAL_HOME" ] || die "Could not determine home directory for $REAL_USER."
 # The privileged whitelist belongs to the user's Openterm home, not the XDG
-# config directory. Keep this path aligned with openterm/mcp/config.py.
+# config directory. Keep this path aligned with openterm/toolset/config.py.
 OPENTERM_HOME="$REAL_HOME/.openterm"
 WHITELIST="$OPENTERM_HOME/privileged_whitelist"
 
@@ -45,15 +45,16 @@ ok "Installed privileged whitelist at $WHITELIST."
 
 # 2. Install the privileged wrapper script.
 #    The wrapper runs as root via a NOPASSWD sudoers rule, so it must
-#    verify the caller's session token with the broker before executing
-#    anything, and fail closed whenever the broker cannot confirm it.
+#    verify the caller's session token with openterm-authd before
+#    executing anything, and fail closed whenever openterm-authd cannot
+#    confirm it.
 cat > "$WRAPPER" << 'EOF'
 #!/usr/bin/python3
 """openterm privileged wrapper.
 
 Executed as root through a NOPASSWD sudoers rule, so the sudo password
 gate does not apply: access control lives entirely in the session token
-verified by the openterm broker. The token travels in the environment
+verified by openterm-authd. The token travels in the environment
 (OPENTERM_SESSION_TOKEN) set by the MCP tool server for privileged
 invocations only. Any failure to verify the token is fatal (fail closed).
 """
@@ -64,9 +65,9 @@ import pwd
 import socket
 import sys
 
-BROKER_SOCKET = "/run/openterm/broker.sock"
+AUTHD_SOCKET = "/run/openterm/authd.sock"
 TOKEN_ENV_VAR = "OPENTERM_SESSION_TOKEN"
-BROKER_TIMEOUT_SECONDS = 5
+AUTHD_TIMEOUT_SECONDS = 5
 
 
 def fail(message):
@@ -74,11 +75,11 @@ def fail(message):
     sys.exit(1)
 
 
-def verify_token_with_broker(user, token):
+def verify_token_with_authd(user, token):
     try:
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sock.settimeout(BROKER_TIMEOUT_SECONDS)
-        sock.connect(BROKER_SOCKET)
+        sock.settimeout(AUTHD_TIMEOUT_SECONDS)
+        sock.connect(AUTHD_SOCKET)
         try:
             request = {
                 "jsonrpc": "2.0",
@@ -115,8 +116,8 @@ def main():
     if not token:
         fail("no session token provided")
 
-    if not verify_token_with_broker(real_user, token):
-        fail("session token not verified by the openterm broker")
+    if not verify_token_with_authd(real_user, token):
+        fail("session token not verified by openterm-authd")
 
     # Canonicalize for the whitelist check but exec the path as invoked:
     # symlink-dispatched multiplexers (kmod applets such as modprobe -> kmod)
@@ -156,27 +157,27 @@ chmod 0755 "$WRAPPER"
 chown root:root "$WRAPPER"
 ok "Installed wrapper at $WRAPPER."
 
-# 3. The token broker and its system service are package files installed
-#    by dpkg (/usr/lib/openterm/openterm-broker and the systemd unit); here
+# 3. openterm-authd and its system service are package files installed
+#    by dpkg (/usr/lib/openterm/openterm-authd and the systemd unit); here
 #    they are enabled and started.
-if [ -f "$BROKER" ] && [ -f "$BROKER_SERVICE" ]; then
-  chown root:root "$BROKER"
-  chmod 0755 "$BROKER"
-  chown root:root "$BROKER_SERVICE"
-  chmod 0644 "$BROKER_SERVICE"
+if [ -f "$AUTHD" ] && [ -f "$AUTHD_SERVICE" ]; then
+  chown root:root "$AUTHD"
+  chmod 0755 "$AUTHD"
+  chown root:root "$AUTHD_SERVICE"
+  chmod 0644 "$AUTHD_SERVICE"
   if command -v systemctl >/dev/null 2>&1; then
     systemctl daemon-reload >/dev/null 2>&1 || true
-    systemctl enable --now openterm-broker.service >/dev/null 2>&1 || \
-      warn "Could not start openterm-broker.service automatically."
+    systemctl enable --now openterm-authd.service >/dev/null 2>&1 || \
+      warn "Could not start openterm-authd.service automatically."
   fi
-  ok "Token broker installed at $BROKER."
+  ok "openterm-authd installed at $AUTHD."
 else
-  die "Token broker files missing from the package installation."
+  die "openterm-authd files missing from the package installation."
 fi
 
 # 4. Sudoers fragment — NOPASSWD on the wrapper only, with the session
 #    token forwarded to it. The wrapper independently verifies the token
-#    with the broker, so the NOPASSWD rule grants nothing on its own.
+#    with openterm-authd, so the NOPASSWD rule grants nothing on its own.
 #    This means: sudo snap in a normal terminal still asks for a password.
 cat > "$SUDOERS_FILE" << EOF
 # openterm MCP server - restricted privileged commands

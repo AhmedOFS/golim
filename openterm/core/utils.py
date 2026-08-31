@@ -69,7 +69,7 @@ def get_socket_path() -> Path:
         username = pwd.getpwuid(os.getuid()).pw_name
     except Exception:
         username = os.environ.get("USER", "default")
-    return Path(f"/tmp/openterm_mcp_{username}.sock")
+    return Path(f"/tmp/openterm_tools_{username}.sock")
 def _is_python_binary(tok: str) -> bool:
     name = os.path.basename(tok)
     return name in _PYTHON_BINARIES or name.startswith("python3.")

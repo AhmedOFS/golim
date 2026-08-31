@@ -6,7 +6,7 @@ import unittest
 
 from openterm import config
 from openterm.config.app_home import resolve_app_home
-from openterm.mcp.config import ServerConfig, get_config, init_config
+from openterm.toolset.config import ServerConfig, get_config, init_config
 
 
 class McpConfigSchemaTests(unittest.TestCase):
