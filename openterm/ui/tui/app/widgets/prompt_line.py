@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from textual import events
 from textual.containers import Horizontal
 from textual.widgets import Input, Static
 
@@ -17,7 +18,7 @@ class PromptLine(Horizontal):
 
     def compose(self):
         yield Static(">", id="prompt_marker")
-        yield Input(id="prompt", placeholder=INITIAL_PROMPT_PLACEHOLDER)
+        yield PromptInput(id="prompt", placeholder=INITIAL_PROMPT_PLACEHOLDER)
 
     def update_placeholder(self, busy: bool, has_completed: bool) -> None:
         prompt = self.query_one("#prompt", Input)
@@ -79,3 +80,29 @@ class PromptLine(Horizontal):
             DONE_PROMPT_PLACEHOLDER if has_completed else INITIAL_PROMPT_PLACEHOLDER
         )
         prompt.disabled = False
+
+
+class PromptInput(Input):
+    """Single-line prompt input that keeps all text from bracketed pastes.
+
+    Textual's standard ``Input`` intentionally takes only the first line from
+    a paste. The prompt still submits with Enter, but pasted newlines are kept
+    in the value so multi-line prompts reach the agent intact.
+    """
+
+    def _paste_text(self, text: str) -> None:
+        if not text:
+            return
+        start, end = self.selection
+        if start == end:
+            self.insert_text_at_cursor(text)
+        else:
+            self.replace(text, start, end)
+
+    def _on_paste(self, event: events.Paste) -> None:
+        self._paste_text(event.text)
+        event.stop()
+
+    def action_paste(self) -> None:
+        """Paste the complete clipboard contents, including newlines."""
+        self._paste_text(self.app.clipboard)
