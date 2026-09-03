@@ -1,6 +1,6 @@
 # OpenTerm
 
-OpenTerm is a minimal AI harness for Linux and MacOS for general tasks and automation throughout your System with a few nifty tweaks to enable better performance out of local LLMs on your PC
+OpenTerm is a minimal AI harness for Linux and MacOS for general tasks and automation throughout your system with a secure mechanism for privileged execution and a few nifty tweaks to enable better output from local LLMs on your PC
 
 OpenTerm supports:
 
@@ -18,7 +18,7 @@ OpenTerm supports:
 
 ### From GitHub `.deb` releases
 
-The easiest way to install OpenTerm on a supported Debian-based Linux system
+To install OpenTerm on a supported Debian-based Linux system
 is to download the package for your architecture from the
 [GitHub Releases page](https://github.com/AhmedOFS/cterm-private/releases).
 
@@ -50,8 +50,7 @@ python -m pip install --upgrade pip
 python -m pip install -e .
 ```
 
-The editable install provides the `openterm` command. You can also run the
-module directly with `python -m openterm`.
+Then run the module directly with `python -m openterm`.
 
 ## Configuration
 
@@ -75,12 +74,7 @@ openterm -i
 ```
 
 The default Ollama endpoint is `http://localhost:11434`. Set `OLLAMA_HOST` or
-enter a custom endpoint in the wizard when using a remote Ollama server. Use
-`--binary` if the Ollama executable has a different name or location:
-
-```bash
-openterm --binary /path/to/ollama -i
-```
+enter a custom endpoint in the wizard if using a remote Ollama server.
 
 ### OpenRouter
 
@@ -102,7 +96,7 @@ when available, then lets you enter the model name.
 
 ### TUI mode
 
-Start the full TUI with no message:
+Start the full TUI with:
 
 ```bash
 openterm
@@ -135,7 +129,6 @@ Useful command-line options:
 ```bash
 openterm --version
 openterm -i
-openterm --binary /path/to/ollama "List the models available locally"
 openterm --help
 ```
 
