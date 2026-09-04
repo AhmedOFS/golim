@@ -34,7 +34,7 @@ class SkillsLoaderTests(unittest.TestCase):
             "Always inspect status before changing branches.",
         )
 
-    def test_selects_skills_with_small_model_json(self):
+    def test_selects_relevant_skills_via_json(self):
         with tempfile.TemporaryDirectory() as tmp:
             skills_dir = Path(tmp) / "skills"
             skills_dir.mkdir()

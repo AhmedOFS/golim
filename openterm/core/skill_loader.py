@@ -20,7 +20,7 @@ class Skill:
 
 
 class SkillsLoader:
-    """Loads skills from markdown files and asks a small model to select matches."""
+    """Loads skills from markdown files and asks a model to select matches."""
 
     WHEN_HEADINGS = {"when to use", "when to use this skill", "usage"}
     CONTENT_HEADINGS = {"skill", "skill content", "content", "instructions"}

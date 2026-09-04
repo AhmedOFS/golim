@@ -36,11 +36,9 @@ class Runtime:
         config: Config | None = None,
         model: str | None = None,
         binary: str = "ollama",
-        small_model: str | None = None,
     ):
         self.config = config or get_config()
         self.model = model
-        self.small_model = small_model
         self.binary = binary
         self.mcp_client: FastMCPClient | None = None
         self.tools = []
@@ -283,7 +281,7 @@ class Runtime:
         try:
             selected = loader.select(
                 user_message,
-                self.small_model or self.model,
+                self.model,
                 chat_with_model_api,
                 binary=self.binary,
             )
@@ -343,7 +341,6 @@ class Runtime:
         agent = ToolAgent(
             self.model,
             self.binary,
-            self.small_model,
             ui=self._active_ui(),
             mcp_client=self.mcp_client,
             tools=tools,
@@ -383,7 +380,6 @@ class Runtime:
         agent = ToolAgent(
             self.model,
             self.binary,
-            self.small_model,
             ui=self._active_ui(),
             mcp_client=self.mcp_client,
             tools=tools,

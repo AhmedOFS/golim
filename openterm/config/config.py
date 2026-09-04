@@ -54,7 +54,6 @@ class Config:
 
     PROVIDERS = "providers"
     ATTRIBUTES = "attributes"
-    SMALL_MODEL = "small_model"
     UNRESTRICTED_MODE = "unrestricted_mode"
     PROACTIVE_AUTH = "proactive_auth"
     STREAM_THINKING_TRACES = "thinking_traces"
@@ -74,7 +73,6 @@ class Config:
     OPENAI_COMPATIBLE_SERVER_URL = "url"
 
     _ATTRIBUTE_DEFAULTS = {
-        SMALL_MODEL: None,
         STREAM_THINKING_TRACES: False,
         UNRESTRICTED_MODE: False,
         PROACTIVE_AUTH: True,
@@ -212,8 +210,6 @@ class Config:
 
     @property
     def selected_model(self): return self._session_model
-    @property
-    def small_model(self): return self.get(self.SMALL_MODEL)
     @property
     def unrestricted_mode(self): return bool(self.get(self.UNRESTRICTED_MODE))
     @property

@@ -11,7 +11,6 @@ from ...config.utils import (
     normalize_openai_compatible_url,
     _ollama_server_running,
     select_model,
-    select_optional_model,
 )
 
 
@@ -93,24 +92,6 @@ def init_openrouter(config: Config) -> int:
     if not model:
         model = saved_model or "anthropic/claude-3.5-sonnet"
     print(f"✓ Model: {model}")
-
-    small = config.small_model
-    print(f"\nOptional small model for lightweight tasks (skills selection,")
-    print(f"  verification). Enter to skip or 'none' to clear.")
-    prompt = f"Small model [{small or 'none'}]: "
-    try:
-        small_choice = input(prompt).strip()
-    except (KeyboardInterrupt, EOFError):
-        print()
-        small_choice = ""
-    if small_choice and small_choice.lower() not in ("none", "clear", "skip"):
-        config.set(Config.SMALL_MODEL, small_choice)
-        print(f"✓ Small model: {small_choice}")
-    elif small_choice and small_choice.lower() in ("none", "clear"):
-        config.unset(Config.SMALL_MODEL)
-        print("✓ Small model cleared")
-    elif small:
-        print(f"✓ Small model: {small}")
 
     config.choose_model(model, Config.OPEN_ROUTER)
     print("\n✓ OpenRouter configured")
@@ -213,14 +194,6 @@ def init_ollama(config: Config, binary: str) -> int:
     config.choose_model(selected, Config.OLLAMA)
     print(f"✓ Selected model: {selected}")
 
-    small_model = select_optional_model(models, config.small_model, "small model")
-    if small_model:
-        config.set(Config.SMALL_MODEL, small_model)
-        print(f"✓ Selected small model: {small_model}")
-    else:
-        config.unset(Config.SMALL_MODEL)
-        print("✓ No small model configured")
-
     return 0
 
 
@@ -257,24 +230,6 @@ def init_openai_compatible(config: Config) -> int:
         model = saved_model or "default"
     config.choose_model(model, Config.OPENAI_COMPATIBLE)
     print(f"✓ Model: {model}")
-
-    small = config.small_model
-    print(f"\nOptional small model for lightweight tasks (skills selection,")
-    print(f"  verification). Enter to skip or 'none' to clear.")
-    prompt = f"Small model [{small or 'none'}]: "
-    try:
-        small_choice = input(prompt).strip()
-    except (KeyboardInterrupt, EOFError):
-        print()
-        small_choice = ""
-    if small_choice and small_choice.lower() not in ("none", "clear", "skip"):
-        config.set(Config.SMALL_MODEL, small_choice)
-        print(f"✓ Small model: {small_choice}")
-    elif small_choice and small_choice.lower() in ("none", "clear"):
-        config.unset(Config.SMALL_MODEL)
-        print("✓ Small model cleared")
-    elif small:
-        print(f"✓ Small model: {small}")
 
     print("\n✓ OpenAI-compatible provider configured")
     return 0

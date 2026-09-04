@@ -20,7 +20,7 @@ def _setup_session_log():
 def chat_command(message: str, binary: str = "ollama") -> int:
     """Send a message to the configured model."""
     init_config()
-    error, model, small_model = _resolve_chat_settings(binary)
+    error, model = _resolve_chat_settings(binary)
     if error:
         print(error)
         return 1
@@ -31,7 +31,6 @@ def chat_command(message: str, binary: str = "ollama") -> int:
         ui = TerminalUI(
             model=model,
             binary=binary,
-            small_model=small_model,
             transcript=transcript,
         )
         response = ui.run(message)
@@ -52,9 +51,9 @@ def chat_command(message: str, binary: str = "ollama") -> int:
         print(f"\n\033[2m(log: {log_path})\033[0m", file=sys.stderr)
 
 
-def _resolve_chat_settings(binary: str = "ollama") -> tuple[str | None, str | None, str | None]:
-    error, model, small_model, _ = resolve_provider_settings(get_config(), binary)
-    return error, model, small_model
+def _resolve_chat_settings(binary: str = "ollama") -> tuple[str | None, str | None]:
+    error, model, _ = resolve_provider_settings(get_config(), binary)
+    return error, model
 
 
 def tui_command(binary: str = "ollama") -> int:
@@ -63,7 +62,7 @@ def tui_command(binary: str = "ollama") -> int:
     from .ui.tui.app.app_tui import OpentermApp
 
     config = get_config()
-    error, model, small_model, model_label = resolve_provider_settings(config, binary)
+    error, model, model_label = resolve_provider_settings(config, binary)
 
     try:
         result = OpentermApp(
@@ -71,7 +70,6 @@ def tui_command(binary: str = "ollama") -> int:
             config=config,
             model=model,
             binary=binary,
-            small_model=small_model,
             runtime_error=error,
         ).run()
         return int(result or 0)

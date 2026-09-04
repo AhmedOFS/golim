@@ -102,6 +102,7 @@ class PromptInput(Input):
     def _on_paste(self, event: events.Paste) -> None:
         self._paste_text(event.text)
         event.stop()
+        event.prevent_default()
 
     def action_paste(self) -> None:
         """Paste the complete clipboard contents, including newlines."""

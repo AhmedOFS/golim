@@ -27,7 +27,6 @@ class ToolAgent:
         self,
         model,
         binary="ollama",
-        small_model=None,
         ui: AgentEvents | None = None,
         mcp_client=None,
         tools=None,
@@ -36,7 +35,6 @@ class ToolAgent:
         permissions: Permissions | None = None,
     ):
         self.model = model
-        self.small_model = small_model
         self.binary = binary
         self.mcp_client = mcp_client
         self.tools = list(tools or [])

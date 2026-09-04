@@ -74,21 +74,9 @@ class OpenRouterModelConfigTests(unittest.TestCase):
         with patch.object(config_tui, "get_openrouter_models", return_value=["provider/first", "saved/model"]):
             next_state = config_tui._state_openrouter_model(config, ui, "ollama")
 
-        self.assertEqual(next_state, "OPENROUTER_SMALL_MODEL")
+        self.assertEqual(next_state, "COMMON_BASH")
         self.assertEqual(ui.search_calls, [("Select model", ["provider/first", "saved/model"], "saved/model")])
         self.assertEqual(config.chosen, [("provider/selected", Config.OPEN_ROUTER)])
-
-    def test_openrouter_small_model_defaults_to_normal_model(self):
-        from openterm.ui.tui.config import config_tui
-        config = _FakeConfig(selected_model="provider/normal")
-        ui = _FakeUI("provider/small")
-
-        with patch.object(config_tui, "get_openrouter_models", return_value=["provider/first", "provider/normal"]):
-            next_state = config_tui._state_openrouter_small_model(config, ui, "ollama")
-
-        self.assertEqual(next_state, "COMMON_BASH")
-        self.assertEqual(ui.search_calls, [("Select small model", ["provider/first", "provider/normal"], "provider/normal")])
-        self.assertEqual(config.values[Config.SMALL_MODEL], "provider/small")
 
     def test_openrouter_key_input_saves_key_then_validates(self):
         from openterm.ui.tui.config import config_tui
@@ -161,7 +149,6 @@ class OpenRouterBasicConfigValidationTests(unittest.TestCase):
             def __init__(self):
                 self.openrouter_api_key = None
                 self.selected_model = None
-                self.small_model = None
                 self.values = {}
                 self.chosen = []
 

@@ -169,8 +169,7 @@ class MainTuiTests(unittest.TestCase):
         config = MagicMock()
         config.api_provider = "ollama"
         config.selected_model = "new-model"
-        config.small_model = "new-small"
-        app = OpentermApp("old", config=config, model="old-model", small_model="old-small")
+        app = OpentermApp("old", config=config, model="old-model")
         fake_footer = FakeFooter()
         runtime = FakeRuntime()
         app._runtime = runtime
@@ -187,7 +186,6 @@ class MainTuiTests(unittest.TestCase):
 
         self.assertEqual(app.model_label, "new-model")
         self.assertEqual(app._model, "new-model")
-        self.assertEqual(app._small_model, "new-small")
         self.assertIsNone(app._runtime_error)
         self.assertEqual(fake_footer.model_label, "new-model")
         self.assertTrue(runtime.terminated)

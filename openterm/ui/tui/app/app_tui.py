@@ -327,14 +327,12 @@ class OpentermApp(ConfigUIMixin, App[int]):
         config: Config | None = None,
         model: str | None = None,
         binary: str = "ollama",
-        small_model: str | None = None,
         runtime_error: str | None = None,
     ):
         super().__init__()
         self._config = config or get_config()
         self._model = model
         self._binary = binary
-        self._small_model = small_model
         self._runtime_error = runtime_error
         self._runtime: Runtime | None = None
         self.model_label = model_label
@@ -367,16 +365,15 @@ class OpentermApp(ConfigUIMixin, App[int]):
                 config=self._config,
                 model=self._model,
                 binary=self._binary,
-                small_model=self._small_model,
             )
         return self._runtime
 
-    def _resolve_current_settings(self) -> tuple[str | None, str | None, str | None, str]:
+    def _resolve_current_settings(self) -> tuple[str | None, str | None, str]:
         return resolve_provider_settings(self._config, self._binary)
 
     def _reload_config_settings(self) -> None:
         self._config.reload()
-        self._runtime_error, self._model, self._small_model, self.model_label = self._resolve_current_settings()
+        self._runtime_error, self._model, self.model_label = self._resolve_current_settings()
         self.query_one("#footer", Footer).set_model(self.model_label)
         if self._runtime is not None:
             self._runtime.terminate()

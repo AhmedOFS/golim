@@ -37,10 +37,10 @@ def is_ollama_installed(binary: str = "ollama") -> bool:
     return bool(shutil.which(binary))
 
 
-def resolve_provider_settings(config, binary: str = "ollama") -> tuple[str | None, str | None, str | None, str]:
+def resolve_provider_settings(config, binary: str = "ollama") -> tuple[str | None, str | None, str]:
     """Validate the configured provider and return its runtime settings.
 
-    The returned tuple is ``(error, model, small_model, label)``.  Provider
+    The returned tuple is ``(error, model, label)``.  Provider
     identifiers are deliberately matched only against the canonical Config
     constants; unknown values are errors rather than implicit fallbacks.
     """
@@ -48,28 +48,27 @@ def resolve_provider_settings(config, binary: str = "ollama") -> tuple[str | Non
 
     provider = config.api_provider
     model = config.selected_model
-    small_model = config.small_model
 
     if provider == Config.OPEN_ROUTER:
         label = model or "OpenRouter"
         if not config.openrouter_api_key:
-            return "Error: OpenRouter API key not configured\nRun 'openterm -i' to set it up", None, None, label
+            return "Error: OpenRouter API key not configured\nRun 'openterm -i' to set it up", None, label
     elif provider == Config.OPENAI_COMPATIBLE:
         label = model or "OpenAI-compatible"
         if not config.openai_compatible_server_url:
-            return "Error: OpenAI-compatible server URL not configured\nRun 'openterm -i' to set it up", None, None, label
+            return "Error: OpenAI-compatible server URL not configured\nRun 'openterm -i' to set it up", None, label
     elif provider == Config.OLLAMA:
         label = model or "Ollama"
         if not is_ollama_installed(binary):
-            return f"Error: {binary} is not installed", None, None, label
+            return f"Error: {binary} is not installed", None, label
     else:
         label = model or f"Unknown provider: {provider}"
-        return f"Error: Unsupported API provider: {provider!r}\nRun 'openterm -i' to set it up", None, None, label
+        return f"Error: Unsupported API provider: {provider!r}\nRun 'openterm -i' to set it up", None, label
 
     if not model:
-        return "Error: No model configured\nRun 'openterm -i' to initialize", None, None, label
+        return "Error: No model configured\nRun 'openterm -i' to initialize", None, label
 
-    return None, model, small_model, label
+    return None, model, label
 
 
 def get_models(binary: str) -> list[str]:

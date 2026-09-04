@@ -35,14 +35,12 @@ class ConfigSchemaTests(unittest.TestCase):
         config = Config()
         config.set_provider_value(Config.OPEN_ROUTER, Config.PROVIDER_API_KEY, "key")
         config.choose_model("provider/model", Config.OPEN_ROUTER)
-        config.set(Config.SMALL_MODEL, "provider/small")
         config.set(Config.EXA_API_KEY, "exa-key")
 
         saved = json.loads(config.path.read_text())
         self.assertEqual(saved["providers"]["open_router"]["api_key"], "key")
         self.assertNotIn("current_model", saved["attributes"])
         self.assertNotIn("api_provider", saved["attributes"])
-        self.assertEqual(saved["attributes"]["small_model"], "provider/small")
         self.assertEqual(saved["attributes"]["exa_api_key"], "exa-key")
         self.assertTrue(config.is_complete())
 
@@ -95,12 +93,12 @@ class ConfigSchemaTests(unittest.TestCase):
 
     def test_unset_optional_attribute_preserves_the_schema(self):
         config = Config()
-        config.set(Config.SMALL_MODEL, "small/model")
-        config.unset(Config.SMALL_MODEL)
+        config.set(Config.EXA_API_KEY, "key")
+        config.unset(Config.EXA_API_KEY)
 
         saved = json.loads(config.path.read_text())
-        self.assertIn(Config.SMALL_MODEL, saved[Config.ATTRIBUTES])
-        self.assertIsNone(saved[Config.ATTRIBUTES][Config.SMALL_MODEL])
+        self.assertIn(Config.EXA_API_KEY, saved[Config.ATTRIBUTES])
+        self.assertIsNone(saved[Config.ATTRIBUTES][Config.EXA_API_KEY])
 
     def test_proactive_auth_defaults_to_enabled_and_can_be_disabled(self):
         config = Config()
@@ -237,14 +235,12 @@ class ConfigSchemaTests(unittest.TestCase):
         config = MagicMock(
             api_provider="openrouter",
             selected_model="provider/model",
-            small_model=None,
         )
 
-        error, model, small_model, label = resolve_provider_settings(config)
+        error, model, label = resolve_provider_settings(config)
 
         self.assertIn("Unsupported API provider", error)
         self.assertIsNone(model)
-        self.assertIsNone(small_model)
         self.assertEqual(label, "provider/model")
 
     def test_normalize_openai_compatible_url_strips_v1_scheme_and_slashes(self):

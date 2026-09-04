@@ -23,13 +23,11 @@ class TerminalUI(AgentEvents):
         config: Config | None = None,
         model: str | None = None,
         binary: str = "ollama",
-        small_model: str | None = None,
         transcript: TranscriptWriter | None = None,
     ):
         self._config = config or get_config()
         self._model = model
         self._binary = binary
-        self._small_model = small_model
         self._spinner = None
         self._thinking_live = False
         self._transcript = transcript
@@ -39,7 +37,6 @@ class TerminalUI(AgentEvents):
             config=self._config,
             model=self._model,
             binary=self._binary,
-            small_model=self._small_model,
         ) as runtime:
             runtime.bind_ui(self)
             return runtime.run(message)

@@ -264,21 +264,6 @@ def _state_openrouter_model(config: Config, ui: ConfigPromptHandle, binary: str)
     model = ui.search_models("Select model", models, saved_model)
     config.choose_model(model, Config.OPEN_ROUTER)
     ui.log(f"✓ Model: {model}", STYLE_SUCCESS)
-    return "OPENROUTER_SMALL_MODEL"
-
-
-def _state_openrouter_small_model(config: Config, ui: ConfigPromptHandle, binary: str) -> str:
-    models = get_openrouter_models(config.openrouter_api_key)
-    if not models:
-        ui.log("Could not fetch OpenRouter models. Check your API key and connection.", STYLE_ERROR)
-        ui.message("Unable to load OpenRouter models. Press Enter to retry.")
-        return "OPENROUTER_SMALL_MODEL"
-    normal_model = config.selected_model
-    ui.log("Select a small model (defaults to the selected model):", STYLE_DIM)
-    small_choice = ui.search_models("Select small model", models, normal_model)
-    config.set(Config.SMALL_MODEL, small_choice)
-    ui.log(f"✓ Small model: {small_choice}", STYLE_SUCCESS)
-
     ui.log("✓ OpenRouter configured", STYLE_SUCCESS)
     return _provider_complete_state(ui)
 
@@ -348,29 +333,10 @@ def _state_ollama_model(config: Config, ui: ConfigPromptHandle, binary: str) -> 
 
     config.choose_model(selected, Config.OLLAMA)
     ui.log(f"✓ Selected model: {selected}", STYLE_SUCCESS)
-    return "OLLAMA_SMALL_MODEL"
-
-
-def _state_ollama_small_model(config: Config, ui: ConfigPromptHandle, binary: str) -> str:
-    models = get_models(binary) or []
-    saved_small = config.small_model
-    options = list(models) + ["(none / clear)"]
-    default_small = (
-        options.index(saved_small) if saved_small and saved_small in options else len(options) - 1
-    )
-    ui.log("Optional small model for lightweight tasks.", STYLE_DIM)
-    sidx = ui.select("Select small model", options, default_small)
-    if sidx == len(options) - 1:
-        config.unset(Config.SMALL_MODEL)
-        ui.log("✓ No small model configured", STYLE_SUCCESS)
-    else:
-        small_model = options[sidx]
-        config.set(Config.SMALL_MODEL, small_model)
-        ui.log(f"✓ Selected small model: {small_model}", STYLE_SUCCESS)
     return "COMMON_BASH"
 
 
-# -- OpenAI-compatible branch -------------------------------------------------------
+# -- OpenAI-compatible branch ------------------------------------------------------
 
 
 def _state_openai_compatible_url(config: Config, ui: ConfigPromptHandle, binary: str) -> str:
@@ -407,23 +373,6 @@ def _state_openai_compatible_model(config: Config, ui: ConfigPromptHandle, binar
         model = saved_model or "default"
     config.choose_model(model, Config.OPENAI_COMPATIBLE)
     ui.log(f"✓ Model: {model}", STYLE_SUCCESS)
-    return "OPENAI_COMPATIBLE_SMALL_MODEL"
-
-
-def _state_openai_compatible_small_model(config: Config, ui: ConfigPromptHandle, binary: str) -> str:
-    small = config.small_model
-    ui.log("Optional small model for lightweight tasks (skills selection,", STYLE_DIM)
-    ui.log("  verification). Enter to skip or 'none' to clear.", STYLE_DIM)
-    small_choice = ui.input("Small model", default=small or "", placeholder=small or "none")
-    if small_choice and small_choice.lower() not in ("none", "clear", "skip"):
-        config.set(Config.SMALL_MODEL, small_choice)
-        ui.log(f"✓ Small model: {small_choice}", STYLE_SUCCESS)
-    elif small_choice and small_choice.lower() in ("none", "clear"):
-        config.unset(Config.SMALL_MODEL)
-        ui.log("✓ Small model cleared", STYLE_SUCCESS)
-    elif small:
-        ui.log(f"✓ Small model: {small}", STYLE_SUCCESS)
-
     ui.log("✓ OpenAI-compatible provider configured", STYLE_SUCCESS)
     return _provider_complete_state(ui)
 
@@ -488,16 +437,13 @@ STATE_HANDLERS: dict[str, Callable[[Config, ConfigPromptHandle, str], str]] = {
     "OPENROUTER_KEY_INPUT": _state_openrouter_key_input,
     "OPENROUTER_CONNECT": _state_openrouter_connect,
     "OPENROUTER_MODEL": _state_openrouter_model,
-    "OPENROUTER_SMALL_MODEL": _state_openrouter_small_model,
     "OLLAMA_INSTALL_CHECK": _state_ollama_install_check,
     "OLLAMA_CONNECT": _state_ollama_connect,
     "OLLAMA_URL_INPUT": _state_ollama_url_input,
     "OLLAMA_MODEL": _state_ollama_model,
-    "OLLAMA_SMALL_MODEL": _state_ollama_small_model,
     "OPENAI_COMPATIBLE_URL": _state_openai_compatible_url,
     "OPENAI_COMPATIBLE_CONNECT": _state_openai_compatible_connect,
     "OPENAI_COMPATIBLE_MODEL": _state_openai_compatible_model,
-    "OPENAI_COMPATIBLE_SMALL_MODEL": _state_openai_compatible_small_model,
     "COMMON_BASH": _state_common_bash,
     "COMMON_THINKING": _state_common_thinking,
     "COMMON_PROACTIVE_AUTH": _state_common_proactive_auth,
