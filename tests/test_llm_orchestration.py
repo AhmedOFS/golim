@@ -7,6 +7,7 @@ from unittest.mock import patch
 from io import StringIO
 
 from openterm.config import Config, init_config
+from openterm.config.app_home import resolve_app_home
 from openterm.core.agent import ToolAgent
 
 
@@ -192,8 +193,10 @@ class OrchestrationTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp, \
              patch.dict(os.environ, {"HOME": tmp}), \
+             patch("openterm.config.app_home._app_home", None), \
              patch.object(agent, "_execute_tool", return_value={"ok": True, "results": []}), \
              patch("openterm.core.agent.chat_with_model_api", side_effect=fake_chat):
+            resolve_app_home()
             init_config().set(Config.STREAM_THINKING_TRACES, True)
             result = agent._run_action_agent("Do work.", selected_skills=[])
 
@@ -247,8 +250,10 @@ class OrchestrationTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp, \
              patch.dict(os.environ, {"HOME": tmp}), \
+             patch("openterm.config.app_home._app_home", None), \
              patch.object(agent, "_execute_tool", return_value={"ok": True, "results": []}), \
              patch("openterm.core.agent.chat_with_model_api", side_effect=fake_chat):
+            resolve_app_home()
             init_config().set(Config.STREAM_THINKING_TRACES, True)
             result = agent._run_action_agent("Do work.", selected_skills=[])
 

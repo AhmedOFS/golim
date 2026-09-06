@@ -349,7 +349,9 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(ui.prompts, 0)
 
     def test_run_authenticates_sudo_after_tools_before_skills(self):
-        runtime = Runtime(model="main")
+        config = MagicMock()
+        config.proactive_auth = True
+        runtime = Runtime(config=config, model="main")
         runtime.bind_ui(FakeUI())
         runtime.mcp_client = FakeMCPClient()
         order = []

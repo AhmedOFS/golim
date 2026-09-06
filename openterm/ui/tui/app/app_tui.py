@@ -898,17 +898,19 @@ class OpentermApp(ConfigUIMixin, App[int]):
         return self._busy and self._active_run_id == run_id
 
     def _cancel_active_run(self, *, force: bool = True) -> None:
+        """Request cancellation without aborting the worker cleanup path.
+
+        The chat worker owns the call to ``Runtime.run``. Cancelling the
+        Textual worker directly can prevent ``Runtime.run`` from returning
+        and therefore skip the agent-history handoff into ``Runtime``.
+        Runtime cancellation signals are sufficient to make the agent unwind;
+        keep the worker alive until ``run_chat`` reaches its ``finally`` block.
+        """
         if self._runtime is not None:
             self._runtime.interrupt()
         if force:
             if self._active_cancel_event is not None:
                 self._active_cancel_event.set()
-            worker = self._chat_worker
-            if worker is not None and hasattr(worker, "cancel"):
-                try:
-                    worker.cancel()
-                except Exception:
-                    pass
 
     def action_interrupt(self) -> None:
         if self._menu_active:
@@ -922,8 +924,9 @@ class OpentermApp(ConfigUIMixin, App[int]):
             return
         if self._busy:
             # First Escape requests a cooperative interrupt so completed tool
-            # output can be recorded.  A second Escape requests cancellation
-            # of the current request via the run's cancellation signal.
+            # output can be recorded. A second Escape requests hard
+            # cancellation through Runtime; the worker remains alive long
+            # enough for Runtime.run() to return and save agent history.
             force = self._runtime is not None and self._runtime.should_interrupt()
             if force and self._runtime is not None:
                 self._runtime.hard_cancel()

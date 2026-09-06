@@ -148,6 +148,24 @@ class MainTuiTests(unittest.TestCase):
         self.assertTrue(fake_prompt_line.prompt.focused)
 
     @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
+    def test_hard_cancel_keeps_chat_worker_alive_for_runtime_cleanup(self):
+        from threading import Event
+
+        from openterm.ui.tui.app.app_tui import OpentermApp
+
+        app = OpentermApp("model", model="main")
+        app._runtime = MagicMock()
+        app._active_cancel_event = Event()
+        worker = MagicMock()
+        app._chat_worker = worker
+
+        app._cancel_active_run(force=True)
+
+        app._runtime.interrupt.assert_called_once_with()
+        self.assertTrue(app._active_cancel_event.is_set())
+        worker.cancel.assert_not_called()
+
+    @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
     def test_config_reload_updates_model_and_discards_runtime(self):
         from openterm.ui.tui.app.app_tui import OpentermApp
         from openterm.ui.tui.app.widgets.footer import Footer
