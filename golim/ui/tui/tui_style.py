@@ -2,6 +2,7 @@
 
 WHITE = "#f3f3f3"
 BG_DARK = "#1e1e1e"
+BG_PITCH_BLACK = "#0b0b0c"
 DIM = "#9e9e9e"
 ERROR = "#e06c75"
 SUCCESS = "#7d8a99"
