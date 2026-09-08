@@ -42,7 +42,7 @@ golim -i
 Clone the repository and create a virtual environment with Python 3.14.0:
 
 ```bash
-git clone https://github.com/AhmedOFS/cterm-private.git
+git clone https://github.com/AhmedOFS/golim.git
 cd cterm-private
 python3.14 -m venv .venv
 source .venv/bin/activate
