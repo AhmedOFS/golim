@@ -1,8 +1,8 @@
-# OpenTerm
+# Golim
 
-OpenTerm is a minimal AI harness for Linux and MacOS for general tasks and automation throughout your system with a secure mechanism for privileged execution and a few nifty tweaks to enable better output from local LLMs on your PC
+Golim is a minimal AI harness for Linux and MacOS for general tasks and automation throughout your system with a secure mechanism for privileged execution and a few nifty tweaks to enable better output from local LLMs on your PC
 
-OpenTerm supports:
+Golim supports:
 
 - Ollama for local models
 - OpenRouter for hosted models
@@ -18,23 +18,23 @@ OpenTerm supports:
 
 ### From GitHub `.deb` releases
 
-To install OpenTerm on a supported Debian-based Linux system
+To install Golim on a supported Debian-based Linux system
 is to download the package for your architecture from the
 [GitHub Releases page](https://github.com/AhmedOFS/cterm-private/releases).
 
 After downloading the `.deb` file, install it with:
 
 ```bash
-sudo apt install ./openterm_<version>_<architecture>.deb
+sudo apt install ./golim_<version>_<architecture>.deb
 ```
 
 For example, the package name may look like
-`openterm_0.1.0_amd64.deb`. The package installs the `openterm` command, the
+`golim_0.1.0_amd64.deb`. The package installs the `golim` command, the
 local tool service, and the privileged execution integration. Then initialize
 your provider:
 
 ```bash
-openterm -i
+golim -i
 ```
 
 ### From source
@@ -50,14 +50,14 @@ python -m pip install --upgrade pip
 python -m pip install -e .
 ```
 
-Then run the module directly with `python -m openterm`.
+Then run the module directly with `python -m golim`.
 
 ## Configuration
 
 Run the configuration wizard:
 
 ```bash
-openterm -i
+golim -i
 ```
 
 The wizard lets you choose a provider, select a model, optionally select a
@@ -70,7 +70,7 @@ Install Ollama using its official installer, then pull a model:
 ```bash
 ollama serve
 ollama pull llama3.2
-openterm -i
+golim -i
 ```
 
 The default Ollama endpoint is `http://localhost:11434`. Set `OLLAMA_HOST` or
@@ -78,7 +78,7 @@ enter a custom endpoint in the wizard if using a remote Ollama server.
 
 ### OpenRouter
 
-Choose **OpenRouter** in the wizard and enter your API key. OpenTerm validates
+Choose **OpenRouter** in the wizard and enter your API key. Golim validates
 the key and retrieves the available model list before saving your selection.
 
 ### OpenAI-compatible servers
@@ -89,7 +89,7 @@ Choose **OpenAI-compatible** and enter the server base URL, for example:
 http://localhost:8000
 ```
 
-An API key is optional. OpenTerm queries the server's `/v1/models` endpoint
+An API key is optional. Golim queries the server's `/v1/models` endpoint
 when available, then lets you enter the model name.
 
 ## Usage
@@ -99,7 +99,7 @@ when available, then lets you enter the model name.
 Start the full TUI with:
 
 ```bash
-openterm
+golim
 ```
 
 Type a request such as:
@@ -121,15 +121,15 @@ adds a follow-up:
 Pass a message directly for a basic terminal response:
 
 ```bash
-openterm "What files changed in this repository?"
+golim "What files changed in this repository?"
 ```
 
 Useful command-line options:
 
 ```bash
-openterm --version
-openterm -i
-openterm --help
+golim --version
+golim -i
+golim --help
 ```
 
 ## Available tools
@@ -147,7 +147,7 @@ The model can use the following local tools when appropriate:
 ## Web search
 
 Exa is the default web-search provider. Credentials can be stored in
-`~/.openterm/config/config.json` or supplied through environment variables:
+`~/.golim/config/config.json` or supplied through environment variables:
 
 ```bash
 export EXA_API_KEY="your-exa-key"
@@ -160,10 +160,10 @@ To use Parallel instead of Exa, set `attributes.websearch_provider` to
 
 ## Configuration and saved data
 
-OpenTerm stores per-user state under:
+Golim stores per-user state under:
 
 ```text
-~/.openterm/
+~/.golim/
 ```
 
 This includes:
@@ -181,8 +181,8 @@ configuration file.
 
 ## License
 
-OpenTerm is free software: you can redistribute it and/or modify it under the
+Golim is free software: you can redistribute it and/or modify it under the
 terms of the [GNU General Public License, version 3](LICENSE), as published by
 the Free Software Foundation.
 
-OpenTerm is distributed without any warranty; see the license for details.
+Golim is distributed without any warranty; see the license for details.

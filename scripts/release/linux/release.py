@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Assemble the relocatable Linux Openterm application runtime."""
+"""Assemble the relocatable Linux Golim application runtime."""
 
 from __future__ import annotations
 

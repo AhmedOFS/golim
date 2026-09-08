@@ -1,0 +1,14 @@
+[Unit]
+Description=Golim privileged-session token auth daemon
+Documentation=man:golim(1)
+After=local-fs.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/lib/golim/golim-authd
+Restart=on-failure
+RuntimeDirectory=golim
+RuntimeDirectoryMode=0755
+
+[Install]
+WantedBy=multi-user.target

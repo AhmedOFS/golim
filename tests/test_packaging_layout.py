@@ -22,13 +22,13 @@ class PrivilegedPackagingTests(unittest.TestCase):
         start = fragment.index('cat > "$SUDOERS_FILE" << EOF')
         end = fragment.index("EOF", start + len('cat > "$SUDOERS_FILE" << EOF'))
         sudoers = fragment[fragment.index("\n", start) + 1:end]
-        self.assertIn('Defaults!$WRAPPER env_keep += "OPENTERM_SESSION_TOKEN"', sudoers)
+        self.assertIn('Defaults!$WRAPPER env_keep += "GOLIM_SESSION_TOKEN"', sudoers)
         self.assertIn("$REAL_USER ALL=(root) NOPASSWD: $WRAPPER", sudoers)
         self.assertNotIn("timestamp_type", sudoers)
 
     def test_wrapper_requires_authd_verified_session_token(self):
         wrapper = (PACKAGING_DIR / "postinstall.sh").read_text(encoding="utf-8")
-        self.assertIn('TOKEN_ENV_VAR = "OPENTERM_SESSION_TOKEN"', wrapper)
+        self.assertIn('TOKEN_ENV_VAR = "GOLIM_SESSION_TOKEN"', wrapper)
         self.assertIn('method": "verify"', wrapper)
         self.assertIn("session token not verified", wrapper)
 
@@ -59,7 +59,7 @@ class PackagingLayoutTests(unittest.TestCase):
             (runtime / "include" / "python3.14").mkdir(parents=True)
             (runtime / "lib").mkdir()
             (runtime / "lib" / "libpython3.14.so").touch()
-            (runtime / "openterm").touch()
+            (runtime / "golim").touch()
             calls = []
 
             def record_called_process(command, **kwargs):
@@ -84,14 +84,14 @@ class PackagingLayoutTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             bin_dir = Path(temporary) / "bin"
             bin_dir.mkdir()
-            for name in ("python3.14", "python3.14-config", "openterm", "pip"):
+            for name in ("python3.14", "python3.14-config", "golim", "pip"):
                 (bin_dir / name).write_text("tool")
 
             remove_interpreter_tools(Path(temporary), keep_interpreter=True)
 
             self.assertTrue((bin_dir / "python3.14").exists())
             self.assertFalse((bin_dir / "python3.14-config").exists())
-            self.assertFalse((bin_dir / "openterm").exists())
+            self.assertFalse((bin_dir / "golim").exists())
             self.assertFalse((bin_dir / "pip").exists())
 
 

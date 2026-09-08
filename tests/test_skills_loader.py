@@ -3,7 +3,7 @@ import tempfile
 from pathlib import Path
 import unittest
 
-from openterm.core.skill_loader import SkillsLoader
+from golim.core.skill_loader import SkillsLoader
 
 
 class SkillsLoaderTests(unittest.TestCase):

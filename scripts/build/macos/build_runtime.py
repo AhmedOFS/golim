@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Download and install the pinned native macOS Openterm runtime."""
+"""Download and install the pinned native macOS Golim runtime."""
 
 from __future__ import annotations
 

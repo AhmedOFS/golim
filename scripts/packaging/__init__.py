@@ -1,1 +1,1 @@
-"""Platform-specific Openterm package builders."""
+"""Platform-specific Golim package builders."""

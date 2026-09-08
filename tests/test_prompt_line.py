@@ -9,7 +9,7 @@ class PromptLineTests(unittest.TestCase):
         from textual import events
         from textual.app import App, ComposeResult
 
-        from openterm.ui.tui.app.widgets.prompt_line import PromptInput, PromptLine
+        from golim.ui.tui.app.widgets.prompt_line import PromptInput, PromptLine
 
         class TestApp(App[None]):
             def compose(self) -> ComposeResult:

@@ -1,10 +1,10 @@
 #!/bin/bash
 set -e
 
-SUDOERS_FILE="/etc/sudoers.d/openterm"
-WRAPPER="/usr/lib/openterm/openterm-privileged"
-AUTHD="/usr/lib/openterm/openterm-authd"
-AUTHD_SERVICE="/usr/lib/systemd/system/openterm-authd.service"
+SUDOERS_FILE="/etc/sudoers.d/golim"
+WRAPPER="/usr/lib/golim/golim-privileged"
+AUTHD="/usr/lib/golim/golim-authd"
+AUTHD_SERVICE="/usr/lib/systemd/system/golim-authd.service"
 DEFAULT_ALLOWED=( /usr/bin/apt /usr/bin/apt-get /usr/bin/tee /usr/bin/snap )
 
 # ── Colours ──────────────────────────────────────────────────────────────────
@@ -21,17 +21,17 @@ REAL_USER="${SUDO_USER:-$USER}"
 [ "$REAL_USER" = "root" ] && die "Could not determine the real user. Run via sudo, not as root directly."
 REAL_HOME="$(getent passwd "$REAL_USER" | cut -d: -f6)"
 [ -n "$REAL_HOME" ] || die "Could not determine home directory for $REAL_USER."
-# The privileged whitelist belongs to the user's Openterm home, not the XDG
-# config directory. Keep this path aligned with openterm/toolset/config.py.
-OPENTERM_HOME="$REAL_HOME/.openterm"
-WHITELIST="$OPENTERM_HOME/privileged_whitelist"
+# The privileged whitelist belongs to the user's Golim home, not the XDG
+# config directory. Keep this path aligned with golim/toolset/config.py.
+GOLIM_HOME="$REAL_HOME/.golim"
+WHITELIST="$GOLIM_HOME/privileged_whitelist"
 
 # ── Install ───────────────────────────────────────────────────────────────────
-echo "Setting up openterm for user: $REAL_USER"
+echo "Setting up golim for user: $REAL_USER"
 echo
 
 # 1. Create the initial user-owned privileged command whitelist.
-install -d -m 0755 -o "$REAL_USER" -g "$REAL_USER" "$OPENTERM_HOME"
+install -d -m 0755 -o "$REAL_USER" -g "$REAL_USER" "$GOLIM_HOME"
 : > "$WHITELIST"
 for binary in "${DEFAULT_ALLOWED[@]}"; do
   if [ -x "$binary" ]; then
@@ -45,17 +45,17 @@ ok "Installed privileged whitelist at $WHITELIST."
 
 # 2. Install the privileged wrapper script.
 #    The wrapper runs as root via a NOPASSWD sudoers rule, so it must
-#    verify the caller's session token with openterm-authd before
-#    executing anything, and fail closed whenever openterm-authd cannot
+#    verify the caller's session token with golim-authd before
+#    executing anything, and fail closed whenever golim-authd cannot
 #    confirm it.
 cat > "$WRAPPER" << 'EOF'
 #!/usr/bin/python3
-"""openterm privileged wrapper.
+"""golim privileged wrapper.
 
 Executed as root through a NOPASSWD sudoers rule, so the sudo password
 gate does not apply: access control lives entirely in the session token
-verified by openterm-authd. The token travels in the environment
-(OPENTERM_SESSION_TOKEN) set by the MCP tool server for privileged
+verified by golim-authd. The token travels in the environment
+(GOLIM_SESSION_TOKEN) set by the MCP tool server for privileged
 invocations only. Any failure to verify the token is fatal (fail closed).
 """
 
@@ -65,13 +65,13 @@ import pwd
 import socket
 import sys
 
-AUTHD_SOCKET = "/run/openterm/authd.sock"
-TOKEN_ENV_VAR = "OPENTERM_SESSION_TOKEN"
+AUTHD_SOCKET = "/run/golim/authd.sock"
+TOKEN_ENV_VAR = "GOLIM_SESSION_TOKEN"
 AUTHD_TIMEOUT_SECONDS = 5
 
 
 def fail(message):
-    print(f"openterm-privileged: {message}", file=sys.stderr)
+    print(f"golim-privileged: {message}", file=sys.stderr)
     sys.exit(1)
 
 
@@ -105,7 +105,7 @@ def verify_token_with_authd(user, token):
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: openterm-privileged <binary> [args...]", file=sys.stderr)
+        print("Usage: golim-privileged <binary> [args...]", file=sys.stderr)
         sys.exit(1)
 
     real_user = os.environ.get("SUDO_USER", "")
@@ -117,7 +117,7 @@ def main():
         fail("no session token provided")
 
     if not verify_token_with_authd(real_user, token):
-        fail("session token not verified by openterm-authd")
+        fail("session token not verified by golim-authd")
 
     # Canonicalize for the whitelist check but exec the path as invoked:
     # symlink-dispatched multiplexers (kmod applets such as modprobe -> kmod)
@@ -127,8 +127,8 @@ def main():
     binary = os.path.realpath(requested)
 
     whitelist = os.environ.get(
-        "OPENTERM_PRIVILEGED_WHITELIST",
-        os.path.join(pwd.getpwnam(real_user).pw_dir, ".openterm/privileged_whitelist"),
+        "GOLIM_PRIVILEGED_WHITELIST",
+        os.path.join(pwd.getpwnam(real_user).pw_dir, ".golim/privileged_whitelist"),
     )
     try:
         with open(whitelist, "r", encoding="utf-8") as handle:
@@ -157,8 +157,8 @@ chmod 0755 "$WRAPPER"
 chown root:root "$WRAPPER"
 ok "Installed wrapper at $WRAPPER."
 
-# 3. openterm-authd and its system service are package files installed
-#    by dpkg (/usr/lib/openterm/openterm-authd and the systemd unit); here
+# 3. golim-authd and its system service are package files installed
+#    by dpkg (/usr/lib/golim/golim-authd and the systemd unit); here
 #    they are enabled and started.
 if [ -f "$AUTHD" ] && [ -f "$AUTHD_SERVICE" ]; then
   chown root:root "$AUTHD"
@@ -167,22 +167,22 @@ if [ -f "$AUTHD" ] && [ -f "$AUTHD_SERVICE" ]; then
   chmod 0644 "$AUTHD_SERVICE"
   if command -v systemctl >/dev/null 2>&1; then
     systemctl daemon-reload >/dev/null 2>&1 || true
-    systemctl enable --now openterm-authd.service >/dev/null 2>&1 || \
-      warn "Could not start openterm-authd.service automatically."
+    systemctl enable --now golim-authd.service >/dev/null 2>&1 || \
+      warn "Could not start golim-authd.service automatically."
   fi
-  ok "openterm-authd installed at $AUTHD."
+  ok "golim-authd installed at $AUTHD."
 else
-  die "openterm-authd files missing from the package installation."
+  die "golim-authd files missing from the package installation."
 fi
 
 # 4. Sudoers fragment — NOPASSWD on the wrapper only, with the session
 #    token forwarded to it. The wrapper independently verifies the token
-#    with openterm-authd, so the NOPASSWD rule grants nothing on its own.
+#    with golim-authd, so the NOPASSWD rule grants nothing on its own.
 #    This means: sudo snap in a normal terminal still asks for a password.
 cat > "$SUDOERS_FILE" << EOF
-# openterm MCP server - restricted privileged commands
+# golim MCP server - restricted privileged commands
 # Managed by packaging/postinstall.sh - do not edit manually
-Defaults!$WRAPPER env_keep += "OPENTERM_SESSION_TOKEN"
+Defaults!$WRAPPER env_keep += "GOLIM_SESSION_TOKEN"
 $REAL_USER ALL=(root) NOPASSWD: $WRAPPER
 EOF
 

@@ -2,7 +2,7 @@ import json
 import unittest
 from unittest.mock import patch, MagicMock
 
-from openterm.toolset.tools import websearch
+from golim.toolset.tools import websearch
 
 
 SAMPLE_EXA_RESPONSE = json.dumps({
@@ -43,8 +43,8 @@ def _config(attributes=None):
 
 class WebSearchToolTests(unittest.TestCase):
 
-    @patch("openterm.toolset.utils.web_utils.get_config", return_value=_config())
-    @patch("openterm.toolset.utils.web_utils.requests.post")
+    @patch("golim.toolset.utils.web_utils.get_config", return_value=_config())
+    @patch("golim.toolset.utils.web_utils.requests.post")
     def test_exa_happy_path(self, mock_post, mock_config):
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -67,8 +67,8 @@ class WebSearchToolTests(unittest.TestCase):
         self.assertEqual(payload["params"]["arguments"]["type"], "auto")
         self.assertEqual(payload["params"]["arguments"]["livecrawl"], "fallback")
 
-    @patch("openterm.toolset.utils.web_utils.get_config")
-    @patch("openterm.toolset.utils.web_utils.requests.post")
+    @patch("golim.toolset.utils.web_utils.get_config")
+    @patch("golim.toolset.utils.web_utils.requests.post")
     def test_exa_with_api_key(self, mock_post, mock_config):
         mock_config.return_value = _config({"exa_api_key": "test-key-123"})
         mock_response = MagicMock()
@@ -82,8 +82,8 @@ class WebSearchToolTests(unittest.TestCase):
         call_url = mock_post.call_args[0][0]
         self.assertIn("exaApiKey=test-key-123", call_url)
 
-    @patch("openterm.toolset.utils.web_utils.get_config", return_value=_config())
-    @patch("openterm.toolset.utils.web_utils.requests.post")
+    @patch("golim.toolset.utils.web_utils.get_config", return_value=_config())
+    @patch("golim.toolset.utils.web_utils.requests.post")
     def test_exa_with_custom_params(self, mock_post, mock_config):
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -98,8 +98,8 @@ class WebSearchToolTests(unittest.TestCase):
         self.assertEqual(args["type"], "fast")
         self.assertEqual(args["livecrawl"], "preferred")
 
-    @patch("openterm.toolset.utils.web_utils.get_config", return_value=_config())
-    @patch("openterm.toolset.utils.web_utils.requests.post")
+    @patch("golim.toolset.utils.web_utils.get_config", return_value=_config())
+    @patch("golim.toolset.utils.web_utils.requests.post")
     def test_clamps_num_results(self, mock_post, mock_config):
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -114,8 +114,8 @@ class WebSearchToolTests(unittest.TestCase):
         payload = mock_post.call_args[1]["json"]
         self.assertEqual(payload["params"]["arguments"]["numResults"], 1)
 
-    @patch("openterm.toolset.utils.web_utils.get_config")
-    @patch("openterm.toolset.utils.web_utils.requests.post")
+    @patch("golim.toolset.utils.web_utils.get_config")
+    @patch("golim.toolset.utils.web_utils.requests.post")
     def test_exa_failure_returns_no_results(self, mock_post, mock_config):
         mock_config.return_value = _config()
         mock_response = MagicMock()
@@ -126,25 +126,25 @@ class WebSearchToolTests(unittest.TestCase):
         )
         mock_post.return_value = mock_response
 
-        from openterm.toolset.tools import NO_RESULTS
+        from golim.toolset.tools import NO_RESULTS
         result = websearch("test")
         self.assertTrue(result["ok"])
         self.assertEqual(result["text"], NO_RESULTS)
 
-    @patch("openterm.toolset.utils.web_utils.get_config", return_value=_config())
-    @patch("openterm.toolset.utils.web_utils.requests.post")
+    @patch("golim.toolset.utils.web_utils.get_config", return_value=_config())
+    @patch("golim.toolset.utils.web_utils.requests.post")
     def test_network_error_returns_no_results(self, mock_post, mock_config):
         mock_post.side_effect = (
             __import__("requests").exceptions.ConnectionError("connection failed")
         )
 
-        from openterm.toolset.tools import NO_RESULTS
+        from golim.toolset.tools import NO_RESULTS
         result = websearch("test")
         self.assertTrue(result["ok"])
         self.assertEqual(result["text"], NO_RESULTS)
 
-    @patch("openterm.toolset.utils.web_utils.get_config")
-    @patch("openterm.toolset.utils.web_utils.requests.post")
+    @patch("golim.toolset.utils.web_utils.get_config")
+    @patch("golim.toolset.utils.web_utils.requests.post")
     def test_parallel_provider(self, mock_post, mock_config):
         mock_config.return_value = _config({"websearch_provider": "parallel"})
         mock_response = MagicMock()
@@ -164,8 +164,8 @@ class WebSearchToolTests(unittest.TestCase):
         self.assertEqual(payload["params"]["name"], "web_search")
         self.assertEqual(payload["params"]["arguments"]["objective"], "test query")
 
-    @patch("openterm.toolset.utils.web_utils.get_config")
-    @patch("openterm.toolset.utils.web_utils.requests.post")
+    @patch("golim.toolset.utils.web_utils.get_config")
+    @patch("golim.toolset.utils.web_utils.requests.post")
     def test_unknown_provider_returns_an_error_instead_of_using_parallel(self, mock_post, mock_config):
         mock_config.return_value = _config({"websearch_provider": "unknown"})
 
@@ -175,8 +175,8 @@ class WebSearchToolTests(unittest.TestCase):
         self.assertIn("Unsupported web search provider", result["error"])
         mock_post.assert_not_called()
 
-    @patch("openterm.toolset.utils.web_utils.get_config")
-    @patch("openterm.toolset.utils.web_utils.requests.post")
+    @patch("golim.toolset.utils.web_utils.get_config")
+    @patch("golim.toolset.utils.web_utils.requests.post")
     def test_parallel_with_api_key(self, mock_post, mock_config):
         mock_config.return_value = _config({
             "websearch_provider": "parallel",
@@ -192,20 +192,20 @@ class WebSearchToolTests(unittest.TestCase):
         headers = mock_post.call_args[1].get("headers", {})
         self.assertEqual(headers.get("Authorization"), "Bearer par-key-456")
 
-    @patch("openterm.toolset.utils.web_utils.get_config", return_value=_config())
-    @patch("openterm.toolset.utils.web_utils.requests.post")
+    @patch("golim.toolset.utils.web_utils.get_config", return_value=_config())
+    @patch("golim.toolset.utils.web_utils.requests.post")
     def test_parallel_failure_returns_no_results(self, mock_post, mock_config):
         mock_post.side_effect = (
             __import__("requests").exceptions.Timeout("timed out")
         )
 
-        from openterm.toolset.tools import NO_RESULTS
+        from golim.toolset.tools import NO_RESULTS
         result = websearch("test")
         self.assertTrue(result["ok"])
         self.assertEqual(result["text"], NO_RESULTS)
 
-    @patch("openterm.toolset.utils.web_utils.get_config", return_value=_config())
-    @patch("openterm.toolset.utils.web_utils.requests.post")
+    @patch("golim.toolset.utils.web_utils.get_config", return_value=_config())
+    @patch("golim.toolset.utils.web_utils.requests.post")
     def test_parallel_failure_explicit(self, mock_post, mock_config):
         mock_response = MagicMock()
         mock_response.status_code = 500
@@ -215,13 +215,13 @@ class WebSearchToolTests(unittest.TestCase):
         )
         mock_post.return_value = mock_response
 
-        from openterm.toolset.tools import NO_RESULTS
+        from golim.toolset.tools import NO_RESULTS
         result = websearch("test")
         self.assertTrue(result["ok"])
         self.assertEqual(result["text"], NO_RESULTS)
 
-    @patch("openterm.toolset.utils.web_utils.get_config", return_value=_config())
-    @patch("openterm.toolset.utils.web_utils.requests.post")
+    @patch("golim.toolset.utils.web_utils.get_config", return_value=_config())
+    @patch("golim.toolset.utils.web_utils.requests.post")
     def test_response_body_uses_utf8_bytes_not_declared_charset(self, mock_post, mock_config):
         payload = {
             "jsonrpc": "2.0",

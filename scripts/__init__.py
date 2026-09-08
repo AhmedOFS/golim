@@ -1,1 +1,1 @@
-"""Build and release helpers for Openterm."""
+"""Build and release helpers for Golim."""

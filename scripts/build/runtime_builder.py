@@ -56,7 +56,7 @@ def artifact_name(version: str, target: str, release: str) -> str:
 
 
 def download(url: str, destination: Path) -> None:
-    request = urllib.request.Request(url, headers={"User-Agent": "openterm-build"})
+    request = urllib.request.Request(url, headers={"User-Agent": "golim-build"})
     with urllib.request.urlopen(request, timeout=120) as response, destination.open("wb") as output:
         total = int(response.headers.get("Content-Length", "0"))
         received = 0
@@ -157,7 +157,7 @@ def build(config: BuildConfig) -> None:
     finally:
         clean_build_artifacts(config.build_dir, config.runtime_dir)
     run([str(python), "-m", "pip", "check"])
-    run([str(config.runtime_dir / "bin" / "openterm"), "--version"])
+    run([str(config.runtime_dir / "bin" / "golim"), "--version"])
     print(f"Runtime ready at {config.runtime_dir}")
 
 

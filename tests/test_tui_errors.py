@@ -5,10 +5,10 @@ from importlib.util import find_spec
 @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
 class TuiErrorRenderingTests(unittest.TestCase):
     def test_error_result_uses_error_text_not_markdown(self):
-        from openterm.ui.tui.app.app_tui import OpentermApp
-        from openterm.ui.tui.tui_style import STYLE_ERROR
+        from golim.ui.tui.app.app_tui import GolimApp
+        from golim.ui.tui.tui_style import STYLE_ERROR
 
-        app = OpentermApp("model", model="main")
+        app = GolimApp("model", model="main")
         written = []
 
         class Transcript:

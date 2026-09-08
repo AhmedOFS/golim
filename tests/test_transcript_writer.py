@@ -4,7 +4,7 @@ import unittest
 from io import StringIO
 from pathlib import Path
 
-from openterm.ui.tui.app.transcript_writer import TranscriptWriter, load_records
+from golim.ui.tui.app.transcript_writer import TranscriptWriter, load_records
 
 
 class TranscriptWriterTests(unittest.TestCase):

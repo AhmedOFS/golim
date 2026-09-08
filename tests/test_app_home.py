@@ -4,8 +4,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from openterm.config import app_home
-from openterm.config.app_home import get_app_home, resolve_app_home
+from golim.config import app_home
+from golim.config.app_home import get_app_home, resolve_app_home
 
 
 class AppHomeTests(unittest.TestCase):
@@ -15,7 +15,7 @@ class AppHomeTests(unittest.TestCase):
              patch.object(app_home, "_app_home", None):
             resolved = resolve_app_home()
 
-            self.assertEqual(resolved, Path(tmp) / ".openterm")
+            self.assertEqual(resolved, Path(tmp) / ".golim")
             self.assertEqual(get_app_home(), resolved)
             self.assertTrue(resolved.is_dir())
 

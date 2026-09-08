@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Assemble the relocatable macOS Openterm application runtime."""
+"""Assemble the relocatable macOS Golim application runtime."""
 
 from __future__ import annotations
 

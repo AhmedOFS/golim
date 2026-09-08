@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create a Debian package from the assembled Linux Openterm distribution."""
+"""Create a Debian package from the assembled Linux Golim distribution."""
 
 from __future__ import annotations
 
@@ -13,14 +13,14 @@ import tempfile
 
 
 ROOT = Path(__file__).resolve().parents[3]
-VERSION_FILE = ROOT / "openterm" / "version.py"
-BUILD_VERSION_FILE = ROOT / "openterm" / "_version.py"
+VERSION_FILE = ROOT / "golim" / "version.py"
+BUILD_VERSION_FILE = ROOT / "golim" / "_version.py"
 APP_DIST = ROOT / "dist" / "linux"
 RELEASE_DIR = ROOT / "release"
 DEB_DIR = RELEASE_DIR / "linux"
-SERVICE_SOURCE = ROOT / "packaging" / "openterm-tools.service"
-AUTHD_SERVICE_SOURCE = ROOT / "packaging" / "openterm-authd.service"
-AUTHD_SOURCE = ROOT / "packaging" / "openterm-authd.py"
+SERVICE_SOURCE = ROOT / "packaging" / "golim-tools.service"
+AUTHD_SERVICE_SOURCE = ROOT / "packaging" / "golim-authd.service"
+AUTHD_SOURCE = ROOT / "packaging" / "golim-authd.py"
 POSTINSTALL_SOURCE = ROOT / "packaging" / "postinstall.sh"
 POSTRM_SOURCE = ROOT / "packaging" / "postrm.sh"
 
@@ -36,7 +36,7 @@ def project_version() -> str:
         if version:
             return version
     raise RuntimeError(
-        "missing openterm/_version.py; run a runtime build first "
+        "missing golim/_version.py; run a runtime build first "
         "(scripts/build/linux/build_runtime.py) so setuptools-scm can generate it"
     )
 
@@ -70,15 +70,15 @@ def debian_architecture() -> str:
 
 def write_control(debian_dir: Path, version: str, architecture: str) -> None:
     (debian_dir / "control").write_text(
-        """Package: openterm
+        """Package: golim
 """
         f"Version: {version}\n"
         f"Architecture: {architecture}\n"
         "Section: utils\n"
         "Priority: optional\n"
-        "Maintainer: Openterm Developers\n"
+        "Maintainer: Golim Developers\n"
         "Description: Terminal interface for LLMs\n"
-        " Relocatable Openterm CLI, TUI, and local MCP tool server.\n",
+        " Relocatable Golim CLI, TUI, and local MCP tool server.\n",
         encoding="utf-8",
     )
 
@@ -89,7 +89,7 @@ def write_service(destination: Path) -> None:
 
 def populate_package_tree(staging: Path, app_dist: Path) -> Path:
     debian_dir = staging / "DEBIAN"
-    app_target = staging / "usr" / "lib" / "openterm"
+    app_target = staging / "usr" / "lib" / "golim"
     bin_dir = staging / "usr" / "bin"
     user_service_dir = staging / "usr" / "lib" / "systemd" / "user"
     system_service_dir = staging / "usr" / "lib" / "systemd" / "system"
@@ -101,11 +101,11 @@ def populate_package_tree(staging: Path, app_dist: Path) -> Path:
     system_service_dir.mkdir(parents=True)
 
     shutil.copytree(app_dist, app_target, symlinks=True)
-    (bin_dir / "openterm").symlink_to("../lib/openterm/openterm")
-    write_service(user_service_dir / "openterm-tools.service")
-    shutil.copy2(AUTHD_SOURCE, app_target / "openterm-authd")
-    (app_target / "openterm-authd").chmod(0o755)
-    shutil.copy2(AUTHD_SERVICE_SOURCE, system_service_dir / "openterm-authd.service")
+    (bin_dir / "golim").symlink_to("../lib/golim/golim")
+    write_service(user_service_dir / "golim-tools.service")
+    shutil.copy2(AUTHD_SOURCE, app_target / "golim-authd")
+    (app_target / "golim-authd").chmod(0o755)
+    shutil.copy2(AUTHD_SERVICE_SOURCE, system_service_dir / "golim-authd.service")
     shutil.copy2(POSTINSTALL_SOURCE, debian_dir / "postinst")
     (debian_dir / "postinst").chmod(0o755)
     shutil.copy2(POSTRM_SOURCE, debian_dir / "postrm")
@@ -123,7 +123,7 @@ def build_deb(output: Path, app_dist: Path = APP_DIST) -> Path:
         raise RuntimeError("dpkg-deb is required to create a .deb package")
 
     output.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="openterm-deb-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="golim-deb-") as temporary:
         staging = Path(temporary) / "package"
         populate_package_tree(staging, app_dist)
         if output.exists():
@@ -146,7 +146,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
     app_dist = args.app_dist if args.app_dist.is_absolute() else ROOT / args.app_dist
-    output = DEB_DIR / f"openterm_{project_version()}_{debian_architecture()}.deb"
+    output = DEB_DIR / f"golim_{project_version()}_{debian_architecture()}.deb"
     package = build_deb(output, app_dist)
     print(f"Debian package created at {package}")
     return 0

@@ -1,10 +1,10 @@
 import unittest
 from unittest.mock import patch
 
-from openterm.core.agent import ToolAgent
-from openterm.core.permissions import Permissions
-from openterm.core.runtime import Runtime
-from openterm.core.utils import _PYTHON_DENIED_RESULT
+from golim.core.agent import ToolAgent
+from golim.core.permissions import Permissions
+from golim.core.runtime import Runtime
+from golim.core.utils import _PYTHON_DENIED_RESULT
 
 
 class FakeUI:
@@ -44,7 +44,7 @@ class PermissionsTests(unittest.TestCase):
     def test_plain_bash_needs_no_approval_and_skips_config(self):
         ui = FakeUI(approved=False)
         permissions = Permissions(ui)
-        with patch("openterm.core.permissions.get_config") as get_config:
+        with patch("golim.core.permissions.get_config") as get_config:
             denial = permissions.is_approved("bash", {"command": "ls -la"})
 
         self.assertIsNone(denial)
@@ -53,7 +53,7 @@ class PermissionsTests(unittest.TestCase):
 
     def test_whole_command_python_is_treated_as_plain_bash(self):
         permissions = Permissions(FakeUI(approved=False))
-        with patch("openterm.core.permissions.get_config"):
+        with patch("golim.core.permissions.get_config"):
             denial = permissions.is_approved(
                 "bash", {"command": 'python3 -c "print(1)"'}
             )
@@ -63,7 +63,7 @@ class PermissionsTests(unittest.TestCase):
         ui = FakeUI(approved=True)
         permissions = Permissions(ui)
         args = {"command": "echo hi && python3 -c \"print('x')\""}
-        with patch("openterm.core.permissions.get_config") as get_config:
+        with patch("golim.core.permissions.get_config") as get_config:
             get_config.return_value.unrestricted_mode = False
             denial = permissions.is_approved("bash", args)
 
@@ -74,7 +74,7 @@ class PermissionsTests(unittest.TestCase):
         ui = FakeUI(approved=False)
         permissions = Permissions(ui)
         args = {"command": "echo hi && python3 -c \"print('x')\""}
-        with patch("openterm.core.permissions.get_config") as get_config:
+        with patch("golim.core.permissions.get_config") as get_config:
             get_config.return_value.unrestricted_mode = False
             denial = permissions.is_approved("bash", args)
 
@@ -86,7 +86,7 @@ class PermissionsTests(unittest.TestCase):
         ui = FakeUI(approved=False)
         permissions = Permissions(ui)
         args = {"command": "echo hi && python3 -c \"print('x')\""}
-        with patch("openterm.core.permissions.get_config") as get_config:
+        with patch("golim.core.permissions.get_config") as get_config:
             get_config.return_value.unrestricted_mode = True
             denial = permissions.is_approved("bash", args)
 
@@ -97,7 +97,7 @@ class PermissionsTests(unittest.TestCase):
     def test_exec_tool_denied_in_restricted_mode(self):
         ui = FakeUI(approved=False)
         permissions = Permissions(ui)
-        with patch("openterm.core.permissions.get_config") as get_config:
+        with patch("golim.core.permissions.get_config") as get_config:
             get_config.return_value.unrestricted_mode = False
             denial = permissions.is_approved(
                 "exec", {"code": "print(1)"}
@@ -110,7 +110,7 @@ class PermissionsTests(unittest.TestCase):
     def test_exec_tool_accepts_script_and_source_aliases(self):
         ui = FakeUI(approved=True)
         permissions = Permissions(ui)
-        with patch("openterm.core.permissions.get_config") as get_config:
+        with patch("golim.core.permissions.get_config") as get_config:
             get_config.return_value.unrestricted_mode = False
             self.assertIsNone(permissions.is_approved("exec", {"script": "a=1"}))
             self.assertIsNone(permissions.is_approved("exec_python", {"source": "b=2"}))
@@ -123,7 +123,7 @@ class PermissionsTests(unittest.TestCase):
     def test_other_tools_are_not_gated_in_restricted_mode(self):
         ui = FakeUI(approved=False)
         permissions = Permissions(ui)
-        with patch("openterm.core.permissions.get_config") as get_config:
+        with patch("golim.core.permissions.get_config") as get_config:
             get_config.return_value.unrestricted_mode = False
             denial = permissions.is_approved("finder", {"pattern": "*"})
 
@@ -133,7 +133,7 @@ class PermissionsTests(unittest.TestCase):
     def test_write_file_approval_uses_path_content_mode(self):
         ui = FakeUI(approved=True)
         permissions = Permissions(ui)
-        with patch("openterm.core.permissions.get_config") as get_config:
+        with patch("golim.core.permissions.get_config") as get_config:
             get_config.return_value.unrestricted_mode = False
             denial = permissions.is_approved("write_file", {
                 "path": "/tmp/out.txt",
@@ -166,7 +166,7 @@ class PermissionsTests(unittest.TestCase):
         runtime = Runtime(model="main")
         runtime.bind_ui(ui)
 
-        client = runtime.create_mcp_client("/tmp/openterm-permissions-test.sock")
+        client = runtime.create_mcp_client("/tmp/golim-permissions-test.sock")
         agent = ToolAgent(
             "main",
             ui=ui,
@@ -188,7 +188,7 @@ class PermissionsTests(unittest.TestCase):
         runtime = Runtime(model="main")
         runtime.bind_ui(ui)
 
-        client = runtime.create_mcp_client("/tmp/openterm-auth-test.sock")
+        client = runtime.create_mcp_client("/tmp/golim-auth-test.sock")
 
         self.assertEqual(
             client.on_auth_request({"auth_id": "1:auth:0", "kind": "sudo_password"}),

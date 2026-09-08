@@ -8,10 +8,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from openterm.toolset.utils.cancellation import is_tool_cancelled
-from openterm.toolset import auth_session
-from openterm.toolset.server import MCPServer
-from openterm.toolset.tools import bash, exec_python
+from golim.toolset.utils.cancellation import is_tool_cancelled
+from golim.toolset import auth_session
+from golim.toolset.server import MCPServer
+from golim.toolset.tools import bash, exec_python
 
 
 class _Writer:
@@ -358,7 +358,7 @@ class MCPServerTests(unittest.TestCase):
         async def run():
             with tempfile.TemporaryDirectory() as tmp:
                 whitelist = Path(tmp) / "privileged_whitelist"
-                with patch.dict(os.environ, {"OPENTERM_PRIVILEGED_WHITELIST": str(whitelist)}):
+                with patch.dict(os.environ, {"GOLIM_PRIVILEGED_WHITELIST": str(whitelist)}):
                     tools = _ApprovalTools()
                     server = MCPServer(tools)
                     task, reader, writer = await self._start_tool_call(
@@ -383,7 +383,7 @@ class MCPServerTests(unittest.TestCase):
         async def run():
             with tempfile.TemporaryDirectory() as tmp:
                 whitelist = Path(tmp) / "privileged_whitelist"
-                with patch.dict(os.environ, {"OPENTERM_PRIVILEGED_WHITELIST": str(whitelist)}):
+                with patch.dict(os.environ, {"GOLIM_PRIVILEGED_WHITELIST": str(whitelist)}):
                     tools = _ApprovalTools()
                     server = MCPServer(tools)
                     task, reader, writer = await self._start_tool_call(
@@ -433,7 +433,7 @@ class MCPServerTests(unittest.TestCase):
             auth_id = frame["auth_request"]["auth_id"]
 
             respond_writer = _CaptureWriter()
-            with patch("openterm.toolset.server.auth_session.register_session", return_value="tok") as register:
+            with patch("golim.toolset.server.auth_session.register_session", return_value="tok") as register:
                 await server.handle_request(
                     self._auth_respond_request(auth_id, "sekret"),
                     respond_writer,
@@ -458,7 +458,7 @@ class MCPServerTests(unittest.TestCase):
             self.assertTrue(await self._wait_for_frames(writer))
             auth_id = json.loads(writer.frames[0].decode())["auth_request"]["auth_id"]
 
-            with patch("openterm.toolset.server.auth_session.register_session", return_value="tok"):
+            with patch("golim.toolset.server.auth_session.register_session", return_value="tok"):
                 await server.handle_request(
                     self._auth_respond_request(auth_id, "sekret"),
                     _CaptureWriter(),
@@ -480,7 +480,7 @@ class MCPServerTests(unittest.TestCase):
             self.assertTrue(await self._wait_for_frames(writer))
             auth_id = json.loads(writer.frames[0].decode())["auth_request"]["auth_id"]
 
-            with patch("openterm.toolset.server.auth_session.register_session", return_value=None):
+            with patch("golim.toolset.server.auth_session.register_session", return_value=None):
                 await server.handle_request(
                     self._auth_respond_request(auth_id, "wrong"),
                     _CaptureWriter(),
@@ -528,9 +528,9 @@ class MCPServerTests(unittest.TestCase):
         async def run():
             server = MCPServer(_Tools())
             writer = _CaptureWriter()
-            with patch("openterm.toolset.server.auth_session.wrapper_installed", return_value=True), \
-                 patch("openterm.toolset.server.auth_session.authd_available", return_value=True), \
-                 patch("openterm.toolset.server.auth_session.has_valid_session_token", return_value=False):
+            with patch("golim.toolset.server.auth_session.wrapper_installed", return_value=True), \
+                 patch("golim.toolset.server.auth_session.authd_available", return_value=True), \
+                 patch("golim.toolset.server.auth_session.has_valid_session_token", return_value=False):
                 await server.handle_request(
                     json.dumps({"jsonrpc": "2.0", "id": 3, "method": "auth/status"}),
                     writer,
@@ -549,7 +549,7 @@ class MCPServerTests(unittest.TestCase):
         async def run():
             server = MCPServer(_Tools())
             writer = _CaptureWriter()
-            with patch("openterm.toolset.server.auth_session.register_session", return_value="tok"):
+            with patch("golim.toolset.server.auth_session.register_session", return_value="tok"):
                 await server.handle_request(
                     json.dumps({
                         "jsonrpc": "2.0",
@@ -565,7 +565,7 @@ class MCPServerTests(unittest.TestCase):
             auth_session.clear_session_token()
 
             denied_writer = _CaptureWriter()
-            with patch("openterm.toolset.server.auth_session.register_session", return_value=None):
+            with patch("golim.toolset.server.auth_session.register_session", return_value=None):
                 await server.handle_request(
                     json.dumps({
                         "jsonrpc": "2.0",
@@ -581,7 +581,7 @@ class MCPServerTests(unittest.TestCase):
         asyncio.run(run())
 
     def test_redaction_scrubs_password_fields_from_raw_frames(self):
-        from openterm.toolset.server import _redact_secrets
+        from golim.toolset.server import _redact_secrets
 
         raw = '{"jsonrpc":"2.0","id":1,"method":"auth/respond","params":{"auth_id":"1:auth:0","password":"sekret"}}'
         redacted = _redact_secrets(raw)
@@ -590,7 +590,7 @@ class MCPServerTests(unittest.TestCase):
         self.assertIn('"auth_id":"1:auth:0"', redacted)
 
     def test_redaction_handles_escaped_and_long_passwords(self):
-        from openterm.toolset.server import _redact_secrets
+        from golim.toolset.server import _redact_secrets
 
         password = 'a"' + ("secret" * 30)
         raw = json.dumps({"password": password})
@@ -600,7 +600,7 @@ class MCPServerTests(unittest.TestCase):
         self.assertIn('"password": "***"', redacted)
 
     def test_unknown_approval_respond_reports_unresolved(self):
-        from openterm.toolset.tools import mcp
+        from golim.toolset.tools import mcp
         server = MCPServer(mcp)
         writer = _CaptureWriter()
 
@@ -636,7 +636,7 @@ class MCPServerTests(unittest.TestCase):
         self.assertEqual(writer.frames, [])
 
     def test_notifications_are_processed_but_never_answered(self):
-        from openterm.toolset.tools import mcp
+        from golim.toolset.tools import mcp
         server = MCPServer(mcp)
         writer = _CaptureWriter()
 
@@ -652,7 +652,7 @@ class MCPServerTests(unittest.TestCase):
         self.assertEqual(writer.frames, [])
 
     def test_requests_still_receive_their_response(self):
-        from openterm.toolset.tools import mcp
+        from golim.toolset.tools import mcp
         server = MCPServer(mcp)
         writer = _CaptureWriter()
 
@@ -684,7 +684,7 @@ class MCPServerTests(unittest.TestCase):
         self.assertEqual(server._pending_approvals, {})
 
     def test_tools_list_hides_approval_parameters_from_model_schema(self):
-        from openterm.toolset.tools import mcp
+        from golim.toolset.tools import mcp
         server = MCPServer(mcp)
         writer = _CaptureWriter()
 

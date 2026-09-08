@@ -1,4 +1,4 @@
-"""Unit tests for the root-side openterm-authd token daemon."""
+"""Unit tests for the root-side golim-authd token daemon."""
 
 import importlib.util
 import json
@@ -7,11 +7,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-AUTHD_SOURCE = Path(__file__).resolve().parent.parent / "packaging" / "openterm-authd.py"
+AUTHD_SOURCE = Path(__file__).resolve().parent.parent / "packaging" / "golim-authd.py"
 
 
 def _load_authd_module():
-    spec = importlib.util.spec_from_file_location("openterm_authd", AUTHD_SOURCE)
+    spec = importlib.util.spec_from_file_location("golim_authd", AUTHD_SOURCE)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -182,7 +182,7 @@ class AuthDPasswordVerificationTests(unittest.TestCase):
 
         def fake_run(*_args, **kwargs):
             # This runs in the forked child. A closed descriptor here means
-            # openterm-authd cannot ever validate a password.
+            # golim-authd cannot ever validate a password.
             os.fstat(kwargs["stdin"])
             return type("Result", (), {"returncode": 0})()
 

@@ -9,16 +9,16 @@ import threading
 from pathlib import Path
 from unittest.mock import patch
 
-from openterm.toolset.tools import bash, read_file, _should_stream_with_pty
-from openterm.toolset.utils import bash_utils
-from openterm.toolset.vars import OUTPUT_LINE_LIMIT
+from golim.toolset.tools import bash, read_file, _should_stream_with_pty
+from golim.toolset.utils import bash_utils
+from golim.toolset.vars import OUTPUT_LINE_LIMIT
 
 POSTINSTALL_SCRIPT = Path(__file__).resolve().parent.parent / "packaging" / "postinstall.sh"
 
 
 class BashExecutionTests(unittest.TestCase):
     def setUp(self):
-        self.unrestricted_patch = patch("openterm.toolset.tools._is_unrestricted_mode", return_value=False)
+        self.unrestricted_patch = patch("golim.toolset.tools._is_unrestricted_mode", return_value=False)
         self.unrestricted_patch.start()
 
     def tearDown(self):
@@ -31,7 +31,7 @@ class BashExecutionTests(unittest.TestCase):
         self.assertEqual(result["results"][0]["stdout"], "hello")
 
     def test_command_not_found_still_fails(self):
-        result = bash("definitely_missing_openterm_command")
+        result = bash("definitely_missing_golim_command")
 
         self.assertFalse(result["ok"], result)
         self.assertIn("command not found", result["error"].lower())
@@ -63,7 +63,7 @@ class BashExecutionTests(unittest.TestCase):
 
     def test_restricted_sudo_requires_approval_even_when_binary_is_whitelisted(self):
         with tempfile.TemporaryDirectory() as tmp:
-            wrapper = Path(tmp) / "openterm-privileged"
+            wrapper = Path(tmp) / "golim-privileged"
             wrapper.write_text("#!/bin/sh\n", encoding="utf-8")
             whitelist = Path(tmp) / "privileged_whitelist"
             whitelist.write_text(
@@ -71,7 +71,7 @@ class BashExecutionTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch.dict(os.environ, {"OPENTERM_PRIVILEGED_WHITELIST": str(whitelist)}), \
+            with patch.dict(os.environ, {"GOLIM_PRIVILEGED_WHITELIST": str(whitelist)}), \
                  patch.object(bash_utils, "PRIVILEGED_WRAPPER", str(wrapper)):
                 prepared, err = bash_utils._prepare_shell_command(
                     "sudo test -d /", always_approve=True,
@@ -98,11 +98,11 @@ class BashExecutionTests(unittest.TestCase):
             return True
 
         with tempfile.TemporaryDirectory() as tmp:
-            wrapper = Path(tmp) / "openterm-privileged"
+            wrapper = Path(tmp) / "golim-privileged"
             wrapper.write_text("#!/bin/sh\n", encoding="utf-8")
             whitelist = Path(tmp) / "privileged_whitelist"
 
-            with patch.dict(os.environ, {"OPENTERM_PRIVILEGED_WHITELIST": str(whitelist)}), \
+            with patch.dict(os.environ, {"GOLIM_PRIVILEGED_WHITELIST": str(whitelist)}), \
                  patch.object(bash_utils, "PRIVILEGED_WRAPPER", str(wrapper)), \
                  patch.object(bash_utils, "_stream_command", fake_stream_command):
                 result = bash_utils._run_shell(
@@ -124,11 +124,11 @@ class BashExecutionTests(unittest.TestCase):
 
     def test_sudo_denial_returns_not_approved_error(self):
         with tempfile.TemporaryDirectory() as tmp:
-            wrapper = Path(tmp) / "openterm-privileged"
+            wrapper = Path(tmp) / "golim-privileged"
             wrapper.write_text("#!/bin/sh\n", encoding="utf-8")
             whitelist = Path(tmp) / "privileged_whitelist"
 
-            with patch.dict(os.environ, {"OPENTERM_PRIVILEGED_WHITELIST": str(whitelist)}), \
+            with patch.dict(os.environ, {"GOLIM_PRIVILEGED_WHITELIST": str(whitelist)}), \
                  patch.object(bash_utils, "PRIVILEGED_WRAPPER", str(wrapper)):
                 result = bash_utils._run_shell(
                     "sudo test -d /",
@@ -143,7 +143,7 @@ class BashExecutionTests(unittest.TestCase):
 
     def test_missing_privileged_wrapper_reports_generic_error(self):
         with tempfile.TemporaryDirectory() as tmp, \
-             patch.dict(os.environ, {"OPENTERM_PRIVILEGED_WHITELIST": str(Path(tmp) / "privileged_whitelist")}), \
+             patch.dict(os.environ, {"GOLIM_PRIVILEGED_WHITELIST": str(Path(tmp) / "privileged_whitelist")}), \
              patch.object(bash_utils.os.path, "isfile", return_value=False):
             result = bash_utils._run_shell("sudo test -d /", always_approve=True)
 
@@ -175,7 +175,7 @@ class BashExecutionTests(unittest.TestCase):
             return {"command": cmd_str, "stdout": "ok", "stderr": "", "returncode": 0}, None
             yield
 
-        with patch("openterm.toolset.tools._is_unrestricted_mode", return_value=True), \
+        with patch("golim.toolset.tools._is_unrestricted_mode", return_value=True), \
              patch.object(bash_utils, "_stream_command", fake_stream_command):
             result = bash_utils._run_shell(
                 'whoami; echo "---"; sudo --list 2>&1 | head'
@@ -205,11 +205,11 @@ class BashExecutionTests(unittest.TestCase):
             return True
 
         with tempfile.TemporaryDirectory() as tmp:
-            wrapper = Path(tmp) / "openterm-privileged"
+            wrapper = Path(tmp) / "golim-privileged"
             wrapper.write_text("#!/bin/sh\n", encoding="utf-8")
             whitelist = Path(tmp) / "privileged_whitelist"
 
-            with patch.dict(os.environ, {"OPENTERM_PRIVILEGED_WHITELIST": str(whitelist)}), \
+            with patch.dict(os.environ, {"GOLIM_PRIVILEGED_WHITELIST": str(whitelist)}), \
                  patch.object(bash_utils, "PRIVILEGED_WRAPPER", str(wrapper)), \
                  patch.object(bash_utils, "_stream_command", fake_stream_command):
                 result = bash_utils._run_shell(
@@ -231,7 +231,7 @@ class BashExecutionTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             whitelist = Path(tmp) / "privileged_whitelist"
-            with patch.dict(os.environ, {"OPENTERM_PRIVILEGED_WHITELIST": str(whitelist)}):
+            with patch.dict(os.environ, {"GOLIM_PRIVILEGED_WHITELIST": str(whitelist)}):
                 result = bash_utils._run_shell(
                     "sudo -u root test -d /",
                     approve_privileged=lambda info: approvals.append(info) or True,
@@ -245,7 +245,7 @@ class BashExecutionTests(unittest.TestCase):
     def test_sudo_unknown_option_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             whitelist = Path(tmp) / "privileged_whitelist"
-            with patch.dict(os.environ, {"OPENTERM_PRIVILEGED_WHITELIST": str(whitelist)}):
+            with patch.dict(os.environ, {"GOLIM_PRIVILEGED_WHITELIST": str(whitelist)}):
                 result = bash_utils._run_shell(
                     "sudo -p myprompt test -d /",
                     approve_privileged=lambda info: True,
@@ -321,7 +321,7 @@ class BashExecutionTests(unittest.TestCase):
                 "returncode": 0,
             }, None
 
-        with patch("openterm.toolset.tools._is_unrestricted_mode", return_value=True), \
+        with patch("golim.toolset.tools._is_unrestricted_mode", return_value=True), \
              patch.object(bash_utils.get_config(), "is_privileged_binary_allowed", return_value=True), \
              patch.object(bash_utils, "_stream_command_with_pty", fake_stream_command_with_pty):
             frames = list(bash("sudo apt install spotify", stream=True, _session_token="token"))
@@ -345,7 +345,7 @@ class BashExecutionTests(unittest.TestCase):
             return {"command": cmd_str, "stdout": "ok", "stderr": "", "returncode": 0}, None
             yield
 
-        with patch("openterm.toolset.tools._is_unrestricted_mode", return_value=True), \
+        with patch("golim.toolset.tools._is_unrestricted_mode", return_value=True), \
              patch.object(bash_utils.get_config(), "is_privileged_binary_allowed", return_value=True), \
              patch.object(bash_utils, "_stream_command", fake_stream_command):
             result = bash_utils._run_shell("sudo test -d /", session_token="token")
@@ -429,7 +429,7 @@ class BashExecutionTests(unittest.TestCase):
         self.assertTrue(result["results"][0]["stdout"].strip())
 
     def test_supports_stderr_suppression_to_dev_null(self):
-        result = bash("ls /definitely_missing_openterm_path 2>/dev/null")
+        result = bash("ls /definitely_missing_golim_path 2>/dev/null")
 
         self.assertFalse(result["ok"], result)
         self.assertEqual(result["results"][0]["stderr"], "")
@@ -450,14 +450,14 @@ class BashExecutionTests(unittest.TestCase):
         self.assertEqual(content, "hello")
 
     def test_supports_stderr_suppression_in_pipeline(self):
-        result = bash("ls /definitely_missing_openterm_path 2>/dev/null | wc -l")
+        result = bash("ls /definitely_missing_golim_path 2>/dev/null | wc -l")
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["results"][0]["stdout"].strip(), "0")
         self.assertEqual(result["results"][0]["stderr"], "")
 
     def test_streaming_supports_stderr_suppression(self):
-        frames = list(bash("ls /definitely_missing_openterm_path 2>/dev/null", stream=True))
+        frames = list(bash("ls /definitely_missing_golim_path 2>/dev/null", stream=True))
 
         self.assertFalse(frames[-1]["ok"], frames)
         self.assertEqual(frames[-1]["results"][0]["stderr"], "")
@@ -605,10 +605,10 @@ class PrivilegedWrapperScriptTests(unittest.TestCase):
         cls.wrapper_source = script[start:end].lstrip("\n") + "\n"
 
     def _install_wrapper(self, tmp: Path) -> Path:
-        wrapper = tmp / "openterm-privileged"
+        wrapper = tmp / "golim-privileged"
         authd_socket = tmp / "authd.sock"
         source = self.wrapper_source.replace(
-            'AUTHD_SOCKET = "/run/openterm/authd.sock"',
+            'AUTHD_SOCKET = "/run/golim/authd.sock"',
             f'AUTHD_SOCKET = {str(authd_socket)!r}',
         )
         wrapper.write_text(source, encoding="utf-8")
@@ -618,8 +618,8 @@ class PrivilegedWrapperScriptTests(unittest.TestCase):
     def _run_wrapper(self, wrapper: Path, whitelist: Path, argv: list[str]):
         env = dict(os.environ)
         env["SUDO_USER"] = pwd.getpwuid(os.getuid()).pw_name
-        env["OPENTERM_PRIVILEGED_WHITELIST"] = str(whitelist)
-        env["OPENTERM_SESSION_TOKEN"] = "test-token"
+        env["GOLIM_PRIVILEGED_WHITELIST"] = str(whitelist)
+        env["GOLIM_SESSION_TOKEN"] = "test-token"
         authd_socket = wrapper.parent / "authd.sock"
         authd = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         authd.bind(str(authd_socket))

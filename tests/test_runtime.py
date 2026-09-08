@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import MagicMock, patch
 
-from openterm.core.runtime import Runtime
+from golim.core.runtime import Runtime
 
 
 class FakeUI:
@@ -91,9 +91,9 @@ class RuntimeTests(unittest.TestCase):
         def fake_chat(model, messages, tools=None, binary="ollama", response_format=None):
             return {"message": {"role": "assistant", "content": "Done."}}
 
-        with patch.object(runtime, "ensure_mcp_server", return_value="/tmp/openterm-test.sock"), \
+        with patch.object(runtime, "ensure_mcp_server", return_value="/tmp/golim-test.sock"), \
              patch.object(runtime, "select_skills", return_value=([], "")), \
-             patch("openterm.core.agent.chat_with_model_api", side_effect=fake_chat):
+             patch("golim.core.agent.chat_with_model_api", side_effect=fake_chat):
             result = runtime.run("Do work.")
 
         self.assertEqual(result, {"ok": True, "LLM_response": "Done."})
@@ -114,9 +114,9 @@ class RuntimeTests(unittest.TestCase):
                 return {"message": {"role": "assistant", "content": "First answer."}}
             return {"message": {"role": "assistant", "content": "Second answer."}}
 
-        with patch.object(runtime, "ensure_mcp_server", return_value="/tmp/openterm-test.sock"), \
+        with patch.object(runtime, "ensure_mcp_server", return_value="/tmp/golim-test.sock"), \
              patch.object(runtime, "select_skills", return_value=([], "")), \
-             patch("openterm.core.agent.chat_with_model_api", side_effect=fake_chat):
+             patch("golim.core.agent.chat_with_model_api", side_effect=fake_chat):
             first = runtime.run("Do work.")
             second = runtime.run_followup("// explain more")
 
@@ -141,9 +141,9 @@ class RuntimeTests(unittest.TestCase):
             chat_calls.append([message.copy() for message in messages])
             return {"message": {"role": "assistant", "content": "Clarified answer."}}
 
-        with patch.object(runtime, "ensure_mcp_server", return_value="/tmp/openterm-test.sock"), \
+        with patch.object(runtime, "ensure_mcp_server", return_value="/tmp/golim-test.sock"), \
              patch.object(runtime, "select_skills", return_value=([], "")), \
-             patch("openterm.core.agent.chat_with_model_api", side_effect=fake_chat):
+             patch("golim.core.agent.chat_with_model_api", side_effect=fake_chat):
             result = runtime.run_followup("use the smaller file", clarification=True)
 
         self.assertEqual(result, {"ok": True, "LLM_response": "Clarified answer."})
@@ -174,10 +174,10 @@ class RuntimeTests(unittest.TestCase):
             runtime.interrupt()
             return {"ok": True}
 
-        with patch.object(runtime, "ensure_mcp_server", return_value="/tmp/openterm-test.sock"), \
+        with patch.object(runtime, "ensure_mcp_server", return_value="/tmp/golim-test.sock"), \
              patch.object(runtime, "select_skills", return_value=([], "")), \
-             patch("openterm.core.agent.chat_with_model_api", side_effect=fake_chat), \
-             patch("openterm.core.agent.ToolAgent._execute_tool", side_effect=interrupting_tool):
+             patch("golim.core.agent.chat_with_model_api", side_effect=fake_chat), \
+             patch("golim.core.agent.ToolAgent._execute_tool", side_effect=interrupting_tool):
             result = runtime.run("Stop after this.")
 
         self.assertEqual(result, {"ok": False, "LLM_response": "Interrupted."})
@@ -204,10 +204,10 @@ class RuntimeTests(unittest.TestCase):
                 }
             }
 
-        with patch.object(runtime, "ensure_mcp_server", return_value="/tmp/openterm-test.sock"), \
+        with patch.object(runtime, "ensure_mcp_server", return_value="/tmp/golim-test.sock"), \
              patch.object(runtime, "select_skills", return_value=([], "")), \
-             patch("openterm.core.agent.chat_with_model_api", side_effect=fake_chat), \
-             patch("openterm.core.agent.ToolAgent._execute_tool") as execute_tool:
+             patch("golim.core.agent.chat_with_model_api", side_effect=fake_chat), \
+             patch("golim.core.agent.ToolAgent._execute_tool") as execute_tool:
             result = runtime.run("Stop before tool.")
 
         self.assertEqual(result, {"ok": False, "LLM_response": "Interrupted."})
@@ -226,9 +226,9 @@ class RuntimeTests(unittest.TestCase):
             prompts.append(messages[0]["content"])
             return {"message": {"role": "assistant", "content": "Done."}}
 
-        with patch.object(runtime, "ensure_mcp_server", return_value="/tmp/openterm-test.sock"), \
+        with patch.object(runtime, "ensure_mcp_server", return_value="/tmp/golim-test.sock"), \
              patch.object(runtime, "select_skills", side_effect=[([], "first skill"), ([], "different skill")]) as select_skills, \
-             patch("openterm.core.agent.chat_with_model_api", side_effect=fake_chat):
+             patch("golim.core.agent.chat_with_model_api", side_effect=fake_chat):
             runtime.run("First.")
             runtime.run_followup("// Again.")
 
@@ -244,9 +244,9 @@ class RuntimeTests(unittest.TestCase):
         def fake_chat(model, messages, tools=None, binary="ollama", response_format=None):
             return {"message": {"role": "assistant", "content": "Done."}}
 
-        with patch.object(runtime, "ensure_mcp_server", return_value="/tmp/openterm-test.sock"), \
+        with patch.object(runtime, "ensure_mcp_server", return_value="/tmp/golim-test.sock"), \
              patch.object(runtime, "select_skills", return_value=([], "")), \
-             patch("openterm.core.agent.chat_with_model_api", side_effect=fake_chat):
+             patch("golim.core.agent.chat_with_model_api", side_effect=fake_chat):
             runtime.run("First.")
             runtime.run("Second.")
 
@@ -262,10 +262,10 @@ class RuntimeTests(unittest.TestCase):
         runtime = Runtime(model="main")
         client = object()
 
-        with patch("openterm.core.runtime.FastMCPClient", return_value=client) as constructor:
-            result = runtime.create_mcp_client("/tmp/openterm-test.sock")
+        with patch("golim.core.runtime.FastMCPClient", return_value=client) as constructor:
+            result = runtime.create_mcp_client("/tmp/golim-test.sock")
 
-        constructor.assert_called_once_with("/tmp/openterm-test.sock")
+        constructor.assert_called_once_with("/tmp/golim-test.sock")
         self.assertIs(result, client)
         self.assertIs(runtime.mcp_client, client)
 
@@ -359,11 +359,11 @@ class RuntimeTests(unittest.TestCase):
         def fake_chat(model, messages, tools=None, binary="ollama", response_format=None):
             return {"message": {"role": "assistant", "content": "Done."}}
 
-        with patch.object(runtime, "ensure_mcp_server", return_value="/tmp/openterm-test.sock"), \
+        with patch.object(runtime, "ensure_mcp_server", return_value="/tmp/golim-test.sock"), \
              patch.object(runtime, "initialize_tools", side_effect=lambda: order.append("tools")), \
              patch.object(runtime, "authenticate_sudo", side_effect=lambda: order.append("auth")), \
              patch.object(runtime, "select_skills", side_effect=lambda _msg: order.append("skills") or ([], "")), \
-             patch("openterm.core.agent.chat_with_model_api", side_effect=fake_chat):
+             patch("golim.core.agent.chat_with_model_api", side_effect=fake_chat):
             runtime.run("Do work.")
 
         self.assertEqual(order, ["tools", "auth", "skills"])
@@ -378,10 +378,10 @@ class RuntimeTests(unittest.TestCase):
         def fake_chat(model, messages, tools=None, binary="ollama", response_format=None):
             return {"message": {"role": "assistant", "content": "Done."}}
 
-        with patch.object(runtime, "ensure_mcp_server", return_value="/tmp/openterm-test.sock"), \
+        with patch.object(runtime, "ensure_mcp_server", return_value="/tmp/golim-test.sock"), \
              patch.object(runtime, "select_skills", return_value=([], "")), \
              patch.object(runtime, "authenticate_sudo") as authenticate, \
-             patch("openterm.core.agent.chat_with_model_api", side_effect=fake_chat):
+             patch("golim.core.agent.chat_with_model_api", side_effect=fake_chat):
             runtime.run("Do work.")
 
         authenticate.assert_not_called()

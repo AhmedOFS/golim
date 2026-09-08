@@ -1,1 +1,1 @@
-"""Platform-specific Openterm runtime builders."""
+"""Platform-specific Golim runtime builders."""

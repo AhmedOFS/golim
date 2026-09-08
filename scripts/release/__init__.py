@@ -1,1 +1,1 @@
-"""Platform-specific Openterm release assemblers."""
+"""Platform-specific Golim release assemblers."""

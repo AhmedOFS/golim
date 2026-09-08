@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Download and install the pinned Linux Openterm runtime."""
+"""Download and install the pinned Linux Golim runtime."""
 
 from __future__ import annotations
 

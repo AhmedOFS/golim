@@ -6,8 +6,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from openterm.toolset import auth_session
-from openterm.toolset.utils import bash_utils
+from golim.toolset import auth_session
+from golim.toolset.utils import bash_utils
 
 
 class SudoSessionTokenTests(unittest.TestCase):
@@ -15,7 +15,7 @@ class SudoSessionTokenTests(unittest.TestCase):
         auth_session.clear_session_token()
 
     def test_wrapper_installed_checks_wrapper_path(self):
-        with patch.object(auth_session, "PRIVILEGED_WRAPPER", "/nonexistent/openterm-privileged"):
+        with patch.object(auth_session, "PRIVILEGED_WRAPPER", "/nonexistent/golim-privileged"):
             self.assertFalse(auth_session.wrapper_installed())
 
     def test_authd_available_checks_socket_presence(self):
@@ -91,22 +91,22 @@ class BashSessionTokenTests(unittest.TestCase):
     def _privileged_env(self, tmp):
         """A wrapper mirroring the installed one: token check, whitelist
         check, then exec — so tests exercise the real exec path."""
-        wrapper = Path(tmp) / "openterm-privileged"
+        wrapper = Path(tmp) / "golim-privileged"
         wrapper.write_text(
             "#!/bin/bash\n"
             "set -e\n"
-            'if [ -z "${OPENTERM_SESSION_TOKEN:-}" ]; then\n'
+            'if [ -z "${GOLIM_SESSION_TOKEN:-}" ]; then\n'
             '  echo "no token" >&2\n'
             "  exit 3\n"
             "fi\n"
-            'if [ "$OPENTERM_SESSION_TOKEN" != "sekret-token" ]; then\n'
+            'if [ "$GOLIM_SESSION_TOKEN" != "sekret-token" ]; then\n'
             '  echo "bad token" >&2\n'
             "  exit 4\n"
             "fi\n"
             'BINARY="$(readlink -f "$1")"\n'
             'REQUESTED="$1"\n'
             "shift\n"
-            'WHITELIST="${OPENTERM_PRIVILEGED_WHITELIST:?}"\n'
+            'WHITELIST="${GOLIM_PRIVILEGED_WHITELIST:?}"\n'
             'FOUND=""\n'
             'while IFS= read -r allowed || [ -n "$allowed" ]; do\n'
             '  [ -n "$allowed" ] || continue\n'
@@ -119,7 +119,7 @@ class BashSessionTokenTests(unittest.TestCase):
             'if [ -n "$FOUND" ]; then\n'
             '  exec "$REQUESTED" "$@"\n'
             "fi\n"
-            'echo "openterm-privileged: binary not allowed: $BINARY" >&2\n'
+            'echo "golim-privileged: binary not allowed: $BINARY" >&2\n'
             "exit 1\n",
             encoding="utf-8",
         )
@@ -134,7 +134,7 @@ class BashSessionTokenTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             wrapper, whitelist = self._privileged_env(tmp)
-            with patch.dict(os.environ, {"OPENTERM_PRIVILEGED_WHITELIST": str(whitelist)}), \
+            with patch.dict(os.environ, {"GOLIM_PRIVILEGED_WHITELIST": str(whitelist)}), \
                  patch.object(bash_utils, "PRIVILEGED_WRAPPER", str(wrapper)), \
                  patch.object(bash_utils, "_stream_command", fake_stream_command):
                 result = bash_utils._run_shell(
@@ -157,7 +157,7 @@ class BashSessionTokenTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             wrapper, whitelist = self._privileged_env(tmp)
-            with patch.dict(os.environ, {"OPENTERM_PRIVILEGED_WHITELIST": str(whitelist)}), \
+            with patch.dict(os.environ, {"GOLIM_PRIVILEGED_WHITELIST": str(whitelist)}), \
                  patch.object(bash_utils, "PRIVILEGED_WRAPPER", str(wrapper)), \
                  patch.object(bash_utils, "_stream_command", fake_stream_command):
                 result = bash_utils._run_shell(
@@ -190,7 +190,7 @@ class BashSessionTokenTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             wrapper, whitelist = self._privileged_env(tmp)
-            with patch.dict(os.environ, {"OPENTERM_PRIVILEGED_WHITELIST": str(whitelist)}), \
+            with patch.dict(os.environ, {"GOLIM_PRIVILEGED_WHITELIST": str(whitelist)}), \
                  patch.object(bash_utils, "PRIVILEGED_WRAPPER", str(wrapper)), \
                  patch.object(bash_utils, "_stream_command", fake_stream_command):
                 result = bash_utils._run_shell(
@@ -218,7 +218,7 @@ class BashSessionTokenTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             wrapper, whitelist = self._privileged_env(tmp)
-            with patch.dict(os.environ, {"OPENTERM_PRIVILEGED_WHITELIST": str(whitelist)}), \
+            with patch.dict(os.environ, {"GOLIM_PRIVILEGED_WHITELIST": str(whitelist)}), \
                  patch.object(bash_utils, "PRIVILEGED_WRAPPER", str(wrapper)), \
                  patch.object(bash_utils, "_stream_command", fake_stream_command):
                 result = bash_utils._run_shell(
@@ -235,7 +235,7 @@ class BashSessionTokenTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             wrapper, whitelist = self._privileged_env(tmp)
-            with patch.dict(os.environ, {"OPENTERM_PRIVILEGED_WHITELIST": str(whitelist)}), \
+            with patch.dict(os.environ, {"GOLIM_PRIVILEGED_WHITELIST": str(whitelist)}), \
                  patch.object(bash_utils, "PRIVILEGED_WRAPPER", str(wrapper)), \
                  patch.object(bash_utils, "_stream_command", fake_stream_command):
                 result = bash_utils._run_shell(

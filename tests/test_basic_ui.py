@@ -4,10 +4,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from openterm.ui.basic.basic import TerminalUI
-from openterm.ui.basic.spinner import Spinner
-from openterm.logger import log_diagnostic_section, start_run_logging
-from openterm.ui.tui.app.transcript_writer import TranscriptWriter
+from golim.ui.basic.basic import TerminalUI
+from golim.ui.basic.spinner import Spinner
+from golim.logger import log_diagnostic_section, start_run_logging
+from golim.ui.tui.app.transcript_writer import TranscriptWriter
 
 
 class _RecordingSpinner:
@@ -26,7 +26,7 @@ class BasicUiSudoAuthTests(unittest.TestCase):
     def test_request_sudo_password_uses_hidden_input(self):
         ui = TerminalUI(config=object())
 
-        with patch("openterm.ui.basic.basic.getpass.getpass", return_value="sekret") as getpass_mock:
+        with patch("golim.ui.basic.basic.getpass.getpass", return_value="sekret") as getpass_mock:
             password = ui.request_sudo_password()
 
         self.assertEqual(password, "sekret")
@@ -38,13 +38,13 @@ class BasicUiSudoAuthTests(unittest.TestCase):
         def interrupt(prompt):
             raise KeyboardInterrupt
 
-        with patch("openterm.ui.basic.basic.getpass.getpass", side_effect=interrupt):
+        with patch("golim.ui.basic.basic.getpass.getpass", side_effect=interrupt):
             self.assertIsNone(ui.request_sudo_password())
 
     def test_request_sudo_password_treats_empty_as_decline(self):
         ui = TerminalUI(config=object())
 
-        with patch("openterm.ui.basic.basic.getpass.getpass", return_value=""):
+        with patch("golim.ui.basic.basic.getpass.getpass", return_value=""):
             self.assertIsNone(ui.request_sudo_password())
 
 
