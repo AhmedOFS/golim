@@ -1,6 +1,6 @@
 # Golim
 
-Golim is a minimal AI harness for Linux and MacOS for general tasks and automation throughout your system with a secure mechanism for privileged execution and a few nifty tweaks to enable better output from local LLMs on your PC
+Golim is a minimal AI Agent for Linux and MacOS for completing general tasks and automation throughout your system with a secure mechanism for privileged execution and a few nifty tweaks to enable better output from local LLMs on your PC
 
 Golim supports:
 
