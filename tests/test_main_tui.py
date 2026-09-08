@@ -213,6 +213,8 @@ class MainTuiTests(unittest.TestCase):
     @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
     def test_tab_opens_main_menu_while_prompt_is_focused(self):
         from openterm.ui.tui.app.app_tui import OpentermApp
+        from openterm.ui.tui.app.widgets.footer import Footer
+        from textual.widgets import Static
 
         async def run_case():
             config = MagicMock()
@@ -226,8 +228,17 @@ class MainTuiTests(unittest.TestCase):
                 self.assertFalse(app.query_one("#menu_panel").has_class("hidden"))
                 self.assertTrue(app.query_one("#frame").has_class("hidden"))
                 self.assertEqual(app.focused.id, "menu_options")
+                self.assertEqual(
+                    app.query_one("#footer", Footer).query_one("#keys", Static).content,
+                    "↑/↓ move • Enter select • Esc close",
+                )
+                self.assertEqual(len(app.query("#menu_hint")), 0)
                 app._hide_menu()
                 await pilot.pause(0.2)
+                self.assertEqual(
+                    app.query_one("#footer", Footer).query_one("#keys", Static).content,
+                    Footer.DEFAULT_HINT,
+                )
 
         asyncio.run(run_case())
 
@@ -252,6 +263,39 @@ class MainTuiTests(unittest.TestCase):
                     self.assertEqual(app.focused.id, "menu_options")
                     await pilot.press("up")
                     self.assertEqual(app.focused.id, "menu_input")
+
+        asyncio.run(run_case())
+
+    @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
+    def test_provider_setup_uses_footer_for_config_hints(self):
+        from openterm.ui.tui.app.app_tui import OpentermApp
+        from openterm.ui.tui.app.widgets.footer import Footer
+        from openterm.ui.tui.config.mixin import SelectRequest
+        from textual.widgets import Static
+
+        async def run_case():
+            config = MagicMock()
+            config.is_complete.return_value = True
+            app = OpentermApp("model", model="main", config=config)
+            async with app.run_test():
+                app._show_config_panel()
+                self.assertEqual(
+                    app.query_one("#footer", Footer).query_one("#keys", Static).content,
+                    "↑/↓ move • Enter select • Esc back",
+                )
+                self.assertEqual(len(app.query("#config_hint")), 0)
+
+                app._show_select(SelectRequest("Provider", ["Ollama", "Back"]))
+                self.assertEqual(
+                    app.query_one("#footer", Footer).query_one("#keys", Static).content,
+                    "↑/↓ to move • Enter to select",
+                )
+
+                app._hide_config_panel()
+                self.assertEqual(
+                    app.query_one("#footer", Footer).query_one("#keys", Static).content,
+                    Footer.DEFAULT_HINT,
+                )
 
         asyncio.run(run_case())
 

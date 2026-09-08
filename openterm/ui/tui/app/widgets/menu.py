@@ -10,7 +10,6 @@ class MenuPanel(Vertical):
         yield Static(id="menu_title")
         yield Input(id="menu_input", classes="hidden")
         yield OptionList(id="menu_options")
-        yield Static("↑/↓ move • Enter select • Esc close", id="menu_hint")
 
     def show_options(self, title: str, options: list[str], selected: int = 0) -> None:
         title_widget = self.query_one("#menu_title", Static)

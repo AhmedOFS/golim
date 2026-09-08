@@ -57,6 +57,7 @@ from openterm.ui.tui.config.mixin import (
 )
 from openterm.ui.tui.tui_style import (
     BG_DARK,
+    BG_PITCH_BLACK,
     BORDER,
     DIM,
     ERROR,
@@ -509,7 +510,7 @@ class ConfigApp(ConfigUIMixin, App[int]):
     }}
 
     Screen.-pitch-black {{
-        background: #000000;
+        background: {BG_PITCH_BLACK};
     }}
 
     #outer {{

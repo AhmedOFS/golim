@@ -30,6 +30,7 @@ from openterm.ui.tui.config.mixin import (
 )
 from openterm.ui.tui.tui_style import (
     BG_DARK,
+    BG_PITCH_BLACK,
     BORDER,
     CODE_BG,
     DIM,
@@ -68,6 +69,8 @@ from openterm.ui.tui.app.agent_events_handler import (
 class OpentermApp(ConfigUIMixin, App[int]):
 
     _config_prefix = "config_"
+    _menu_hint = "↑/↓ move • Enter select • Esc close"
+    _config_hint = "↑/↓ move • Enter select • Esc back"
     """Default interactive openterm screen."""
 
     CSS = f"""
@@ -79,12 +82,12 @@ class OpentermApp(ConfigUIMixin, App[int]):
     }}
 
     Screen.-pitch-black {{
-        background: #000000;
+        background: {BG_PITCH_BLACK};
     }}
 
     Screen.-pitch-black #transcript {{
-        background: #000000;
-        scrollbar-background: #000000;
+        background: {BG_PITCH_BLACK};
+        scrollbar-background: {BG_PITCH_BLACK};
     }}
 
     #outer {{
@@ -219,12 +222,6 @@ class OpentermApp(ConfigUIMixin, App[int]):
         margin-bottom: 1;
     }}
 
-    #menu_hint {{
-        height: 1;
-        color: {DIM};
-        margin-top: 1;
-    }}
-
     #config_title {{
         height: 1;
         color: {WHITE};
@@ -289,12 +286,6 @@ class OpentermApp(ConfigUIMixin, App[int]):
 
     #config_text_input:focus {{
         border: round {WHITE};
-    }}
-
-    #config_hint {{
-        height: 1;
-        color: {DIM};
-        margin-top: 1;
     }}
 
     .hidden {{
@@ -497,6 +488,7 @@ class OpentermApp(ConfigUIMixin, App[int]):
         self._menu_active = True
         self._menu_page = "main"
         self.set_status("")
+        self.query_one("#footer", Footer).set_hint(self._menu_hint)
         self.query_one("#frame", Vertical).classes = "hidden"
         self.query_one("#prompt_line", PromptLine).classes = "hidden"
         panel = self.query_one("#menu_panel", MenuPanel)
@@ -505,6 +497,7 @@ class OpentermApp(ConfigUIMixin, App[int]):
 
     def _hide_menu(self) -> None:
         self._menu_active = False
+        self.query_one("#footer", Footer).set_hint(Footer.DEFAULT_HINT)
         self.query_one("#menu_panel", MenuPanel).classes = "hidden"
         self.query_one("#frame", Vertical).classes = ""
         self.query_one("#prompt_line", PromptLine).classes = ""
@@ -527,6 +520,7 @@ class OpentermApp(ConfigUIMixin, App[int]):
         self._config_error = None
         self._request = None
         self.set_status("")
+        self.query_one("#footer", Footer).set_hint(self._config_hint)
         panel = self.query_one("#config_panel", ConfigPanel)
         self.query_one("#frame", Vertical).classes = "hidden"
         self.query_one("#prompt_line", PromptLine).classes = "hidden"
@@ -537,6 +531,7 @@ class OpentermApp(ConfigUIMixin, App[int]):
     def _hide_config_panel(self) -> None:
         self._config_active = False
         self._request = None
+        self.query_one("#footer", Footer).set_hint(Footer.DEFAULT_HINT)
         panel = self.query_one("#config_panel", ConfigPanel)
         panel.reset()
         panel.classes = "hidden"
@@ -544,6 +539,9 @@ class OpentermApp(ConfigUIMixin, App[int]):
         self.query_one("#prompt_line", PromptLine).classes = ""
         self.update_prompt_placeholder()
         self.query_one(PromptLine).focus_input()
+
+    def _set_config_hint(self, text: str) -> None:
+        self.query_one("#footer", Footer).set_hint(text)
 
     def _run_config_wizard_thread(self, mode: str) -> None:
         config = get_config()

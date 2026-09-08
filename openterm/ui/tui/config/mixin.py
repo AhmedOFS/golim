@@ -78,6 +78,9 @@ class ConfigUIMixin:
     def _cfg(self, name: str) -> str:
         return f"#{self._config_prefix}{name}"
 
+    def _set_config_hint(self, text: str) -> None:
+        self.query_one(self._cfg("hint"), Static).update(text)
+
     # -- prompt rendering ---------------------------------------------------
 
     def _show_select(self, req: SelectRequest) -> None:
@@ -88,7 +91,7 @@ class ConfigUIMixin:
         ol.add_options(Option(opt) for opt in req.options)
         ol.classes = ""
         self.query_one(self._cfg("text_input"), Input).classes = "hidden"
-        self.query_one(self._cfg("hint"), Static).update(req.hint)
+        self._set_config_hint(req.hint)
         idx = max(0, min(req.default_index, len(req.options) - 1))
         ol.highlighted = idx
         ol.focus()
@@ -101,7 +104,7 @@ class ConfigUIMixin:
         ti.value = req.default
         ti.placeholder = req.placeholder
         self.query_one(self._cfg("option_list"), OptionList).classes = "hidden"
-        self.query_one(self._cfg("hint"), Static).update(req.hint)
+        self._set_config_hint(req.hint)
         ti.focus()
 
     def _show_model_search(self, req: ModelSearchRequest) -> None:
@@ -112,7 +115,7 @@ class ConfigUIMixin:
         ti.value = ""
         ti.placeholder = "Search models"
         self.query_one(self._cfg("option_list"), OptionList).classes = "model_search"
-        self.query_one(self._cfg("hint"), Static).update(req.hint)
+        self._set_config_hint(req.hint)
         self._set_model_search_results(req.models, req.default_index)
         ti.focus()
 
@@ -125,7 +128,7 @@ class ConfigUIMixin:
         ol.clear_options()
         ol.add_options(Option("Continue"))
         ol.highlighted = 0
-        self.query_one(self._cfg("hint"), Static).update(req.hint)
+        self._set_config_hint(req.hint)
         ol.focus()
 
     def _set_model_search_results(self, models: list[str], highlighted: int = 0) -> None:
