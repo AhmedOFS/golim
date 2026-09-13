@@ -110,6 +110,18 @@ class ConfigSchemaTests(unittest.TestCase):
         saved = json.loads(config.path.read_text())
         self.assertFalse(saved[Config.ATTRIBUTES][Config.PROACTIVE_AUTH])
 
+    def test_no_sudo_is_session_only_config_state(self):
+        config = Config()
+        self.assertFalse(config.no_sudo)
+        config.set(Config.PROACTIVE_AUTH, True)
+
+        config.no_sudo = True
+
+        self.assertTrue(config.no_sudo)
+        saved = json.loads(config.path.read_text())
+        self.assertNotIn(Config.NO_SUDO, saved[Config.ATTRIBUTES])
+        self.assertFalse(Config().no_sudo)
+
     def test_missing_proactive_auth_in_existing_config_defaults_to_enabled(self):
         path = Path(self.tmp.name) / ".golim" / "config" / "config.json"
         path.parent.mkdir(parents=True)

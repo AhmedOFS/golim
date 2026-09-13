@@ -118,13 +118,34 @@ class RuntimeTests(unittest.TestCase):
              patch.object(runtime, "select_skills", return_value=([], "")), \
              patch("golim.core.agent.chat_with_model_api", side_effect=fake_chat):
             first = runtime.run("Do work.")
-            second = runtime.run_followup("// explain more")
+            second = runtime.run_followup("explain more")
 
         self.assertEqual(first, {"ok": True, "LLM_response": "First answer."})
         self.assertEqual(second, {"ok": True, "LLM_response": "Second answer."})
         self.assertEqual(chat_calls[1][-3]["content"], "Do work.")
         self.assertEqual(chat_calls[1][-2]["content"], "First answer.")
         self.assertEqual(chat_calls[1][-1], {"role": "user", "content": "followup: explain more"})
+
+    def test_reset_conversation_makes_next_input_a_fresh_run(self):
+        runtime = Runtime(model="main")
+        runtime.bind_ui(FakeUI())
+        runtime.mcp_client = FakeMCPClient()
+
+        def fake_chat(model, messages, tools=None, binary="ollama", response_format=None):
+            return {"message": {"role": "assistant", "content": "Fresh answer."}}
+
+        with patch.object(runtime, "ensure_mcp_server", return_value="/tmp/golim-test.sock"), \
+             patch.object(runtime, "select_skills", return_value=([], "")) as select_skills, \
+             patch("golim.core.agent.chat_with_model_api", side_effect=fake_chat):
+            runtime.run("Do work.")
+            runtime.reset_conversation()
+            result = runtime.run_followup("New task.")
+
+        self.assertEqual(result, {"ok": True, "LLM_response": "Fresh answer."})
+        # Escalated to a fresh run: the user message carries no followup
+        # marker and skills are selected again.
+        self.assertEqual(runtime.messages[-2], {"role": "user", "content": "New task."})
+        self.assertEqual(select_skills.call_count, 2)
 
     def test_runtime_clarification_uses_safe_history_without_marker(self):
         runtime = Runtime(model="main")
@@ -230,7 +251,7 @@ class RuntimeTests(unittest.TestCase):
              patch.object(runtime, "select_skills", side_effect=[([], "first skill"), ([], "different skill")]) as select_skills, \
              patch("golim.core.agent.chat_with_model_api", side_effect=fake_chat):
             runtime.run("First.")
-            runtime.run_followup("// Again.")
+            runtime.run_followup("Again.")
 
         self.assertEqual(prompts, [prompts[0], prompts[0]])
         self.assertIn("first skill", prompts[0])
@@ -296,6 +317,18 @@ class RuntimeTests(unittest.TestCase):
         runtime.mcp_client = AuthFakeMCPClient(wrapper_installed=False)
 
         runtime.authenticate_sudo()
+
+    def test_auth_session_skipped_when_nosudo_is_enabled(self):
+        ui = PromptingFakeUI()
+        config = MagicMock(no_sudo=True)
+        runtime = Runtime(config=config, model="main")
+        runtime.bind_ui(ui)
+        runtime.mcp_client = AuthFakeMCPClient()
+
+        runtime.authenticate_sudo()
+
+        self.assertEqual(ui.prompts, 0)
+        self.assertEqual(runtime.mcp_client.authenticate_calls, [])
 
         self.assertEqual(ui.prompts, 0)
 

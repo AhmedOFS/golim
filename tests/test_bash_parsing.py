@@ -569,6 +569,24 @@ class BashExecutionTests(unittest.TestCase):
             self.assertFalse(frames[-1]["output_truncated"], frames[-1])
             self.assertNotIn("output_file", frames[-1])
 
+    def test_streaming_carriage_returns_redraw_one_line(self):
+        frames = list(bash("printf 'step 1\\rstep 2\\rdone\\n'", stream=True))
+
+        stream_frames = [frame for frame in frames if frame.get("type") == "stream"]
+        self.assertEqual(
+            [(frame["line"], frame["end"]) for frame in stream_frames],
+            [("step 1", "\r"), ("step 2", "\r"), ("done", "\n")],
+        )
+
+    def test_streaming_crlf_remains_one_newline(self):
+        frames = list(bash("printf 'one\\r\\ntwo\\r\\n'", stream=True))
+
+        stream_frames = [frame for frame in frames if frame.get("type") == "stream"]
+        self.assertEqual(
+            [(frame["line"], frame["end"]) for frame in stream_frames],
+            [("one", "\n"), ("two", "\n")],
+        )
+
     def test_read_file_returns_200_line_pages(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "sample.txt"

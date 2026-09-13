@@ -108,13 +108,17 @@ Type a request such as:
 Find the largest Python files in this project and explain what they do.
 ```
 
-While a request is running, use a prompt beginning with `//` to interrupt or
-clarify it. After a request finishes, `//` keeps the existing conversation and
-adds a follow-up:
+Continuing is the default: while a request is running, a new prompt is queued
+as a clarification that interrupts the active request, and after a request
+finishes, the next prompt keeps the existing conversation and continues it:
 
 ```text
-// now summarize the answer in three bullets
+now summarize the answer in three bullets
 ```
+
+To start a fresh chat instead, use the `/new` command. It empties the
+transcript without starting a run; the next message is handled as a new
+command.
 
 ### One-shot mode
 
@@ -130,7 +134,12 @@ Useful command-line options:
 golim --version
 golim -i
 golim --help
+golim --nosudo "Inspect the system without using sudo"
 ```
+
+`--nosudo` is a per-session flag that automatically rejects sudo operations;
+it is useful for unattended or headless runs and is not saved to the config
+file.
 
 ## Available tools
 

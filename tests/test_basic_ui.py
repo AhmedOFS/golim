@@ -2,7 +2,7 @@ import io
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, call, patch
 
 from golim.ui.basic.basic import TerminalUI
 from golim.ui.basic.spinner import Spinner
@@ -54,6 +54,26 @@ class _TtyBuffer(io.StringIO):
 
 
 class BasicUiOutputTests(unittest.TestCase):
+    def test_escape_requests_soft_then_hard_interrupt(self):
+        ui = TerminalUI(config=object())
+        runtime = MagicMock()
+        runtime.should_interrupt.side_effect = [False, True]
+        ui._runtime = runtime
+        ui.status = MagicMock()
+
+        ui._handle_escape()
+        ui._handle_escape()
+
+        runtime.interrupt.assert_called_once_with()
+        runtime.hard_cancel.assert_called_once_with()
+        self.assertEqual(
+            ui.status.call_args_list,
+            [
+                call("Interrupting. Press Esc again to force."),
+                call("Interrupting. Press Esc again to force."),
+            ],
+        )
+
     def test_output_uses_spinner_write_above_while_spinner_is_active(self):
         ui = TerminalUI(config=object())
         spinner = _RecordingSpinner()
@@ -82,7 +102,7 @@ class BasicUiOutputTests(unittest.TestCase):
             ],
         )
 
-    def test_thinking_is_streamed_without_collapsed_or_truncated_duplicate(self):
+    def test_thinking_streams_above_active_spinner_without_stopping_it(self):
         ui = TerminalUI(config=object())
         spinner = _RecordingSpinner()
         ui._spinner = spinner
@@ -94,11 +114,29 @@ class BasicUiOutputTests(unittest.TestCase):
                 "The user wants to uninstall Spotify. Let me check the current OS first."
             )
 
-        self.assertTrue(spinner.stopped)
-        self.assertEqual(ui._spinner, None)
-        self.assertIn("THINKING: The user wants to uninstall Spotify.", stderr.getvalue())
-        self.assertIn("Let me check the current OS first.", stderr.getvalue())
-        self.assertNotIn("▶ THINKING:", stderr.getvalue())
+        self.assertFalse(spinner.stopped)
+        self.assertIs(ui._spinner, spinner)
+        self.assertEqual(stderr.getvalue(), "")
+        self.assertEqual(
+            spinner.calls,
+            [
+                ("\033[38;5;248mTHINKING: The user wants to uninstall Spotify. \033[0m", ""),
+                ("\033[38;5;248mLet me check the current OS first.\033[0m", ""),
+                ("", "\n"),
+            ],
+        )
+
+    def test_bash_carriage_return_stream_stays_on_one_line(self):
+        ui = TerminalUI(config=object())
+
+        with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            ui.status("bash")
+            ui.tool_output(fd="stdout", line="step 1", end="\r")
+            ui.tool_output(fd="stdout", line="step 2", end="\r")
+            ui.tool_output(fd="stdout", line="done", end="\n")
+            ui.clear_status()
+
+        self.assertEqual(stderr.getvalue(), "step 1\rstep 2\rdone\n")
 
     def test_transcript_records_thinking_without_spinner_output(self):
         transcript_file = io.StringIO()
@@ -144,6 +182,31 @@ class BasicUiOutputTests(unittest.TestCase):
         self.assertIn("onetwo", output)
         self.assertIn("next", output)
         self.assertIn("\033[1L", output)
+
+    def test_spinner_keeps_multiple_lines_above_spinner(self):
+        stderr = _TtyBuffer()
+        with patch("sys.stderr", stderr):
+            spinner = Spinner("Thinking", reserve_above=True)
+            spinner.running = True
+            spinner.write_above("first\nsecond", end="")
+            spinner.write_above("third", end="\n")
+
+        output = stderr.getvalue()
+        self.assertIn("first", output)
+        self.assertIn("second", output)
+        self.assertIn("third", output)
+        self.assertGreaterEqual(output.count("\033[1L"), 2)
+
+    def test_spinner_does_not_animate_when_stderr_is_not_a_tty(self):
+        stderr = io.StringIO()
+        with patch("sys.stderr", stderr):
+            spinner = Spinner("Thinking", reserve_above=True)
+            spinner.start()
+            spinner.write_above("thinking", end="")
+            spinner.stop()
+
+        self.assertIsNone(spinner.thread)
+        self.assertEqual(stderr.getvalue(), "thinking")
 
 
 if __name__ == "__main__":

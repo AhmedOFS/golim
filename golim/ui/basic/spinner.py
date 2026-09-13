@@ -35,10 +35,15 @@ class Spinner:
             sys.stderr.flush()
 
     def start(self):
-        if self.reserve_above and self._is_tty:
+        self.running = True
+        # A non-TTY has no cursor to animate. More importantly, emitting
+        # carriage-return spinner frames there would race with streamed
+        # thinking and tool output, which intentionally use raw line endings.
+        if not self._is_tty:
+            return
+        if self.reserve_above:
             sys.stderr.write("\n")
             sys.stderr.flush()
-        self.running = True
         self.thread = threading.Thread(target=self._spin, daemon=True)
         self.thread.start()
 
@@ -59,28 +64,40 @@ class Spinner:
             return
 
         with self._lock:
-            self._clear_line()
-            sys.stderr.write("\033[1A\r\033[K")
+            # A provider may deliver several thinking lines in one delta.
+            # Commit each embedded newline separately so the spinner remains
+            # immediately below the output area.
+            parts = text.split("\n")
+            for index, part in enumerate(parts):
+                is_last = index == len(parts) - 1
+                if not is_last:
+                    self._write_above_locked(part, "\n")
+                elif part or end:
+                    self._write_above_locked(part, end)
 
-            if self._replace_above_line:
-                self._above_line = ""
+    def _write_above_locked(self, text, end):
+        self._clear_line()
+        sys.stderr.write("\033[1A\r\033[K")
 
-            combined = self._above_line + text
-            if end == "\r":
-                rendered = combined
-                self._above_line = ""
-                self._replace_above_line = True
-            else:
-                rendered = combined + end
-                last_newline = rendered.rfind("\n")
-                self._above_line = rendered[last_newline + 1:] if last_newline >= 0 else rendered
-                self._replace_above_line = False
+        if self._replace_above_line:
+            self._above_line = ""
 
-            sys.stderr.write(rendered)
-            if rendered.endswith("\n"):
-                # Keep a fresh output line above the spinner so the next
-                # write does not erase the line just completed.
-                sys.stderr.write("\033[1L")
-            sys.stderr.write("\033[1B\r")
-            self._draw_locked()
-            sys.stderr.flush()
+        combined = self._above_line + str(text)
+        if end == "\r":
+            rendered = combined
+            self._above_line = ""
+            self._replace_above_line = True
+        else:
+            rendered = combined + end
+            last_newline = rendered.rfind("\n")
+            self._above_line = rendered[last_newline + 1:] if last_newline >= 0 else rendered
+            self._replace_above_line = False
+
+        sys.stderr.write(rendered)
+        if rendered.endswith("\n"):
+            # Keep a fresh output line above the spinner so the next
+            # write does not erase the line just completed.
+            sys.stderr.write("\033[1L")
+        sys.stderr.write("\033[1B\r")
+        self._draw_locked()
+        sys.stderr.flush()

@@ -1,14 +1,17 @@
 """Thin terminal UI layer for golim client output."""
 
+import contextlib
 import getpass
 import re
 import sys
+import threading
 
 from golim.core.agent_events import AgentEvents
 from golim.core.run_result import RunResult
 from golim.config import Config, get_config
 from golim.core.runtime import Runtime
 from golim.core.utils import _clip_label
+from golim.ui.basic.escape_monitor import EscapeMonitor
 from golim.ui.basic.spinner import Spinner
 from golim.ui.tui.app.transcript_writer import TranscriptWriter
 
@@ -31,6 +34,9 @@ class TerminalUI(AgentEvents):
         self._spinner = None
         self._thinking_live = False
         self._transcript = transcript
+        self._runtime = None
+        self._escape_monitor = None
+        self._interrupt_lock = threading.Lock()
 
     def run(self, message: str) -> RunResult:
         with Runtime(
@@ -39,7 +45,26 @@ class TerminalUI(AgentEvents):
             binary=self._binary,
         ) as runtime:
             runtime.bind_ui(self)
-            return runtime.run(message)
+            self._runtime = runtime
+            self._escape_monitor = EscapeMonitor(self._handle_escape)
+            self._escape_monitor.start()
+            try:
+                return runtime.run(message)
+            finally:
+                self._escape_monitor.stop()
+                self._escape_monitor = None
+                self._runtime = None
+
+    def _handle_escape(self) -> None:
+        with self._interrupt_lock:
+            runtime = self._runtime
+            if runtime is None:
+                return
+            if runtime.should_interrupt():
+                runtime.hard_cancel()
+            else:
+                runtime.interrupt()
+            self.status("Interrupting. Press Esc again to force.")
 
     def status(self, message):
         if self._spinner is None:
@@ -68,8 +93,6 @@ class TerminalUI(AgentEvents):
     def thinking_delta(self, text):
         if not text:
             return
-        if not self._thinking_live and self._spinner:
-            self.clear_status()
         prefix = "THINKING: " if not self._thinking_live else ""
         self._thinking_live = True
         self._write_output(
@@ -133,18 +156,18 @@ class TerminalUI(AgentEvents):
                 )
 
     def request_binary_approval(self, binary):
-    
         prompt = f"Allow sudo access for {binary}? [Y/N] "
-        try:
-            with open("/dev/tty", "r+", encoding="utf-8") as tty:
-                tty.write(prompt)
-                tty.flush()
-                answer = tty.readline()
-        except OSError:
+        with self._paused_for_input():
             try:
-                answer = input(prompt)
-            except (EOFError, KeyboardInterrupt):
-                return False
+                with open("/dev/tty", "r+", encoding="utf-8") as tty:
+                    tty.write(prompt)
+                    tty.flush()
+                    answer = tty.readline()
+            except OSError:
+                try:
+                    answer = input(prompt)
+                except (EOFError, KeyboardInterrupt):
+                    return False
         return answer.strip().lower() in {"y", "yes"}
 
     def request_sudo_password(self):
@@ -153,10 +176,11 @@ class TerminalUI(AgentEvents):
             self._spinner = None
         self._write_output("\n\033[1mPrivileged commands require sudo authentication.\033[0m")
         sys.stderr.flush()
-        try:
-            password = getpass.getpass("Sudo password (input hidden): ")
-        except (EOFError, KeyboardInterrupt):
-            return None
+        with self._paused_for_input():
+            try:
+                password = getpass.getpass("Sudo password (input hidden): ")
+            except (EOFError, KeyboardInterrupt):
+                return None
         return password or None
     
     def _show_python(self, code):
@@ -182,16 +206,17 @@ class TerminalUI(AgentEvents):
         self._show_python(code)
 
         prompt = "Execute this Python code? [Y/N] "
-        try:
-            with open("/dev/tty", "r+", encoding="utf-8") as tty:
-                tty.write(prompt)
-                tty.flush()
-                answer = tty.readline()
-        except OSError:
+        with self._paused_for_input():
             try:
-                answer = input(prompt)
-            except (EOFError, KeyboardInterrupt):
-                return False
+                with open("/dev/tty", "r+", encoding="utf-8") as tty:
+                    tty.write(prompt)
+                    tty.flush()
+                    answer = tty.readline()
+            except OSError:
+                try:
+                    answer = input(prompt)
+                except (EOFError, KeyboardInterrupt):
+                    return False
         return answer.strip().lower() in {"y", "yes"}
 
     def request_write_approval(self, path, content, mode):
@@ -204,17 +229,26 @@ class TerminalUI(AgentEvents):
         self._show_python(content)
 
         prompt = "Write this file? [Y/N] "
-        try:
-            with open("/dev/tty", "r+", encoding="utf-8") as tty:
-                tty.write(prompt)
-                tty.flush()
-                answer = tty.readline()
-        except OSError:
+        with self._paused_for_input():
             try:
-                answer = input(prompt)
-            except (EOFError, KeyboardInterrupt):
-                return False
+                with open("/dev/tty", "r+", encoding="utf-8") as tty:
+                    tty.write(prompt)
+                    tty.flush()
+                    answer = tty.readline()
+            except OSError:
+                try:
+                    answer = input(prompt)
+                except (EOFError, KeyboardInterrupt):
+                    return False
         return answer.strip().lower() in {"y", "yes"}
+
+    @contextlib.contextmanager
+    def _paused_for_input(self):
+        if self._escape_monitor is None:
+            yield
+            return
+        with self._escape_monitor.paused():
+            yield
 
     def _format_tool_call(self, tool_name, args):
         if tool_name == "finder":

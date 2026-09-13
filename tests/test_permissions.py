@@ -51,6 +51,30 @@ class PermissionsTests(unittest.TestCase):
         get_config.assert_not_called()
         self.assertEqual(ui.approval_prompts, [])
 
+    def test_nosudo_denies_bash_before_dispatch(self):
+        ui = FakeUI(approved=True)
+        permissions = Permissions(ui)
+        with patch("golim.core.permissions.get_config") as get_config:
+            get_config.return_value.no_sudo = True
+            denial = permissions.is_approved(
+                "bash", {"command": "sudo chmod 644 output.txt"}
+            )
+
+        self.assertFalse(denial["ok"])
+        self.assertIn("--nosudo", denial["error"])
+        self.assertEqual(ui.approval_prompts, [])
+        self.assertEqual(ui.tool_results, [denial])
+
+    def test_nosudo_auto_declines_privileged_callbacks(self):
+        ui = FakeUI(approved=True)
+        permissions = Permissions(ui)
+        with patch("golim.core.permissions.get_config") as get_config:
+            get_config.return_value.no_sudo = True
+            self.assertFalse(permissions.approve_binary({"binary": "/usr/bin/id"}))
+            self.assertIsNone(permissions.request_sudo_password())
+
+        self.assertEqual(ui.approval_prompts, [])
+
     def test_whole_command_python_is_treated_as_plain_bash(self):
         permissions = Permissions(FakeUI(approved=False))
         with patch("golim.core.permissions.get_config"):

@@ -14,7 +14,7 @@ class ConfigPanel(Vertical):
         self._prefix = prefix
 
     def compose(self) -> ComposeResult:
-        yield Static("golim configuration", id=f"{self._prefix}title")
+        yield Static("Golim configuration", id=f"{self._prefix}title")
         yield RichLog(id=f"{self._prefix}transcript", markup=False, auto_scroll=True, wrap=True)
         yield Static("", id=f"{self._prefix}prompt_label")
         yield Input(id=f"{self._prefix}text_input", classes="hidden")

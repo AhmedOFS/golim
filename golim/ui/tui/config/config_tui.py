@@ -488,7 +488,7 @@ def run_config(config: Config, binary: str, ui: ConfigPromptHandle, mode: str = 
         return 1
 
     ui.log("", STYLE_TEXT)
-    ui.log("You can now use golim:", STYLE_TEXT)
+    ui.log("You can now use Golim:", STYLE_TEXT)
     ui.log('  golim "Hello, how are you?"', STYLE_TEXT)
     return 0
 
@@ -611,7 +611,7 @@ class ConfigApp(ConfigUIMixin, App[int]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="outer"):
-            yield Static("golim configuration", id="title")
+            yield Static("Golim configuration", id="title")
             yield RichLog(id="transcript", markup=False, auto_scroll=True, wrap=True)
             yield Static("", id="prompt_label")
             yield Input(id="text_input", classes="hidden")

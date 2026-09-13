@@ -25,11 +25,19 @@ class MainTuiTests(unittest.TestCase):
         chat.assert_called_once_with("hello there", "ollama")
         tui.assert_not_called()
 
+    def test_nosudo_is_forwarded_to_chat_mode(self):
+        with patch.object(main_module, "setup_root_logger"), \
+             patch.object(main_module, "chat_command", return_value=0) as chat:
+            result = main_module.main(["--nosudo", "hello"])
+
+        self.assertEqual(result, 0)
+        chat.assert_called_once_with("hello", "ollama", True)
+
     def test_broken_config_prints_diagnostic_instead_of_crashing(self):
         from golim.config import ConfigSchemaError
         from golim.config.config import Config
 
-        error = ConfigSchemaError("Invalid golim configuration at /bad/path")
+        error = ConfigSchemaError("Invalid Golim configuration at /bad/path")
         with patch.object(main_module, "setup_root_logger"), \
              patch.object(Config, "_load", side_effect=error), \
              patch("sys.stderr") as stderr:
@@ -38,8 +46,8 @@ class MainTuiTests(unittest.TestCase):
                 self.assertEqual(result, 1)
 
         output = "".join(call.args[0] for call in stderr.write.call_args_list)
-        self.assertIn("Invalid golim configuration", output)
-        self.assertIn("golim -i", output)
+        self.assertIn("Invalid Golim configuration", output)
+        self.assertIn("Golim -i", output)
 
     def test_config_schema_error_reports_json_line_and_column(self):
         import json as _json
@@ -51,7 +59,7 @@ class MainTuiTests(unittest.TestCase):
             _json.loads('{\n    "providers": ')
         except _json.JSONDecodeError as exc:
             json_error = exc
-            schema_error = ConfigSchemaError("Invalid golim configuration at /bad/path")
+            schema_error = ConfigSchemaError("Invalid Golim configuration at /bad/path")
             schema_error.__cause__ = json_error
 
         with patch.object(main_module, "setup_root_logger"), \
@@ -146,6 +154,152 @@ class MainTuiTests(unittest.TestCase):
         self.assertEqual(fake_prompt_line.prompt.placeholder, DONE_PROMPT_PLACEHOLDER)
         self.assertFalse(fake_prompt_line.prompt.disabled)
         self.assertTrue(fake_prompt_line.prompt.focused)
+
+    def _input_handler_fixture(self, messages=None, busy=False):
+        from types import SimpleNamespace
+
+        from golim.ui.tui.app.app_tui import GolimApp
+        from golim.ui.tui.app.widgets.prompt_line import PromptLine
+
+        app = GolimApp("model", model="main")
+        app._busy = busy
+
+        runtime = None
+        if messages is not None:
+            runtime = MagicMock()
+            runtime.messages = messages
+        app._runtime = runtime
+
+        class FakeTranscript:
+            def __init__(self):
+                self.clear_count = 0
+
+            def clear(self):
+                self.clear_count += 1
+
+        class FakeQueryBar:
+            def __init__(self):
+                self.shown = None
+                self.hide_count = 0
+
+            def show(self, text):
+                self.shown = text
+
+            def hide(self):
+                self.hide_count += 1
+
+        class FakePromptLine:
+            def __init__(self):
+                self.history = []
+
+            def add_history(self, text):
+                self.history.append(text)
+
+            def update_placeholder(self, busy, has_completed):
+                pass
+
+        fakes = SimpleNamespace(
+            transcript=FakeTranscript(),
+            query_bar=FakeQueryBar(),
+            prompt_line=FakePromptLine(),
+        )
+
+        def fake_query_one(selector, *_args, **_kwargs):
+            if selector is PromptLine or selector == "#prompt_line":
+                return fakes.prompt_line
+            if selector == "#transcript":
+                return fakes.transcript
+            if selector == "#query_bar":
+                return fakes.query_bar
+            raise AssertionError(str(selector))
+
+        app.query_one = fake_query_one
+        return app, fakes
+
+    @staticmethod
+    def _submit_event(text):
+        from types import SimpleNamespace
+        return SimpleNamespace(value=text, input=SimpleNamespace(value=text))
+
+    @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
+    def test_detect_slash_command_new_empties_transcript_and_context(self):
+        app, fakes = self._input_handler_fixture(
+            messages=[{"role": "user", "content": "old"}]
+        )
+        app._has_completed_query = True
+
+        self.assertFalse(app.detect_slash_command("list the files"))
+        self.assertFalse(app.detect_slash_command("/etc/hosts"))
+        self.assertEqual(fakes.transcript.clear_count, 0)
+
+        self.assertTrue(app.detect_slash_command("/new"))
+        self.assertEqual(fakes.transcript.clear_count, 1)
+        self.assertEqual(fakes.query_bar.hide_count, 1)
+        app._runtime.reset_conversation.assert_called_once_with()
+        self.assertFalse(app._busy)
+        self.assertFalse(app._has_completed_query)
+
+    @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
+    def test_new_chat_while_busy_only_rings_bell(self):
+        app, fakes = self._input_handler_fixture(
+            messages=[{"role": "user", "content": "old"}], busy=True
+        )
+        app.bell = MagicMock()
+
+        self.assertTrue(app.detect_slash_command("/new"))
+
+        app.bell.assert_called_once_with()
+        self.assertEqual(fakes.transcript.clear_count, 0)
+        app._runtime.reset_conversation.assert_not_called()
+
+    @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
+    def test_plain_message_continues_previous_conversation(self):
+        app, fakes = self._input_handler_fixture(
+            messages=[{"role": "user", "content": "old"}]
+        )
+        app.append_followup_query = MagicMock()
+        app.run_chat = MagicMock()
+
+        event = self._submit_event("keep going")
+        app.on_input_submitted(event)
+
+        self.assertEqual(event.input.value, "")
+        self.assertEqual(fakes.prompt_line.history, ["keep going"])
+        app.append_followup_query.assert_called_once_with("keep going")
+        self.assertEqual(fakes.transcript.clear_count, 0)
+        self.assertIsNone(fakes.query_bar.shown)
+        self.assertTrue(app._busy)
+        app.run_chat.assert_called_once_with("keep going", 1, followup=True, clarification=False)
+
+    @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
+    def test_plain_message_without_context_starts_new_command(self):
+        app, fakes = self._input_handler_fixture(messages=[])
+        app.run_chat = MagicMock()
+
+        event = self._submit_event("fresh task")
+        app.on_input_submitted(event)
+
+        self.assertEqual(event.input.value, "")
+        self.assertEqual(fakes.query_bar.shown, "fresh task")
+        self.assertEqual(fakes.transcript.clear_count, 1)
+        self.assertTrue(app._busy)
+        app.run_chat.assert_called_once_with("fresh task", 1, followup=False, clarification=False)
+
+    @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
+    def test_message_while_busy_queues_clarification(self):
+        app, fakes = self._input_handler_fixture(
+            messages=[{"role": "user", "content": "old"}], busy=True
+        )
+        app.set_status = MagicMock()
+
+        event = self._submit_event("use the smaller file")
+        app.on_input_submitted(event)
+
+        self.assertEqual(event.input.value, "")
+        self.assertEqual(fakes.prompt_line.history, ["use the smaller file"])
+        self.assertEqual(app._pending_followup, ("use the smaller file", True))
+        app._runtime.interrupt.assert_called_once_with()
+        app.set_status.assert_called_once_with("Clarifying")
 
     @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
     def test_hard_cancel_keeps_chat_worker_alive_for_runtime_cleanup(self):

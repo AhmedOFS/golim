@@ -6,9 +6,9 @@ from textual.widgets import Input, Static
 
 from golim.ui.tui.app.history import History
 
-INITIAL_PROMPT_PLACEHOLDER = "Type your Request..."
-RUNNING_PROMPT_PLACEHOLDER = "Use // to add a clarification..."
-DONE_PROMPT_PLACEHOLDER = "Type a new request, or use // to add a follow up..."
+INITIAL_PROMPT_PLACEHOLDER = "What do you want to do..."
+RUNNING_PROMPT_PLACEHOLDER = "Add a clarification..."
+DONE_PROMPT_PLACEHOLDER = "Followup with something, or /new to make a new Golim..."
 
 
 class PromptLine(Horizontal):

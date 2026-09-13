@@ -23,7 +23,7 @@ def chat(model, messages, tools=None, response_format=None, config=None, on_thin
     api_key = config.openrouter_api_key if config else None
     if not api_key:
         raise RuntimeError(
-            "OpenRouter API key is not configured. Run 'golim -i' to set it up."
+            "OpenRouter API key is not configured. Run 'Golim -i' to set it up."
         )
 
     headers = dict(_OPENROUTER_HEADERS)

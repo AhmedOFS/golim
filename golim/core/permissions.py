@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import re
+
 from golim.config import get_config
 from golim.core.agent_events import AgentEvents
 from golim.core.utils import _PYTHON_DENIED_RESULT, _detect_python_in_bash
 
 
 EXEC_TOOL_NAMES = ("exec_python", "exec")
+_SUDO_TOKEN_RE = re.compile(r"(?<![\w-])sudo(?=\s|$)")
 
 
 class Permissions:
@@ -29,6 +32,8 @@ class Permissions:
         Returns ``None`` when execution may proceed, otherwise the denial
         tool result, already reported through ``ui.tool_output``.
         """
+        if tool_name == "bash" and self._no_sudo_command(args):
+            return self._deny_sudo()
         if tool_name == "bash":
             return self._gate_embedded_python(args)
         if get_config().unrestricted_mode:
@@ -45,6 +50,8 @@ class Permissions:
         Wired as the client's ``on_approval_request`` callback; the approval
         exchange never reaches the model as a tool result.
         """
+        if getattr(get_config(), "no_sudo", False) is True:
+            return False
         ui = self._require_ui()
         return bool(ui.request_binary_approval(approval.get("binary", "")))
 
@@ -55,8 +62,17 @@ class Permissions:
         travels only through the transport layer and is validated once by
         the MCP server before being discarded.
         """
+        if getattr(get_config(), "no_sudo", False) is True:
+            return None
         ui = self._require_ui()
         return ui.request_sudo_password()
+
+    @staticmethod
+    def _no_sudo_command(args: dict) -> bool:
+        command = str(args.get("command", ""))
+        if not _SUDO_TOKEN_RE.search(command):
+            return False
+        return getattr(get_config(), "no_sudo", False) is True
 
     def _gate_embedded_python(self, args: dict) -> dict | None:
         command = str(args.get("command", ""))
@@ -98,6 +114,14 @@ class Permissions:
 
     def _deny_python(self) -> dict:
         denial = dict(_PYTHON_DENIED_RESULT)
+        self.ui.tool_output(result=denial)
+        return denial
+
+    def _deny_sudo(self) -> dict:
+        denial = {
+            "ok": False,
+            "error": "Sudo disabled for this session (--nosudo).",
+        }
         self.ui.tool_output(result=denial)
         return denial
 

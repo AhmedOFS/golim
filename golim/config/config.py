@@ -62,6 +62,7 @@ class Config:
     WEBSEARCH_PROVIDER = "websearch_provider"
     EXA_API_KEY = "exa_api_key"
     PARALLEL_API_KEY = "parallel_api_key"
+    NO_SUDO = "no_sudo"
     EXA = "exa"
     PARALLEL = "parallel"
 
@@ -97,6 +98,7 @@ class Config:
         latest = self.latest_model()
         self._session_model: str | None = None
         self._session_provider: str | None = None
+        self._no_sudo = False
         if latest is not None:
             self._set_session_model(latest["model"], latest["provider"])
 
@@ -112,10 +114,10 @@ class Config:
         try:
             raw = json.loads(self.path.read_text())
         except (OSError, json.JSONDecodeError) as exc:
-            raise ConfigSchemaError(f"Invalid golim configuration at {self.path}") from exc
+            raise ConfigSchemaError(f"Invalid Golim configuration at {self.path}") from exc
         if not isinstance(raw, dict) or not isinstance(raw.get(self.PROVIDERS), dict) or not isinstance(raw.get(self.ATTRIBUTES), dict):
             raise ConfigSchemaError(
-                f"Invalid golim configuration at {self.path}: expected providers and attributes objects"
+                f"Invalid Golim configuration at {self.path}: expected providers and attributes objects"
             )
         return raw
 
@@ -214,6 +216,10 @@ class Config:
     def unrestricted_mode(self): return bool(self.get(self.UNRESTRICTED_MODE))
     @property
     def proactive_auth(self): return bool(self.get(self.PROACTIVE_AUTH, True))
+    @property
+    def no_sudo(self): return self._no_sudo
+    @no_sudo.setter
+    def no_sudo(self, value): self._no_sudo = bool(value)
     @property
     def stream_thinking_traces(self): return bool(self.get(self.STREAM_THINKING_TRACES))
     @property

@@ -432,30 +432,22 @@ class GolimApp(ConfigUIMixin, App[int]):
             return
         if not text:
             return
-        is_followup = Runtime.is_followup_message(text)
-        followup_text = Runtime.followup_text(text)
-        if is_followup and not followup_text:
-            self.bell()
+        if self.detect_slash_command(text):
             event.input.value = ""
-            return
-        if self._busy:
-            if is_followup:
-                self.query_one(PromptLine).add_history(text)
-                event.input.value = ""
-                self.queue_followup(followup_text, clarification=True)
-                self.set_status("Clarifying")
-                return
-            self.bell()
             return
         self.query_one(PromptLine).add_history(text)
         event.input.value = ""
-        run_as_followup = is_followup and self._runtime is not None and self._runtime.messages
+        if self._busy:
+            # Continuing is the default: input during a run is queued as a
+            # clarification that interrupts the active run.
+            self.queue_followup(text, clarification=True)
+            self.set_status("Clarifying")
+            return
+        run_as_followup = bool(self._runtime is not None and self._runtime.messages)
         if run_as_followup:
-            self.append_followup_query(followup_text)
+            self.append_followup_query(text)
         else:
-            query_bar = self.query_one("#query_bar", QueryBar)
-            display_text = followup_text if is_followup else text
-            query_bar.show(display_text)
+            self.query_one("#query_bar", QueryBar).show(text)
             self.query_one("#transcript", Transcript).clear()
         self._active_run_id += 1
         self._active_cancel_event = threading.Event()
@@ -463,11 +455,39 @@ class GolimApp(ConfigUIMixin, App[int]):
         self._busy = True
         self.update_prompt_placeholder()
         self._chat_worker = self.run_chat(
-            followup_text if is_followup else text,
+            text,
             self._active_run_id,
             followup=run_as_followup,
             clarification=False,
         )
+
+    # -- Slash commands ------------------------------------------------------
+    def detect_slash_command(self, text: str) -> bool:
+        """Intercept slash commands before normal message handling.
+
+        Returns True when the input was consumed as a command. Anything
+        else (including other '/'-prefixed text) falls through as an
+        ordinary message.
+        """
+        if text == "/new":
+            self._start_new_chat()
+            return True
+        return False
+
+    def _start_new_chat(self) -> None:
+        """Empty the transcript and drop conversation context without
+        starting a run; the next message is handled as a new command."""
+        if self._busy:
+            self.bell()
+            return
+        with self._pending_followup_lock:
+            self._pending_followup = None
+        self._has_completed_query = False
+        self.query_one("#query_bar", QueryBar).hide()
+        self.query_one("#transcript", Transcript).clear()
+        if self._runtime is not None:
+            self._runtime.reset_conversation()
+        self.update_prompt_placeholder()
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         if self._config_active and event.option_list.id == f"{self._config_prefix}option_list":

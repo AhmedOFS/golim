@@ -52,17 +52,6 @@ class Runtime:
         self.ui: AgentEvents | None = None
         self.permissions: Permissions | None = None
 
-    @staticmethod
-    def is_followup_message(user_message: str) -> bool:
-        return str(user_message).lstrip().startswith("//")
-
-    @staticmethod
-    def followup_text(user_message: str) -> str:
-        text = str(user_message).lstrip()
-        if text.startswith("//"):
-            return text[2:].strip()
-        return str(user_message).strip()
-
     def __enter__(self):
         self.ensure_mcp_server()
         return self
@@ -233,7 +222,7 @@ class Runtime:
         missing tokens are recovered when a sudo command uses the out-of-band
         auth request path.
         """
-        if self.mcp_client is None:
+        if getattr(self.config, "no_sudo", False) is True or self.mcp_client is None:
             return
         try:
             status = self.mcp_client.auth_status()
@@ -319,7 +308,7 @@ class Runtime:
     def run_followup(self, user_message: str, *, clarification: bool = False) -> RunResult:
         from golim.core.agent import ToolAgent
         self.ensure_mcp_server()
-        text = self.followup_text(user_message)
+        text = str(user_message).strip()
         if not text:
             return self.result or make_run_result(False, "")
         if not self.messages:
@@ -362,6 +351,20 @@ class Runtime:
         self.messages = list(agent.messages)
         self.execution_history = list(agent.execution_history)
         return self.result
+
+    def reset_conversation(self) -> None:
+        """Drop cross-run context so the next run() starts a fresh chat.
+
+        Used by the TUI ``/new`` command. The MCP client, discovered tools,
+        and permissions are kept; only conversation state is discarded.
+        """
+        self._interrupt_requested.clear()
+        self._hard_cancel_requested.clear()
+        self.result = None
+        self.last_thinking_trace = ""
+        self.messages = []
+        self.execution_history = []
+        self._system_prompt = None
 
     def run(self, user_message: str) -> RunResult:
         from golim.core.agent import ToolAgent

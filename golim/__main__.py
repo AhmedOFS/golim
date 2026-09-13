@@ -17,9 +17,10 @@ def _setup_session_log():
     real_stderr = sys.stderr
     return transcript, transcript.path, real_stderr
 
-def chat_command(message: str, binary: str = "ollama") -> int:
+def chat_command(message: str, binary: str = "ollama", no_sudo: bool = False) -> int:
     """Send a message to the configured model."""
-    init_config()
+    config = init_config()
+    config.no_sudo = no_sudo
     error, model = _resolve_chat_settings(binary)
     if error:
         print(error)
@@ -56,12 +57,12 @@ def _resolve_chat_settings(binary: str = "ollama") -> tuple[str | None, str | No
     return error, model
 
 
-def tui_command(binary: str = "ollama") -> int:
+def tui_command(binary: str = "ollama", no_sudo: bool = False) -> int:
     """Open the default Textual interface."""
-    init_config()
+    config = init_config()
+    config.no_sudo = no_sudo
     from .ui.tui.app.app_tui import GolimApp
 
-    config = get_config()
     error, model, model_label = resolve_provider_settings(config, binary)
 
     try:
@@ -78,12 +79,12 @@ def tui_command(binary: str = "ollama") -> int:
         return 1
 
 
-def run_command(message: str, binary: str = "ollama") -> int:
-    return chat_command(message, binary)
+def run_command(message: str, binary: str = "ollama", no_sudo: bool = False) -> int:
+    return chat_command(message, binary, no_sudo)
 
 
-def run_tui_command(binary: str = "ollama") -> int:
-    return tui_command(binary)
+def run_tui_command(binary: str = "ollama", no_sudo: bool = False) -> int:
+    return tui_command(binary, no_sudo)
 
 
 def _print_config_schema_error(exc: ConfigSchemaError) -> int:
@@ -93,7 +94,7 @@ def _print_config_schema_error(exc: ConfigSchemaError) -> int:
     if isinstance(cause, json.JSONDecodeError):
         detail = f" (line {cause.lineno}, column {cause.colno})"
     print(f"Error: {exc}{detail}", file=sys.stderr)
-    print("Fix or remove the config file, then run 'golim -i' to reconfigure it.", file=sys.stderr)
+    print("Fix or remove the config file, then run 'Golim -i' to reconfigure it.", file=sys.stderr)
     return 1
 
 
@@ -126,6 +127,11 @@ def main(argv: list[str] | None = None) -> int:
         help="ollama binary name or path (default: ollama)"
     )
     parser.add_argument(
+        "--nosudo",
+        action="store_true",
+        help="reject all sudo operations for this session"
+    )
+    parser.add_argument(
         "message",
         nargs="*",
         help="message to send to the LLM"
@@ -147,9 +153,13 @@ def main(argv: list[str] | None = None) -> int:
 
         # Chat mode
         if not args.message:
+            if args.nosudo:
+                return tui_command(args.binary, True)
             return tui_command(args.binary)
 
         message = " ".join(args.message)
+        if args.nosudo:
+            return chat_command(message, args.binary, True)
         return chat_command(message, args.binary)
     except ConfigSchemaError as exc:
         return _print_config_schema_error(exc)

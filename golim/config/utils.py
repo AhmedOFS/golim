@@ -52,21 +52,21 @@ def resolve_provider_settings(config, binary: str = "ollama") -> tuple[str | Non
     if provider == Config.OPEN_ROUTER:
         label = model or "OpenRouter"
         if not config.openrouter_api_key:
-            return "Error: OpenRouter API key not configured\nRun 'golim -i' to set it up", None, label
+            return "Error: OpenRouter API key not configured\nRun 'Golim -i' to set it up", None, label
     elif provider == Config.OPENAI_COMPATIBLE:
         label = model or "OpenAI-compatible"
         if not config.openai_compatible_server_url:
-            return "Error: OpenAI-compatible server URL not configured\nRun 'golim -i' to set it up", None, label
+            return "Error: OpenAI-compatible server URL not configured\nRun 'Golim -i' to set it up", None, label
     elif provider == Config.OLLAMA:
         label = model or "Ollama"
         if not is_ollama_installed(binary):
             return f"Error: {binary} is not installed", None, label
     else:
         label = model or f"Unknown provider: {provider}"
-        return f"Error: Unsupported API provider: {provider!r}\nRun 'golim -i' to set it up", None, label
+        return f"Error: Unsupported API provider: {provider!r}\nRun 'Golim -i' to set it up", None, label
 
     if not model:
-        return "Error: No model configured\nRun 'golim -i' to initialize", None, label
+        return "Error: No model configured\nRun 'Golim -i' to initialize", None, label
 
     return None, model, label
 

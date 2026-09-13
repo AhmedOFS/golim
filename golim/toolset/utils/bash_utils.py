@@ -260,14 +260,37 @@ def _command_requires_pty_streaming(command: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def _append_stream_text(stream_name, text, pending, output_lines):
-    """Split decoded text into complete lines, emit stream frames, keep the
-    incomplete trailing piece in `pending`. Returns the new pending value."""
-    pending += text.replace("\r\n", "\n").replace("\r", "\n")
-    lines = pending.split("\n")
-    pending = lines.pop()  # possibly-incomplete trailing piece
-    for line in lines:
-        output_lines.append(line)
-        yield {"type": "stream", "fd": stream_name, "line": line, "end": "\n"}
+    """Split decoded text at newline and carriage-return boundaries.
+
+    A carriage return is meaningful for terminal output: it redraws the
+    current line (progress bars commonly use it), so preserve it as the
+    stream frame's ending instead of turning it into a newline.
+    """
+    pending += text
+    while True:
+        newline_pos = pending.find("\n")
+        carriage_pos = pending.find("\r")
+        positions = [pos for pos in (newline_pos, carriage_pos) if pos != -1]
+        if not positions:
+            break
+
+        split_at = min(positions)
+        end = pending[split_at]
+        # Keep a terminal carriage return pending when it is the last byte
+        # received. The following read may begin with ``\n`` (CRLF), which
+        # must be emitted as one newline frame rather than two frames.
+        if end == "\r" and split_at == len(pending) - 1:
+            break
+        chunk = pending[:split_at]
+        if end == "\r" and pending[split_at + 1:split_at + 2] == "\n":
+            end = "\n"
+            pending = pending[split_at + 2:]
+        else:
+            pending = pending[split_at + 1:]
+
+        output_lines.append(chunk)
+        yield {"type": "stream", "fd": stream_name, "line": chunk, "end": end}
+
     return pending
 
 
@@ -404,9 +427,15 @@ def _stream_subprocess(argv, cmd_str, results, suppress_stderr, use_pty, session
 
         # Flush any trailing partial line.
         for stream_name, chunk in pending.items():
-            if chunk:
-                output_lines[stream_name].append(chunk)
-                yield {"type": "stream", "fd": stream_name, "line": chunk, "end": "\n"}
+            if not chunk:
+                continue
+            if chunk.endswith("\r"):
+                chunk = chunk[:-1]
+                end = "\r"
+            else:
+                end = "\n"
+            output_lines[stream_name].append(chunk)
+            yield {"type": "stream", "fd": stream_name, "line": chunk, "end": end}
         completed = True
 
     finally:

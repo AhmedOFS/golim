@@ -319,6 +319,6 @@ def init_command(binary: str = "ollama") -> int:
             config.set(Config.PROACTIVE_AUTH, False)
             print("✓ Proactive sudo authentication disabled")
 
-    print("\nYou can now use golim:")
+    print("\nYou can now use Golim:")
     print('  golim "Hello, how are you?"')
     return 0
