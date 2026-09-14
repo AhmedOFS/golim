@@ -17,7 +17,7 @@ from ...config.utils import (
 def choose_provider(config: Config) -> str | None:
     """Let the user choose between Ollama, OpenRouter, and OpenAI-compatible.
     Returns None on Ctrl+C."""
-    print("\nSet up API Provider:")
+    print("\nChoose a Provider:")
     print(f"  1. Ollama (local, default)")
     print(f"  2. OpenRouter (cloud, requires API key)")
     print(f"  3. OpenAI-compatible (URL and optional API key)")
@@ -30,7 +30,7 @@ def choose_provider(config: Config) -> str | None:
     elif config.api_provider is None:
         default = "1"
     else:
-        print(f"Error: Unsupported API provider: {config.api_provider!r}")
+        print(f"Error: Unsupported AI provider: {config.api_provider!r}")
         return None
     try:
         choice = input(f"Select provider [1-3, default {default}]: ").strip() or default
@@ -259,7 +259,7 @@ def init_command(binary: str = "ollama") -> int:
             if result != 0:
                 return result
         else:
-            print(f"Error: Unsupported API provider: {provider!r}")
+            print(f"Error: Unsupported AI provider: {provider!r}")
             return 1
 
         break  # ollama succeeded

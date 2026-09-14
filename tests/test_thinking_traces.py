@@ -1,3 +1,4 @@
+import asyncio
 import tempfile
 import unittest
 from importlib.util import find_spec
@@ -107,6 +108,104 @@ class ThinkingTraceTests(unittest.TestCase):
         self.assertEqual(len(transcript._renderable_log), 1)
         self.assertEqual(transcript._renderable_log[0][0].plain, "▶ THINKING: first second")
         self.assertFalse(transcript._thinking_entries[live_id]["live"])
+
+    @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
+    def test_tui_queries_share_transcript_and_keep_content_gutter(self):
+        from rich.text import Text
+
+        from golim.ui.tui.app.widgets.transcript import Transcript
+
+        transcript = Transcript()
+        transcript.write_query("first task")
+        transcript.write(Text("response"))
+        transcript.write_query("followup task")
+
+        self.assertEqual(
+            [strip.text for strip in transcript._lines],
+            ["> first task", "", "  response", "", "> followup task", ""],
+        )
+
+    @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
+    def test_tui_initial_query_is_sticky_without_transcript_duplicate(self):
+        from rich.text import Text
+
+        from golim.ui.tui.app.widgets.transcript import Transcript
+
+        headers = []
+        transcript = Transcript()
+        transcript.set_query_header_callback(headers.append)
+        transcript.set_initial_query("first task")
+        transcript.write(Text("response"))
+        transcript.write_query("followup task")
+
+        self.assertEqual(headers[-1], "first task")
+        self.assertEqual(
+            [strip.text for strip in transcript._lines],
+            ["  response", "", "> followup task", ""],
+        )
+
+    @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
+    def test_tui_stream_replacement_keeps_single_indented_pending_line(self):
+        from rich.text import Text
+
+        from golim.ui.tui.app.widgets.transcript import Transcript
+
+        transcript = Transcript()
+        transcript.write(Text("progress 1"), replace_last=True, commit=False)
+        transcript.write(Text("progress 2"), replace_last=True, commit=False)
+
+        self.assertEqual(transcript._lines, [])
+        self.assertEqual([strip.text for strip in transcript._pending_strips], ["  progress 2"])
+
+        transcript.write(Text("finished"))
+        self.assertEqual(
+            [strip.text for strip in transcript._lines],
+            ["  progress 2", "  finished"],
+        )
+
+    @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
+    def test_tui_sticky_query_tracks_last_query_at_scroll_top(self):
+        from rich.text import Text
+        from textual.app import App, ComposeResult
+
+        from golim.ui.tui.app.widgets.transcript import Transcript
+
+        headers = []
+
+        class TestApp(App[None]):
+            def compose(self) -> ComposeResult:
+                yield Transcript(id="transcript")
+
+        async def run_case():
+            app = TestApp()
+            async with app.run_test(size=(40, 8)) as pilot:
+                transcript = app.query_one(Transcript)
+                transcript.set_query_header_callback(headers.append)
+                transcript.write_query("first task")
+                for index in range(8):
+                    transcript.write(Text(f"first output {index}"))
+                transcript.write_query("followup task")
+                for index in range(20):
+                    transcript.write(Text(f"followup output {index}"))
+                await pilot.pause()
+
+                transcript.scroll_to(y=13, animate=False)
+                await pilot.pause()
+                self.assertEqual(headers[-1], "first task")
+
+                transcript.scroll_to(y=14, animate=False)
+                await pilot.pause()
+                self.assertEqual(headers[-1], "followup task")
+
+                transcript.scroll_end(animate=False)
+                await pilot.pause()
+                self.assertEqual(headers[-1], "followup task")
+
+                transcript.scroll_home(animate=False)
+                await pilot.pause()
+                self.assertEqual(headers[-1], "first task")
+
+        asyncio.run(run_case())
 
 
 if __name__ == "__main__":

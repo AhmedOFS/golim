@@ -63,7 +63,7 @@ def resolve_provider_settings(config, binary: str = "ollama") -> tuple[str | Non
             return f"Error: {binary} is not installed", None, label
     else:
         label = model or f"Unknown provider: {provider}"
-        return f"Error: Unsupported API provider: {provider!r}\nRun 'Golim -i' to set it up", None, label
+        return f"Error: Unsupported AI provider: {provider!r}\nRun 'Golim -i' to set it up", None, label
 
     if not model:
         return "Error: No model configured\nRun 'Golim -i' to initialize", None, label

@@ -173,9 +173,17 @@ class MainTuiTests(unittest.TestCase):
         class FakeTranscript:
             def __init__(self):
                 self.clear_count = 0
+                self.queries = []
+                self.initial_query = None
 
             def clear(self):
                 self.clear_count += 1
+
+            def write_query(self, text):
+                self.queries.append(text)
+
+            def set_initial_query(self, text):
+                self.initial_query = text
 
         class FakeQueryBar:
             def __init__(self):
@@ -187,6 +195,14 @@ class MainTuiTests(unittest.TestCase):
 
             def hide(self):
                 self.hide_count += 1
+
+        class FakeHomeScreen:
+            def __init__(self):
+                self.display = False
+
+        class FakeBody:
+            def __init__(self):
+                self.classes = ""
 
         class FakePromptLine:
             def __init__(self):
@@ -201,6 +217,8 @@ class MainTuiTests(unittest.TestCase):
         fakes = SimpleNamespace(
             transcript=FakeTranscript(),
             query_bar=FakeQueryBar(),
+            home_screen=FakeHomeScreen(),
+            body=FakeBody(),
             prompt_line=FakePromptLine(),
         )
 
@@ -211,6 +229,10 @@ class MainTuiTests(unittest.TestCase):
                 return fakes.transcript
             if selector == "#query_bar":
                 return fakes.query_bar
+            if selector == "#home_screen":
+                return fakes.home_screen
+            if selector == "#body":
+                return fakes.body
             raise AssertionError(str(selector))
 
         app.query_one = fake_query_one
@@ -234,7 +256,8 @@ class MainTuiTests(unittest.TestCase):
 
         self.assertTrue(app.detect_slash_command("/new"))
         self.assertEqual(fakes.transcript.clear_count, 1)
-        self.assertEqual(fakes.query_bar.hide_count, 1)
+        self.assertTrue(fakes.home_screen.display)
+        self.assertEqual(fakes.body.classes, "hidden")
         app._runtime.reset_conversation.assert_called_once_with()
         self.assertFalse(app._busy)
         self.assertFalse(app._has_completed_query)
@@ -267,7 +290,6 @@ class MainTuiTests(unittest.TestCase):
         self.assertEqual(fakes.prompt_line.history, ["keep going"])
         app.append_followup_query.assert_called_once_with("keep going")
         self.assertEqual(fakes.transcript.clear_count, 0)
-        self.assertIsNone(fakes.query_bar.shown)
         self.assertTrue(app._busy)
         app.run_chat.assert_called_once_with("keep going", 1, followup=True, clarification=False)
 
@@ -280,10 +302,34 @@ class MainTuiTests(unittest.TestCase):
         app.on_input_submitted(event)
 
         self.assertEqual(event.input.value, "")
-        self.assertEqual(fakes.query_bar.shown, "fresh task")
+        self.assertEqual(fakes.transcript.initial_query, "fresh task")
+        self.assertEqual(fakes.transcript.queries, [])
+        self.assertFalse(fakes.home_screen.display)
+        self.assertEqual(fakes.body.classes, "")
         self.assertEqual(fakes.transcript.clear_count, 1)
         self.assertTrue(app._busy)
         app.run_chat.assert_called_once_with("fresh task", 1, followup=False, clarification=False)
+
+    @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
+    def test_transcript_shares_query_edge_and_status_keeps_its_offset(self):
+        from golim.ui.tui.app.app_tui import GolimApp
+        from golim.ui.tui.app.widgets.transcript import Transcript
+
+        async def run_case():
+            config = MagicMock()
+            config.is_complete.return_value = True
+            app = GolimApp("model", model="main", config=config)
+            async with app.run_test(size=(80, 24)) as pilot:
+                app._show_conversation()
+                await pilot.pause(0.1)
+
+                transcript = app.query_one("#transcript", Transcript)
+                status = app.query_one("#status")
+                self.assertEqual(len(app.query(Transcript)), 1)
+                self.assertEqual(transcript.region.x, 3)
+                self.assertEqual(status.region.x, 4)
+
+        asyncio.run(run_case())
 
     @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
     def test_message_while_busy_queues_clarification(self):
@@ -376,6 +422,8 @@ class MainTuiTests(unittest.TestCase):
             app = GolimApp("model", model="main", config=config)
             async with app.run_test() as pilot:
                 self.assertEqual(app.focused.id, "prompt")
+                self.assertTrue(app.query_one("#home_screen").display)
+                self.assertTrue(app.query_one("#body").has_class("hidden"))
                 await pilot.press("tab")
                 await pilot.pause(0.2)
                 self.assertTrue(app._menu_active)
@@ -478,7 +526,7 @@ class MainTuiTests(unittest.TestCase):
                     app._show_settings_menu()
                     options = app.query_one("#menu_options")
                     labels = [str(options.get_option_at_index(i).prompt) for i in range(options.option_count)]
-                    self.assertIn("Proactive sudo auth: on", labels)
+                    self.assertIn("Authenticate Sudo on App Start: on", labels)
 
                     app._handle_menu_selected(2)
                     self.assertFalse(config.proactive_auth)

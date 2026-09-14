@@ -251,7 +251,7 @@ class ConfigSchemaTests(unittest.TestCase):
 
         error, model, label = resolve_provider_settings(config)
 
-        self.assertIn("Unsupported API provider", error)
+        self.assertIn("Unsupported AI provider", error)
         self.assertIsNone(model)
         self.assertEqual(label, "provider/model")
 

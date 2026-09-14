@@ -23,4 +23,4 @@ def chat_with_model_api(
         return openai_compatible.chat(model, messages, tools, response_format, config, on_thinking_delta)
     if provider == Config.OLLAMA:
         return ollama.chat(model, messages, tools, response_format, config, on_thinking_delta)
-    raise ValueError(f"Unsupported API provider: {provider!r}")
+    raise ValueError(f"Unsupported AI provider: {provider!r}")

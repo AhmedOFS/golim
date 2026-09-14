@@ -209,10 +209,10 @@ def _state_provider(config: Config, ui: ConfigPromptHandle, binary: str) -> str:
     elif provider in provider_defaults:
         default = provider_defaults[provider]
     else:
-        ui.log(f"Error: Unsupported API provider: {provider!r}", STYLE_ERROR)
+        ui.log(f"Error: Unsupported AI provider: {provider!r}", STYLE_ERROR)
         return "EXIT"
-    ui.log("API provider setup", STYLE_ACCENT)
-    idx = ui.select("Select API provider", options, default)
+    ui.log("AI provider setup", STYLE_ACCENT)
+    idx = ui.select("Choose a provider", options, default)
     if idx == 2:
         return "OPENROUTER_KEY_CHOICE" if config.openrouter_api_key else "OPENROUTER_KEY_INPUT"
     if idx == 1:

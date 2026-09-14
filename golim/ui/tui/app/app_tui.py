@@ -36,7 +36,6 @@ from golim.ui.tui.tui_style import (
     DIM,
     ERROR,
     FOOTER,
-    PROMPT_LINE_BG,
     PROMPT_MARKER,
     STYLE_DIM,
     STYLE_ERROR,
@@ -48,12 +47,18 @@ from golim.ui.tui.tui_style import (
     WHITE,
 )
 from golim.ui.tui.app.widgets.transcript import Transcript
+from golim.ui.tui.app.widgets.home import HomeScreen
 from golim.ui.tui.app.widgets.spinner import Spinner
 from golim.ui.tui.app.widgets.query_bar import QueryBar
 from golim.ui.tui.app.widgets.footer import Footer
 from golim.ui.tui.app.widgets.prompt_line import PromptLine
 from golim.ui.tui.config.widgets.config_panel import ConfigPanel
-from golim.ui.tui.app.widgets.menu import MenuPanel
+from golim.ui.tui.app.widgets.menu import (
+    MAIN_MENU,
+    MODEL_MENU,
+    SETTINGS_MENU,
+    MenuPanel,
+)
 from golim.config.utils import get_configured_model_choices, resolve_provider_settings
 from golim.logger import start_run_logging
 
@@ -93,7 +98,7 @@ class GolimApp(ConfigUIMixin, App[int]):
     #outer {{
         height: 100%;
         width: 100%;
-        padding: 0 2 1 0;
+        padding: 0 0 1 0;
         border: none;
         outline: none;
     }}
@@ -102,11 +107,20 @@ class GolimApp(ConfigUIMixin, App[int]):
         height: 1fr;
         width: 100%;
         padding: 1 0 0 2;
+        margin-right: 2;
+    }}
+
+    #home_screen {{
+        height: 1fr;
+        width: 100%;
+        content-align: center middle;
+        color: {WHITE};
     }}
 
     #query_bar {{
         height: auto;
         width: 100%;
+        margin-left: 1;
         color: {WHITE};
         text-style: bold;
         margin-bottom: 1;
@@ -115,12 +129,13 @@ class GolimApp(ConfigUIMixin, App[int]):
     #body {{
         height: 1fr;
         width: 100%;
-        margin-left: 2;
+        margin-left: 1;
     }}
 
     #transcript {{
         height: 1fr;
-        width: 100%;
+        width: 1fr;
+        margin-left: 0;
         background: {BG_DARK};
         color: {WHITE};
         scrollbar-size-vertical: 1;
@@ -134,6 +149,7 @@ class GolimApp(ConfigUIMixin, App[int]):
     #status {{
         height: 1;
         color: {SUCCESS};
+        margin-left: 1;
         margin-top: 1;
     }}
 
@@ -142,7 +158,9 @@ class GolimApp(ConfigUIMixin, App[int]):
         width: 100%;
         margin-top: 1;
         margin-bottom: 1;
-        background: {PROMPT_LINE_BG};
+        background: transparent;
+        border-top: hkey {DIM};
+        border-bottom: hkey {DIM};
         padding: 0 1;
         align: left middle;
     }}
@@ -172,18 +190,21 @@ class GolimApp(ConfigUIMixin, App[int]):
         height: 1;
         width: 100%;
         color: {FOOTER};
+        margin-right: 2;
     }}
 
     #config_panel {{
         height: 1fr;
         width: 100%;
         padding: 1 2 0 2;
+        margin-right: 2;
     }}
 
     #menu_panel {{
         height: 1fr;
         width: 100%;
         padding: 1 2 0 2;
+        margin-right: 2;
     }}
 
     #menu_title {{
@@ -373,8 +394,9 @@ class GolimApp(ConfigUIMixin, App[int]):
     def compose(self) -> ComposeResult:
         with Vertical(id="outer"):
             with Vertical(id="frame"):
+                yield HomeScreen(id="home_screen")
                 yield QueryBar(id="query_bar")
-                with Vertical(id="body"):
+                with Vertical(id="body", classes="hidden"):
                     yield Transcript(id="transcript")
                     yield Spinner(id="status")
             yield ConfigPanel(id="config_panel", prefix="config_", classes="hidden")
@@ -387,7 +409,10 @@ class GolimApp(ConfigUIMixin, App[int]):
         self.screen.set_class(dark, "-pitch-black")
 
     def on_mount(self) -> None:
-        self.query_one("#query_bar", QueryBar).display = False
+        self.query_one("#transcript", Transcript).set_query_header_callback(
+            self._update_query_header
+        )
+        self._show_home_screen()
         self.update_prompt_placeholder()
         self.query_one(PromptLine).focus_input()
         if not self._config.is_complete():
@@ -447,8 +472,10 @@ class GolimApp(ConfigUIMixin, App[int]):
         if run_as_followup:
             self.append_followup_query(text)
         else:
-            self.query_one("#query_bar", QueryBar).show(text)
-            self.query_one("#transcript", Transcript).clear()
+            self._show_conversation()
+            transcript = self.query_one("#transcript", Transcript)
+            transcript.clear()
+            transcript.set_initial_query(text)
         self._active_run_id += 1
         self._active_cancel_event = threading.Event()
         self._chat_thread_id = None
@@ -483,11 +510,27 @@ class GolimApp(ConfigUIMixin, App[int]):
         with self._pending_followup_lock:
             self._pending_followup = None
         self._has_completed_query = False
-        self.query_one("#query_bar", QueryBar).hide()
+        self._show_home_screen()
         self.query_one("#transcript", Transcript).clear()
         if self._runtime is not None:
             self._runtime.reset_conversation()
         self.update_prompt_placeholder()
+
+    def _show_home_screen(self) -> None:
+        self.query_one("#home_screen", HomeScreen).display = True
+        self.query_one("#query_bar", QueryBar).hide()
+        self.query_one("#body", Vertical).classes = "hidden"
+
+    def _show_conversation(self) -> None:
+        self.query_one("#home_screen", HomeScreen).display = False
+        self.query_one("#body", Vertical).classes = ""
+
+    def _update_query_header(self, text: str) -> None:
+        query_bar = self.query_one("#query_bar", QueryBar)
+        if text:
+            query_bar.show(text)
+        else:
+            query_bar.hide()
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         if self._config_active and event.option_list.id == f"{self._config_prefix}option_list":
@@ -513,7 +556,7 @@ class GolimApp(ConfigUIMixin, App[int]):
         self.query_one("#prompt_line", PromptLine).classes = "hidden"
         panel = self.query_one("#menu_panel", MenuPanel)
         panel.classes = ""
-        panel.show_options("Menu", ["Select model", "Set up provider", "Settings", "Close"])
+        panel.show_page(MAIN_MENU)
 
     def _hide_menu(self) -> None:
         self._menu_active = False
@@ -628,27 +671,23 @@ class GolimApp(ConfigUIMixin, App[int]):
         self._menu_page = "models"
         self._menu_labels = labels
         self._menu_choices = choices
-        self.query_one("#menu_panel", MenuPanel).show_model_search(labels)
+        self.query_one("#menu_panel", MenuPanel).show_model_search(labels, MODEL_MENU)
 
     def _show_settings_menu(self) -> None:
         config = get_config()
         self._menu_page = "settings"
-        self.query_one("#menu_panel", MenuPanel).show_options("Settings", [
-            f"Thinking traces: {'on' if config.stream_thinking_traces else 'off'}",
-            f"Unrestricted mode: {'on' if config.unrestricted_mode else 'off'}",
-            f"Proactive sudo auth: {'on' if config.proactive_auth else 'off'}",
-            f"Max iteration limit: {config.max_iteration_limit}",
-            f"Dark mode: {'on' if config.dark_mode else 'off'}",
-            "Back",
-        ])
+        self.query_one("#menu_panel", MenuPanel).show_page(SETTINGS_MENU, config)
 
     def _handle_menu_selected(self, index: int) -> None:
         if self._menu_page == "main":
-            if index == 0:
+            option = MAIN_MENU.option_at(index)
+            if option is None:
+                return
+            if option.key == "select_model":
                 self._show_model_menu()
-            elif index == 1:
+            elif option.key == "set_up_provider":
                 self._open_provider_config()
-            elif index == 2:
+            elif option.key == "settings":
                 self._show_settings_menu()
             else:
                 self._hide_menu()
@@ -666,30 +705,31 @@ class GolimApp(ConfigUIMixin, App[int]):
             return
         if self._menu_page == "settings":
             config = get_config()
-            if index == 0:
+            option = SETTINGS_MENU.option_at(index)
+            if option is None:
+                return
+            if option.key == "thinking_traces":
                 config.set(Config.STREAM_THINKING_TRACES, not config.stream_thinking_traces)
-            elif index == 1:
+            elif option.key == "unrestricted_mode":
                 config.set(Config.UNRESTRICTED_MODE, not config.unrestricted_mode)
-            elif index == 2:
+            elif option.key == "proactive_auth":
                 config.set(Config.PROACTIVE_AUTH, not config.proactive_auth)
-            elif index == 3:
+            elif option.key == "max_iterations":
                 self._menu_page = "max_iterations"
                 panel = self.query_one("#menu_panel", MenuPanel)
-                panel.show_options("Settings", [])
+                panel.show_options(SETTINGS_MENU.title, [])
                 input_widget = panel.query_one("#menu_input", Input)
                 input_widget.classes = ""
                 input_widget.value = str(config.max_iteration_limit)
                 input_widget.placeholder = "Positive integer"
                 input_widget.focus()
                 return
-            elif index == 4:
+            elif option.key == "dark_mode":
                 config.set(Config.DARK_MODE, not config.dark_mode)
                 self._apply_dark_mode(config.dark_mode)
             else:
                 self._menu_page = "main"
-                self.query_one("#menu_panel", MenuPanel).show_options(
-                    "Menu", ["Select model", "Set up provider", "Settings", "Close"]
-                )
+                self.query_one("#menu_panel", MenuPanel).show_page(MAIN_MENU)
                 return
             self._show_settings_menu()
 
@@ -742,16 +782,12 @@ class GolimApp(ConfigUIMixin, App[int]):
                 self._hide_menu()
             else:
                 self._menu_page = "main"
-                self.query_one("#menu_panel", MenuPanel).show_options(
-                    "Menu", ["Select model", "Set up provider", "Settings", "Close"]
-                )
+                self.query_one("#menu_panel", MenuPanel).show_page(MAIN_MENU)
             event.stop()
             event.prevent_default()
 
     def append_followup_query(self, text: str) -> None:
-        self.query_one("#transcript", Transcript).write(
-            Text(f"> {text}", style=f"bold {WHITE}")
-        )
+        self.query_one("#transcript", Transcript).write_query(text)
 
     def queue_followup(self, text: str, *, clarification: bool) -> None:
         with self._pending_followup_lock:

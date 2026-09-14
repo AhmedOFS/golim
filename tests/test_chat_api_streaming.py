@@ -56,7 +56,7 @@ class ChatApiStreamingTests(unittest.TestCase):
         config = MagicMock(api_provider="openrouter")
 
         with patch.object(chat_api, "get_config", return_value=config):
-            with self.assertRaisesRegex(ValueError, "Unsupported API provider"):
+            with self.assertRaisesRegex(ValueError, "Unsupported AI provider"):
                 chat_api.chat_with_model_api("model", [])
 
     def test_json_response_decodes_utf8_bytes_independent_of_response_charset(self):

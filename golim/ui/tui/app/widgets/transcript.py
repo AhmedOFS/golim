@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import io
+from collections.abc import Callable
 
 from rich.console import Console, RenderableType
+from rich.segment import Segment
 from rich.style import Style as RichStyle
 from rich.text import Text
 from rich.theme import Theme
@@ -45,11 +47,15 @@ class Transcript(ScrollView, can_focus=False):
         super().__init__(**kwargs)
         self._lines: list[Strip] = []
         self._pending_strips: list[Strip] = []
-        self._renderable_log: list[tuple[RenderableType, int, int | None]] = []
+        self._renderable_log: list[tuple[RenderableType, int, int | None, int, str | None]] = []
         self._pending_renderable: RenderableType | None = None
+        self._pending_indent: int | None = None
+        self._pending_query_text: str | None = None
         self._expandable_entries: dict[int, dict[str, object]] = {}
         self._next_expandable_id = 1
         self._live_thinking_id: int | None = None
+        self._query_header_callback: Callable[[str], None] | None = None
+        self._initial_query_text = ""
 
         theme = Theme(
             {
@@ -78,6 +84,8 @@ class Transcript(ScrollView, can_focus=False):
 
     _SCROLLBAR_WIDTH = 1
     _RIGHT_GUTTER = 2
+    _CONTENT_INDENT = 2
+    _QUERY_TRIGGER_OFFSET = 3
 
     @property
     def _thinking_entries(self) -> dict[int, dict[str, object]]:
@@ -87,12 +95,50 @@ class Transcript(ScrollView, can_focus=False):
         width = (self.size.width or 80) - self._SCROLLBAR_WIDTH - self._RIGHT_GUTTER
         return max(width, 1)
 
-    def _render_to_strips(self, renderable: RenderableType, width: int) -> list[Strip]:
-        options = self._render_console.options.update(width=max(width, 1), height=None)
+    def set_query_header_callback(self, callback: Callable[[str], None] | None) -> None:
+        self._query_header_callback = callback
+        self._notify_query_header()
+
+    def _query_at_scroll(self) -> str:
+        cursor = 0
+        current = self._initial_query_text
+        scroll_y = int(self.scroll_offset.y)
+        rendered_query_count = 0
+        for entry in self._renderable_log:
+            query_text = entry[4] if len(entry) > 4 else None
+            if query_text is not None:
+                trigger_offset = (
+                    0
+                    if not self._initial_query_text and rendered_query_count == 0
+                    else self._QUERY_TRIGGER_OFFSET
+                )
+                trigger_scroll = min(cursor + trigger_offset, int(self.max_scroll_y))
+                if trigger_scroll <= scroll_y:
+                    current = query_text
+                rendered_query_count += 1
+            cursor += entry[1]
+        return current
+
+    def _notify_query_header(self) -> None:
+        if self._query_header_callback is not None:
+            self._query_header_callback(self._query_at_scroll())
+
+    def _render_to_strips(
+        self,
+        renderable: RenderableType,
+        width: int,
+        indent: int = _CONTENT_INDENT,
+    ) -> list[Strip]:
+        indent = min(max(indent, 0), max(width - 1, 0))
+        render_width = max(width - indent, 1)
+        options = self._render_console.options.update(width=render_width, height=None)
         rendered = self._render_console.render_lines(renderable, options, pad=False)
         if not rendered:
             return [Strip([])]
-        return [Strip(list(segments)) for segments in rendered]
+        if not indent:
+            return [Strip(list(segments)) for segments in rendered]
+        prefix = " " * indent
+        return [Strip([Segment(prefix), *segments]) for segments in rendered]
 
     def _thinking_renderable(self, text: str, expanded: bool, width: int) -> Text:
         arrow = "▼" if expanded else "▶"
@@ -128,13 +174,16 @@ class Transcript(ScrollView, can_focus=False):
                         )
                 else:
                     renderable = state["detail"] if state.get("expanded") else state["summary"]
-            strips = self._render_to_strips(renderable, width)
+            indent = entry[3] if len(entry) > 3 else self._CONTENT_INDENT
+            strips = self._render_to_strips(renderable, width, indent)
             new_lines.extend(strips)
-            rebuilt_log.append((renderable, len(strips), entry_id))
+            query_text = entry[4] if len(entry) > 4 else None
+            rebuilt_log.append((renderable, len(strips), entry_id, indent, query_text))
         self._lines = new_lines
         self._renderable_log = rebuilt_log
         self.virtual_size = Size(width, len(self._lines) + len(self._pending_strips))
         self.show_horizontal_scrollbar = False
+        self._notify_query_header()
         self.refresh()
 
     def write(
@@ -144,29 +193,54 @@ class Transcript(ScrollView, can_focus=False):
         replace_last: bool = False,
         commit: bool = True,
         scroll_end: bool = True,
+        indent: int | None = None,
+        query_text: str | None = None,
     ) -> None:
         width = self._content_width()
-        new_strips = self._render_to_strips(renderable, width)
+        indent = self._CONTENT_INDENT if indent is None else indent
+        new_strips = self._render_to_strips(renderable, width, indent)
 
         was_at_bottom = self.scroll_y >= max(self.max_scroll_y - 1, 0)
 
         if replace_last:
             self._pending_strips = new_strips
             self._pending_renderable = renderable
+            self._pending_indent = indent
+            self._pending_query_text = query_text
             if commit:
                 self._lines.extend(self._pending_strips)
-                self._renderable_log.append((self._pending_renderable, len(self._pending_strips), None))
+                self._renderable_log.append(
+                    (
+                        self._pending_renderable,
+                        len(self._pending_strips),
+                        None,
+                        self._pending_indent,
+                        self._pending_query_text,
+                    )
+                )
                 self._pending_strips = []
                 self._pending_renderable = None
+                self._pending_indent = None
+                self._pending_query_text = None
         else:
             if self._pending_strips:
                 self._lines.extend(self._pending_strips)
                 if self._pending_renderable is not None:
-                    self._renderable_log.append((self._pending_renderable, len(self._pending_strips), None))
+                    self._renderable_log.append(
+                        (
+                            self._pending_renderable,
+                            len(self._pending_strips),
+                            None,
+                            self._pending_indent,
+                            self._pending_query_text,
+                        )
+                    )
                 self._pending_strips = []
                 self._pending_renderable = None
+                self._pending_indent = None
+                self._pending_query_text = None
             self._lines.extend(new_strips)
-            self._renderable_log.append((renderable, len(new_strips), None))
+            self._renderable_log.append((renderable, len(new_strips), None, indent, query_text))
 
         total_lines = len(self._lines) + len(self._pending_strips)
         self.virtual_size = Size(width, total_lines)
@@ -174,7 +248,25 @@ class Transcript(ScrollView, can_focus=False):
 
         if scroll_end and was_at_bottom:
             self.scroll_end(animate=False)
+        self._notify_query_header()
         self.refresh()
+
+    def write_query(self, text: str) -> None:
+        """Append a query bar entry inside this transcript's scroll surface."""
+        is_followup = bool(self._initial_query_text) or any(
+            entry[4] is not None for entry in self._renderable_log
+        )
+        if is_followup:
+            self.write(Text(""), indent=0)
+        self.write(Text(f"> {text}", style=f"bold {WHITE}"), indent=0, query_text=text)
+        # Match QueryBar's margin-bottom without creating another widget.
+        self.write(Text(""), indent=0)
+        self._notify_query_header()
+
+    def set_initial_query(self, text: str) -> None:
+        """Set the sticky initial query without duplicating it in the transcript."""
+        self._initial_query_text = text
+        self._notify_query_header()
 
     def write_expandable(self, summary: RenderableType, detail: RenderableType) -> int:
         self._commit_pending()
@@ -187,9 +279,10 @@ class Transcript(ScrollView, can_focus=False):
             "detail": detail,
             "expanded": False,
         }
-        strips = self._render_to_strips(summary, self._content_width())
+        indent = self._CONTENT_INDENT
+        strips = self._render_to_strips(summary, self._content_width(), indent)
         self._lines.extend(strips)
-        self._renderable_log.append((summary, len(strips), entry_id))
+        self._renderable_log.append((summary, len(strips), entry_id, indent, None))
         self.virtual_size = Size(self._content_width(), len(self._lines) + len(self._pending_strips))
         self.show_horizontal_scrollbar = False
         if was_at_bottom:
@@ -202,6 +295,8 @@ class Transcript(ScrollView, can_focus=False):
             return
         self._pending_strips = []
         self._pending_renderable = None
+        self._pending_indent = None
+        self._pending_query_text = None
         self.virtual_size = Size(self._content_width(), len(self._lines))
         self.show_horizontal_scrollbar = False
         self.refresh()
@@ -211,12 +306,16 @@ class Transcript(ScrollView, can_focus=False):
         self._pending_strips = []
         self._renderable_log = []
         self._pending_renderable = None
+        self._pending_indent = None
+        self._pending_query_text = None
+        self._initial_query_text = ""
         self._expandable_entries = {}
         self._next_expandable_id = 1
         self._live_thinking_id = None
         self.virtual_size = Size(self._content_width(), 0)
         self.show_horizontal_scrollbar = False
         self.scroll_home(animate=False)
+        self._notify_query_header()
         self.refresh()
 
     def _get_bg(self) -> RichStyle:
@@ -244,6 +343,8 @@ class Transcript(ScrollView, can_focus=False):
     def on_resize(self) -> None:
         self._pending_strips = []
         self._pending_renderable = None
+        self._pending_indent = None
+        self._pending_query_text = None
         self._rebuild_committed_lines()
 
     def _commit_pending(self) -> None:
@@ -251,9 +352,19 @@ class Transcript(ScrollView, can_focus=False):
             return
         self._lines.extend(self._pending_strips)
         if self._pending_renderable is not None:
-            self._renderable_log.append((self._pending_renderable, len(self._pending_strips), None))
+            self._renderable_log.append(
+                (
+                    self._pending_renderable,
+                    len(self._pending_strips),
+                    None,
+                    self._pending_indent,
+                    self._pending_query_text,
+                )
+            )
         self._pending_strips = []
         self._pending_renderable = None
+        self._pending_indent = None
+        self._pending_query_text = None
 
     def _was_at_bottom(self) -> bool:
         return self.scroll_y >= max(self.max_scroll_y - 1, 0)
@@ -272,9 +383,11 @@ class Transcript(ScrollView, can_focus=False):
                 "live": True,
             }
             renderable = Text(f"THINKING: {text}", style=STYLE_DIM)
-            strips = self._render_to_strips(renderable, self._content_width())
+            strips = self._render_to_strips(renderable, self._content_width(), self._CONTENT_INDENT)
             self._lines.extend(strips)
-            self._renderable_log.append((renderable, len(strips), thinking_id))
+            self._renderable_log.append(
+                (renderable, len(strips), thinking_id, self._CONTENT_INDENT, None)
+            )
             self.virtual_size = Size(self._content_width(), len(self._lines))
             self.show_horizontal_scrollbar = False
             if was_at_bottom:
@@ -313,10 +426,12 @@ class Transcript(ScrollView, can_focus=False):
             "live": False,
         }
         renderable = self._thinking_renderable(text, False, self._content_width())
-        strips = self._render_to_strips(renderable, self._content_width())
+        strips = self._render_to_strips(renderable, self._content_width(), self._CONTENT_INDENT)
         self._commit_pending()
         self._lines.extend(strips)
-        self._renderable_log.append((renderable, len(strips), thinking_id))
+        self._renderable_log.append(
+            (renderable, len(strips), thinking_id, self._CONTENT_INDENT, None)
+        )
         self.virtual_size = Size(self._content_width(), len(self._lines))
         self.show_horizontal_scrollbar = False
         if was_at_bottom:
@@ -326,13 +441,19 @@ class Transcript(ScrollView, can_focus=False):
     def on_click(self, event) -> None:
         line_index = int(self.scroll_offset.y) + int(event.y)
         cursor = 0
-        for _, strip_count, entry_id in self._renderable_log:
+        for _, strip_count, entry_id, _indent, _query_text in self._renderable_log:
             if cursor <= line_index < cursor + strip_count:
                 if entry_id is not None:
                     state = self._expandable_entries.get(entry_id)
                     if state is not None:
                         state["expanded"] = not bool(state["expanded"])
                         self._rebuild_committed_lines()
+                        self._notify_query_header()
                         event.stop()
                 return
             cursor += strip_count
+
+    def watch_scroll_y(self, old_value: float, new_value: float) -> None:
+        super().watch_scroll_y(old_value, new_value)
+        if round(old_value) != round(new_value):
+            self._notify_query_header()
