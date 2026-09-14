@@ -80,6 +80,29 @@ class PackagingLayoutTests(unittest.TestCase):
                 command.index("-Wl,--disable-new-dtags"),
             )
 
+    def test_linux_launcher_links_versioned_libpython_not_stub(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            runtime = Path(temporary)
+            (runtime / "include" / "python3.14").mkdir(parents=True)
+            (runtime / "lib").mkdir()
+            (runtime / "lib" / "libpython3.14.so").touch()
+            (runtime / "lib" / "libpython3.so").touch()
+            (runtime / "golim").touch()
+            calls = []
+
+            def record_called_process(command, **kwargs):
+                calls.append(list(command))
+                return None
+
+            with patch("scripts.release.release_builder._compiler", return_value="cc"):
+                with patch(
+                    "scripts.release.release_builder.run", side_effect=record_called_process
+                ):
+                    compile_linux_launcher(runtime)
+
+            self.assertIn("-lpython3.14", calls[0])
+            self.assertNotIn("-lpython3", calls[0])
+
     def test_macos_release_keeps_only_python_interpreter_tools(self):
         with tempfile.TemporaryDirectory() as temporary:
             bin_dir = Path(temporary) / "bin"

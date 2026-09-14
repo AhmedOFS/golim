@@ -69,7 +69,8 @@ def _compiler() -> str:
 
 def compile_linux_launcher(runtime: Path, *, output_name: str = "golim", entry_module: str = "golim.__main__", entry_function: str = "main") -> None:
     include = next((runtime / "include").glob("python*"), None)
-    python_lib = next((runtime / "lib").glob("libpython*.so"), None)
+    python_libs = sorted((runtime / "lib").glob("libpython*.so"))
+    python_lib = next((path for path in python_libs if path.name != "libpython3.so"), None)
     if include is None or python_lib is None:
         raise RuntimeError("runtime does not contain Linux embedding headers and libpython")
     run([
