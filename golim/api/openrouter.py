@@ -18,6 +18,39 @@ _OPENROUTER_HEADERS = {
     "Content-Type": "application/json",
 }
 
+_MAX_ERROR_BODY_PREVIEW = 500
+
+
+def _raise_for_status(response):
+    """Raise for HTTP errors, attaching OpenRouter's 402 error body.
+
+    A 402 Payment Required body names the affordable token budget, which
+    plain raise_for_status() discards and leaves only the status line.
+    Every other status keeps the standard requests behavior.
+    """
+    if response.status_code != 402:
+        response.raise_for_status()
+        return
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+    if isinstance(payload, dict):
+        error = payload.get("error")
+        if isinstance(error, dict):
+            detail = error.get("message") or json.dumps(error)
+        elif error is not None:
+            detail = error
+        else:
+            detail = json.dumps(payload)
+    else:
+        detail = response.text
+    detail = str(detail or "").strip()[:_MAX_ERROR_BODY_PREVIEW]
+    message = f"{response.status_code} {response.reason or ''}".strip()
+    if detail:
+        message = f"{message}: {detail}"
+    raise requests.HTTPError(message, response=response)
+
 
 def chat(model, messages, tools=None, response_format=None, config=None, on_thinking_delta=None):
     api_key = config.openrouter_api_key if config else None
@@ -44,7 +77,7 @@ def chat(model, messages, tools=None, response_format=None, config=None, on_thin
         response = requests.post(
             _CHAT_COMPLETIONS_URL, headers=headers, json=payload, timeout=(10, 120), stream=bool(on_thinking_delta)
         )
-        response.raise_for_status()
+        _raise_for_status(response)
         if on_thinking_delta:
             return normalize_openai_stream_response(response, on_thinking_delta)
         try:

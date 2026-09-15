@@ -150,6 +150,83 @@ class ChatApiStreamingTests(unittest.TestCase):
 
         self.assertEqual(result["message"]["content"], "Clear 🌤️ — +32°C ↓")
 
+    def test_openrouter_402_error_includes_afforded_amount_from_body(self):
+        import requests
+
+        from golim.api import openrouter as chat_api_openrouter
+
+        response = MagicMock()
+        response.status_code = 402
+        response.reason = "Payment Required"
+        response.json.return_value = {
+            "error": {
+                "message": (
+                    "This request requires more credits, or fewer max_tokens. "
+                    "You requested up to 32000 tokens, but can only afford 29262. "
+                    "To increase, visit https://openrouter.ai/settings/credits and add more credits"
+                ),
+                "code": 402,
+            }
+        }
+        config = MagicMock(openrouter_api_key="key")
+
+        def _passthrough(operation, provider=""):
+            return operation()
+
+        with patch("golim.api.openrouter.requests.post", return_value=response), \
+             patch.object(chat_api_openrouter, "with_retries", _passthrough):
+            with self.assertRaisesRegex(requests.HTTPError, "can only afford 29262"):
+                chat_api_openrouter.chat(
+                    "anthropic/claude-fable-5.1",
+                    [{"role": "user", "content": "hi"}],
+                    config=config,
+                )
+
+    def test_openrouter_402_falls_back_to_raw_body_when_not_json(self):
+        import requests
+
+        from golim.api import openrouter as chat_api_openrouter
+
+        response = requests.models.Response()
+        response.status_code = 402
+        response.reason = "Payment Required"
+        response.url = chat_api_openrouter._CHAT_COMPLETIONS_URL
+        response._content = b"insufficient credits"
+
+        config = MagicMock(openrouter_api_key="key")
+
+        def _passthrough(operation, provider=""):
+            return operation()
+
+        with patch("golim.api.openrouter.requests.post", return_value=response), \
+             patch.object(chat_api_openrouter, "with_retries", _passthrough):
+            with self.assertRaisesRegex(requests.HTTPError, "402 Payment Required: insufficient credits"):
+                chat_api_openrouter.chat("model", [{"role": "user", "content": "hi"}], config=config)
+
+    def test_openrouter_non_402_errors_keep_standard_raise_for_status(self):
+        import requests
+
+        from golim.api import openrouter as chat_api_openrouter
+
+        response = requests.models.Response()
+        response.status_code = 502
+        response.reason = "Bad Gateway"
+        response.url = chat_api_openrouter._CHAT_COMPLETIONS_URL
+        response._content = json.dumps({"error": {"message": "upstream connect error"}}).encode("utf-8")
+
+        config = MagicMock(openrouter_api_key="key")
+
+        def _passthrough(operation, provider=""):
+            return operation()
+
+        with patch("golim.api.openrouter.requests.post", return_value=response), \
+             patch.object(chat_api_openrouter, "with_retries", _passthrough):
+            with self.assertRaises(requests.HTTPError) as ctx:
+                chat_api_openrouter.chat("model", [{"role": "user", "content": "hi"}], config=config)
+
+        self.assertIn("502 Server Error: Bad Gateway", str(ctx.exception))
+        self.assertNotIn("upstream connect error", str(ctx.exception))
+
 
 if __name__ == "__main__":
     unittest.main()
