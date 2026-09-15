@@ -17,6 +17,11 @@ def chat_with_model_api(
     config = get_config()
     provider = config.api_provider
 
+    logger.debug(
+        "chat request: provider=%s model=%s messages=%d tools=%s stream=%s",
+        provider, model, len(messages), len(tools) if tools else 0, bool(on_thinking_delta),
+    )
+
     if provider == Config.OPEN_ROUTER:
         return openrouter.chat(model, messages, tools, response_format, config, on_thinking_delta)
     if provider == Config.OPENAI_COMPATIBLE:

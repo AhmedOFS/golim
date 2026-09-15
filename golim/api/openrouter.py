@@ -4,6 +4,7 @@ import logging
 import requests
 
 from golim.api.utils import (
+    log_http_error_body,
     normalize_messages_for_openai,
     normalize_openai_response,
     normalize_openai_stream_response,
@@ -28,6 +29,8 @@ def _raise_for_status(response):
     plain raise_for_status() discards and leaves only the status line.
     Every other status keeps the standard requests behavior.
     """
+    if response.status_code >= 400:
+        log_http_error_body("OpenRouter", response)
     if response.status_code != 402:
         response.raise_for_status()
         return

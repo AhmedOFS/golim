@@ -4,6 +4,7 @@ import logging
 import requests
 
 from golim.api.utils import (
+    log_http_error_body,
     normalize_messages_for_openai,
     normalize_openai_response,
     normalize_openai_stream_response,
@@ -33,6 +34,7 @@ def chat(model, messages, tools=None, response_format=None, config=None, on_thin
     headers = {"Authorization": f"Bearer {config.openai_compatible_api_key}"} if config and config.openai_compatible_api_key else None
     def _request():
         response = requests.post(url, headers=headers, json=payload, timeout=(10, 120), stream=bool(on_thinking_delta))
+        log_http_error_body("OpenAI-compatible", response)
         response.raise_for_status()
         if on_thinking_delta:
             return normalize_openai_stream_response(response, on_thinking_delta)

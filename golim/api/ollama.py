@@ -3,7 +3,12 @@ import logging
 
 import requests
 
-from golim.api.utils import decode_utf8_stream_line, extract_thinking_delta, parse_utf8_json_response
+from golim.api.utils import (
+    decode_utf8_stream_line,
+    extract_thinking_delta,
+    log_http_error_body,
+    parse_utf8_json_response,
+)
 from golim.api.retry import with_retries
 
 logger = logging.getLogger(__name__)
@@ -24,6 +29,7 @@ def chat(model, messages, tools=None, response_format=None, config=None, on_thin
             (config.ollama_server_url if config else "http://localhost:11434").rstrip("/") + "/api/chat",
             json=payload, timeout=(10, 120), stream=bool(on_thinking_delta)
         )
+        log_http_error_body("Ollama", response)
         response.raise_for_status()
         if on_thinking_delta:
             return _normalize_ollama_stream_response(response, on_thinking_delta)

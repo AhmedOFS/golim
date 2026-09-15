@@ -2,6 +2,30 @@ import json
 import logging
 import uuid
 
+logger = logging.getLogger(__name__)
+
+_MAX_LOGGED_ERROR_BODY = 500
+
+
+def log_http_error_body(provider: str, response) -> None:
+    """Log an HTTP error response body preview to the run log.
+
+    Provider bodies carry the actionable detail (OpenRouter's affordable
+    token budget, OpenAI/Azure validation messages) that exception strings
+    built from raise_for_status() discard.
+    """
+    try:
+        status = int(getattr(response, "status_code", 0))
+    except (TypeError, ValueError):
+        return
+    if status < 400:
+        return
+    try:
+        body = (response.text or "").strip()
+    except Exception:
+        body = ""
+    logger.debug("%s HTTP %s error body: %s", provider, status, body[:_MAX_LOGGED_ERROR_BODY] or "(empty)")
+
 
 def decode_utf8_stream_line(raw_line) -> str:
     """Decode a provider stream line using JSON/SSE's required UTF-8 encoding.
@@ -77,13 +101,39 @@ def normalize_messages_for_openai(messages: list) -> list:
                 continue
             # Orphan tool result (no preceding tool call): collapse to a user
             # message so the sequence stays valid.
+            logger.debug(
+                "tool result for %r has no matching tool call; collapsing to user message",
+                tool_name or "(unnamed)",
+            )
             m["role"] = "user"
             m.pop("tool_name", None)
             if "content" in m:
                 m["content"] = f"[tool result]\n{m['content']}"
 
         normalized.append(m)
+
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug("normalized %d messages: %s", len(normalized), _summarize_message_structure(normalized))
     return normalized
+
+
+def _summarize_message_structure(normalized: list) -> str:
+    parts = []
+    for m in normalized:
+        if not isinstance(m, dict):
+            parts.append(type(m).__name__)
+            continue
+        role = m.get("role", "?")
+        extras = []
+        calls = m.get("tool_calls")
+        if calls:
+            extras.append(f"tool_calls={len(calls)}")
+        if role == "tool":
+            if m.get("tool_call_id"):
+                extras.append(f"tool_call_id={m['tool_call_id']}")
+            extras.append(f"content_len={len(str(m.get('content') or ''))}")
+        parts.append(f"{role}({', '.join(extras)})" if extras else role)
+    return ", ".join(parts)
 
 
 def normalize_openai_response(raw: dict) -> dict:

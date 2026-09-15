@@ -201,6 +201,89 @@ class ChatApiStreamingTests(unittest.TestCase):
         self.assertEqual(normalized[0]["content"], "[tool result]\norphan")
         self.assertNotIn("tool_name", normalized[0])
 
+    def test_normalize_logs_structure_and_orphan_collapse_to_debug(self):
+        from golim.api.utils import normalize_messages_for_openai
+
+        messages = [
+            {"role": "system", "content": "sys"},
+            {"role": "assistant", "content": "", "tool_calls": [{
+                "id": "call_1", "type": "function", "function": {"name": "bash", "arguments": "{}"},
+            }]},
+            {"role": "tool", "tool_name": "bash", "content": "ok"},
+        ]
+
+        with self.assertLogs("golim.api.utils", level="DEBUG") as captured:
+            normalize_messages_for_openai(messages)
+        summary = next(record.getMessage() for record in captured.records if "normalized" in record.getMessage())
+        self.assertIn("assistant(tool_calls=1)", summary)
+        self.assertIn("tool(tool_call_id=call_1", summary)
+
+        with self.assertLogs("golim.api.utils", level="DEBUG") as captured:
+            normalize_messages_for_openai([{"role": "tool", "tool_name": "bash", "content": "orphan"}])
+        self.assertTrue(any("collapsing to user message" in record.getMessage() for record in captured.records))
+
+    def test_openrouter_logs_error_body_for_non_402(self):
+        import requests
+
+        from golim.api import openrouter as chat_api_openrouter
+
+        response = requests.models.Response()
+        response.status_code = 400
+        response.reason = "Bad Request"
+        response.url = chat_api_openrouter._CHAT_COMPLETIONS_URL
+        response._content = json.dumps({"error": {"message": "No tool output found for function call call_abc123."}}).encode("utf-8")
+        config = MagicMock(openrouter_api_key="key")
+
+        def _passthrough(operation, provider=""):
+            return operation()
+
+        with self.assertLogs("golim.api", level="DEBUG") as captured, \
+             patch("golim.api.openrouter.requests.post", return_value=response), \
+             patch.object(chat_api_openrouter, "with_retries", _passthrough):
+            with self.assertRaises(requests.HTTPError) as ctx:
+                chat_api_openrouter.chat("model", [{"role": "user", "content": "hi"}], config=config)
+
+        logged = " ".join(record.getMessage() for record in captured.records)
+        self.assertIn("No tool output found for function call call_abc123.", logged)
+        self.assertNotIn("No tool output found", str(ctx.exception))
+
+    def test_chat_dispatch_logs_request_summary(self):
+        config = MagicMock(api_provider=Config.OPEN_ROUTER)
+
+        with patch.object(chat_api, "get_config", return_value=config), \
+             patch.object(chat_api.openrouter, "chat", return_value={}), \
+             self.assertLogs("golim.api.chat_api", level="DEBUG") as captured:
+            chat_api.chat_with_model_api("openai/gpt-6-astra", [{"role": "user", "content": "hi"}], tools=["bash"])
+
+        message = captured.records[0].getMessage()
+        self.assertIn("provider=open_router", message)
+        self.assertIn("model=openai/gpt-6-astra", message)
+        self.assertIn("messages=1", message)
+        self.assertIn("tools=1", message)
+
+    def test_openai_compatible_logs_error_body(self):
+        import requests
+
+        from golim.api import openai_compatible
+
+        response = requests.models.Response()
+        response.status_code = 500
+        response.reason = "Internal Server Error"
+        response.url = "http://localhost:8083/v1/chat/completions"
+        response._content = b"model is loading, try again"
+        config = MagicMock(openai_compatible_server_url="http://localhost:8083", openai_compatible_api_key=None)
+
+        def _passthrough(operation, provider=""):
+            return operation()
+
+        with self.assertLogs("golim.api.utils", level="DEBUG") as captured, \
+             patch("golim.api.openai_compatible.requests.post", return_value=response), \
+             patch.object(openai_compatible, "with_retries", _passthrough):
+            with self.assertRaises(requests.HTTPError):
+                openai_compatible.chat("model", [{"role": "user", "content": "hi"}], config=config)
+
+        self.assertIn("model is loading, try again", " ".join(record.getMessage() for record in captured.records))
+
     def test_openai_stream_decodes_utf8_independent_of_response_charset(self):
         deltas = []
         response = FakeStreamResponse([
