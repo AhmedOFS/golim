@@ -4,7 +4,7 @@ import unittest
 from io import StringIO
 from pathlib import Path
 
-from golim.ui.tui.app.transcript_writer import TranscriptWriter, load_records
+from golim.ui.tui.app.transcript_writer import TranscriptWriter, load_records, strip_emojis
 
 
 class TranscriptWriterTests(unittest.TestCase):
@@ -74,6 +74,13 @@ class TranscriptWriterTests(unittest.TestCase):
     def test_load_records_accepts_a_stream(self):
         stream = StringIO('{"kind": "thinking", "text": "abc"}\n')
         self.assertEqual(load_records(stream), [{"kind": "thinking", "text": "abc"}])
+
+    def test_strip_emojis_removes_all_emoji(self):
+        self.assertEqual(strip_emojis("Done 👍 nicely 🎉 done"), "Done nicely done")
+        self.assertEqual(strip_emojis("flags 🇺🇸🇩🇪 and 👩‍💻 joiner"), "flags and joiner")
+        self.assertEqual(strip_emojis("modifiers ✍️👍🏽 ok"), "modifiers ok")
+        self.assertEqual(strip_emojis("plain text stays"), "plain text stays")
+        self.assertEqual(strip_emojis("  indented\n    code stays"), "  indented\n    code stays")
 
 
 if __name__ == "__main__":

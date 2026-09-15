@@ -62,7 +62,7 @@ from golim.ui.tui.app.widgets.menu import (
 from golim.config.utils import get_configured_model_choices, resolve_provider_settings
 from golim.logger import start_run_logging
 
-from golim.ui.tui.app.transcript_writer import TranscriptWriter
+from golim.ui.tui.app.transcript_writer import TranscriptWriter, strip_emojis
 from golim.ui.tui.app.agent_events_handler import (
     _ANSI_RE,
     ApprovalRequest,
@@ -1058,7 +1058,7 @@ class GolimApp(ConfigUIMixin, App[int]):
                         current_message, current_clarification = pending
                         self.call_from_thread(self.append_followup_query, current_message)
                         current_followup = True
-                    response_text = str(response.get("LLM_response", ""))
+                    response_text = strip_emojis(str(response.get("LLM_response", "")))
                     transcript.write(f"\nresponse: {response_text}")
                     result = ChatResult(
                         bool(response.get("ok")),

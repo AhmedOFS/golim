@@ -1,8 +1,32 @@
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 
 from golim.config.app_home import get_app_home
+
+_EMOJI_RE = re.compile(
+    "["
+    "\U0001F000-\U0001FAFF"   # emoji and pictograph blocks
+    "\U00002600-\U000027BF"   # misc symbols and dingbats
+    "\U00002B00-\U00002BFF"   # misc symbols and arrows
+    "\U0000FE00-\U0000FE0F"   # variation selectors
+    "\U0001F3FB-\U0001F3FF"   # skin tone modifiers
+    "\u2640\u2642\u20E3"      # gender signs and keycap base
+    "]|\u200D"                # zero width joiner
+)
+
+
+def strip_emojis(text: str) -> str:
+    """Return text with all emoji characters removed.
+
+    Emoji sequences (including variation selectors, skin tone modifiers,
+    and zero-width-joiner compositions) are stripped. Runs of spaces left
+    behind between visible characters are collapsed, while leading
+    indentation is preserved.
+    """
+    cleaned = _EMOJI_RE.sub("", str(text))
+    return re.sub(r"(?<=\S)[ \t]{2,}(?=\S)", " ", cleaned)
 
 
 class TranscriptWriter:
