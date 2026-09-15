@@ -388,8 +388,10 @@ class GolimApp(ConfigUIMixin, App[int]):
         self._runtime_error, self._model, self.model_label = self._resolve_current_settings()
         self.query_one("#footer", Footer).set_model(self.model_label)
         if self._runtime is not None:
-            self._runtime.terminate()
-            self._runtime = None
+            # Keep the existing runtime so the conversation thread
+            # survives model/provider changes; only the model choice
+            # itself needs to move (config is the same shared instance).
+            self._runtime.model = self._model
 
     def compose(self) -> ComposeResult:
         with Vertical(id="outer"):

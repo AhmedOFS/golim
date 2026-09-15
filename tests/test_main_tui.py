@@ -366,7 +366,7 @@ class MainTuiTests(unittest.TestCase):
         worker.cancel.assert_not_called()
 
     @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
-    def test_config_reload_updates_model_and_discards_runtime(self):
+    def test_config_reload_updates_model_and_keeps_conversation(self):
         from golim.ui.tui.app.app_tui import GolimApp
         from golim.ui.tui.app.widgets.footer import Footer
 
@@ -379,6 +379,9 @@ class MainTuiTests(unittest.TestCase):
 
         class FakeRuntime:
             def __init__(self):
+                self.model = "old-model"
+                self.messages = ["kept"]
+                self.execution_history = ["kept"]
                 self.terminated = False
 
             def terminate(self):
@@ -406,8 +409,13 @@ class MainTuiTests(unittest.TestCase):
         self.assertEqual(app._model, "new-model")
         self.assertIsNone(app._runtime_error)
         self.assertEqual(fake_footer.model_label, "new-model")
-        self.assertTrue(runtime.terminated)
-        self.assertIsNone(app._runtime)
+        # The same runtime survives the model change so the chat continues
+        # on the same thread with its conversation context intact.
+        self.assertIs(app._runtime, runtime)
+        self.assertFalse(runtime.terminated)
+        self.assertEqual(runtime.model, "new-model")
+        self.assertEqual(runtime.messages, ["kept"])
+        self.assertEqual(runtime.execution_history, ["kept"])
         config.reload.assert_called_once_with()
 
     @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
