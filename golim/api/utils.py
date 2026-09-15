@@ -47,14 +47,9 @@ def extract_thinking_delta(obj: dict) -> str:
 
 def normalize_messages_for_openai(messages: list) -> list:
     normalized = []
+    pending_calls: dict[str, list[str]] = {}
     for msg in messages:
         m = dict(msg)
-
-        if m.get("role") == "tool":
-            m["role"] = "user"
-            m.pop("tool_name", None)
-            if "content" in m:
-                m["content"] = f"[tool result]\n{m['content']}"
 
         tool_calls = m.get("tool_calls")
         if tool_calls:
@@ -64,6 +59,28 @@ def normalize_messages_for_openai(messages: list) -> list:
                 func = tc.get("function", {})
                 if isinstance(func.get("arguments"), dict):
                     func["arguments"] = json.dumps(func["arguments"], ensure_ascii=False)
+                pending_calls.setdefault(func.get("name") or "", []).append(tc["id"])
+
+        if m.get("role") == "tool":
+            # OpenAI-compatible APIs require every assistant tool call to be
+            # answered by a role="tool" message carrying its tool_call_id.
+            # Strict upstreams (OpenAI, Azure) reject the sequence otherwise.
+            tool_name = m.get("tool_name") or ""
+            queued = pending_calls.get(tool_name)
+            if queued:
+                normalized.append({
+                    "role": "tool",
+                    "tool_call_id": queued.pop(0),
+                    "name": tool_name,
+                    "content": m.get("content", ""),
+                })
+                continue
+            # Orphan tool result (no preceding tool call): collapse to a user
+            # message so the sequence stays valid.
+            m["role"] = "user"
+            m.pop("tool_name", None)
+            if "content" in m:
+                m["content"] = f"[tool result]\n{m['content']}"
 
         normalized.append(m)
     return normalized

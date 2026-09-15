@@ -135,6 +135,72 @@ class ChatApiStreamingTests(unittest.TestCase):
             {"command": "pwd"},
         )
 
+    def test_normalize_pairs_tool_results_with_tool_call_ids(self):
+        from golim.api.utils import normalize_messages_for_openai
+
+        messages = [
+            {"role": "user", "content": "run it"},
+            {"role": "assistant", "content": "", "tool_calls": [{
+                "id": "call_1", "type": "function",
+                "function": {"name": "bash", "arguments": {"command": "pwd"}},
+            }]},
+            {"role": "tool", "tool_name": "bash", "content": "result text"},
+        ]
+
+        normalized = normalize_messages_for_openai(messages)
+
+        self.assertEqual(normalized[1]["tool_calls"][0]["function"]["arguments"], json.dumps({"command": "pwd"}))
+        self.assertEqual(normalized[2]["role"], "tool")
+        self.assertEqual(normalized[2]["tool_call_id"], "call_1")
+        self.assertEqual(normalized[2]["name"], "bash")
+        self.assertEqual(normalized[2]["content"], "result text")
+
+    def test_normalize_assigns_and_pairs_missing_tool_call_ids(self):
+        from golim.api.utils import normalize_messages_for_openai
+
+        messages = [
+            {"role": "assistant", "content": "", "tool_calls": [{
+                "type": "function", "function": {"name": "bash", "arguments": "{}"},
+            }]},
+            {"role": "tool", "tool_name": "bash", "content": "out"},
+        ]
+
+        normalized = normalize_messages_for_openai(messages)
+
+        call_id = normalized[0]["tool_calls"][0]["id"]
+        self.assertTrue(call_id.startswith("call_"))
+        self.assertEqual(normalized[1]["tool_call_id"], call_id)
+
+    def test_normalize_pairs_sequential_same_name_tool_calls_in_order(self):
+        from golim.api.utils import normalize_messages_for_openai
+
+        messages = [
+            {"role": "assistant", "content": "", "tool_calls": [{
+                "id": "call_a", "type": "function", "function": {"name": "bash", "arguments": "{}"},
+            }]},
+            {"role": "tool", "tool_name": "bash", "content": "first"},
+            {"role": "assistant", "content": "", "tool_calls": [{
+                "id": "call_b", "type": "function", "function": {"name": "bash", "arguments": "{}"},
+            }]},
+            {"role": "tool", "tool_name": "bash", "content": "second"},
+        ]
+
+        normalized = normalize_messages_for_openai(messages)
+
+        self.assertEqual(normalized[1]["tool_call_id"], "call_a")
+        self.assertEqual(normalized[3]["tool_call_id"], "call_b")
+
+    def test_normalize_collapses_orphan_tool_result_to_user_message(self):
+        from golim.api.utils import normalize_messages_for_openai
+
+        normalized = normalize_messages_for_openai([
+            {"role": "tool", "tool_name": "bash", "content": "orphan"},
+        ])
+
+        self.assertEqual(normalized[0]["role"], "user")
+        self.assertEqual(normalized[0]["content"], "[tool result]\norphan")
+        self.assertNotIn("tool_name", normalized[0])
+
     def test_openai_stream_decodes_utf8_independent_of_response_charset(self):
         deltas = []
         response = FakeStreamResponse([
