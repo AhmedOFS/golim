@@ -50,6 +50,7 @@ SETTINGS_MENU = MenuPage(
         MenuOption("unrestricted_mode", lambda config: f"Unrestricted mode: {'on' if config.unrestricted_mode else 'off'}"),
         MenuOption("proactive_auth", lambda config: f"Authenticate Sudo on App Start: {'on' if config.proactive_auth else 'off'}"),
         MenuOption("max_iterations", lambda config: f"Max iteration limit: {config.max_iteration_limit}"),
+        MenuOption("openrouter_max_tokens", lambda config: f"OpenRouter max tokens: {config.openrouter_max_tokens or 'off'}"),
         MenuOption("dark_mode", lambda config: f"Dark mode: {'on' if config.dark_mode else 'off'}"),
         MenuOption("back", "Back"),
     ),

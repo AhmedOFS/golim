@@ -150,6 +150,46 @@ class ChatApiStreamingTests(unittest.TestCase):
 
         self.assertEqual(result["message"]["content"], "Clear 🌤️ — +32°C ↓")
 
+    def test_openrouter_chat_sends_configured_max_tokens_cap(self):
+        import requests
+
+        from golim.api import openrouter as chat_api_openrouter
+
+        response = requests.models.Response()
+        response.status_code = 200
+        response._content = json.dumps({"choices": [{"message": {"role": "assistant", "content": "ok"}}]}).encode("utf-8")
+        config = MagicMock(openrouter_api_key="key", openrouter_max_tokens=8000)
+
+        def _passthrough(operation, provider=""):
+            return operation()
+
+        with patch("golim.api.openrouter.requests.post", return_value=response) as post, \
+             patch.object(chat_api_openrouter, "with_retries", _passthrough):
+            chat_api_openrouter.chat("model", [{"role": "user", "content": "hi"}], config=config)
+
+        self.assertEqual(post.call_args.kwargs["json"]["max_tokens"], 8000)
+
+    def test_openrouter_chat_omits_max_tokens_when_unset_or_invalid(self):
+        import requests
+
+        from golim.api import openrouter as chat_api_openrouter
+
+        response = requests.models.Response()
+        response.status_code = 200
+        response._content = json.dumps({"choices": [{"message": {"role": "assistant", "content": "ok"}}]}).encode("utf-8")
+
+        def _passthrough(operation, provider=""):
+            return operation()
+
+        for value in (None, 0, "bad", -1):
+            with self.subTest(value=value):
+                config = MagicMock(openrouter_api_key="key", openrouter_max_tokens=value)
+                with patch("golim.api.openrouter.requests.post", return_value=response) as post, \
+                     patch.object(chat_api_openrouter, "with_retries", _passthrough):
+                    chat_api_openrouter.chat("model", [{"role": "user", "content": "hi"}], config=config)
+
+                self.assertNotIn("max_tokens", post.call_args.kwargs["json"])
+
     def test_openrouter_402_error_includes_afforded_amount_from_body(self):
         import requests
 

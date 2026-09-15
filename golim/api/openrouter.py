@@ -65,6 +65,13 @@ def chat(model, messages, tools=None, response_format=None, config=None, on_thin
     normalized_messages = normalize_messages_for_openai(messages)
 
     payload = {"model": model, "messages": normalized_messages, "stream": bool(on_thinking_delta)}
+    max_tokens = getattr(config, "openrouter_max_tokens", None) if config else None
+    try:
+        max_tokens = int(max_tokens)
+    except (TypeError, ValueError):
+        max_tokens = None
+    if max_tokens and max_tokens > 0:
+        payload["max_tokens"] = max_tokens
     if tools:
         payload["tools"] = tools
     if response_format:

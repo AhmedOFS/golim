@@ -726,6 +726,17 @@ class GolimApp(ConfigUIMixin, App[int]):
                 input_widget.placeholder = "Positive integer"
                 input_widget.focus()
                 return
+            elif option.key == "openrouter_max_tokens":
+                self._menu_page = "openrouter_max_tokens"
+                panel = self.query_one("#menu_panel", MenuPanel)
+                panel.show_options(SETTINGS_MENU.title, [])
+                input_widget = panel.query_one("#menu_input", Input)
+                input_widget.classes = ""
+                current = config.openrouter_max_tokens
+                input_widget.value = str(current) if current else ""
+                input_widget.placeholder = "Positive integer, empty to disable"
+                input_widget.focus()
+                return
             elif option.key == "dark_mode":
                 config.set(Config.DARK_MODE, not config.dark_mode)
                 self._apply_dark_mode(config.dark_mode)
@@ -753,6 +764,22 @@ class GolimApp(ConfigUIMixin, App[int]):
                 self.bell()
                 return
             get_config().set(Config.MAX_ITERATION_LIMIT, value)
+            self._show_settings_menu()
+            return
+        if self._menu_page == "openrouter_max_tokens":
+            text = event.value.strip()
+            if not text:
+                get_config().set(Config.OPENROUTER_MAX_TOKENS, None)
+                self._show_settings_menu()
+                return
+            try:
+                value = int(text)
+                if value < 1:
+                    raise ValueError
+            except ValueError:
+                self.bell()
+                return
+            get_config().set(Config.OPENROUTER_MAX_TOKENS, value)
             self._show_settings_menu()
 
     def _handle_menu_key(self, event) -> None:

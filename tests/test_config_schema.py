@@ -129,6 +129,28 @@ class ConfigSchemaTests(unittest.TestCase):
 
         self.assertTrue(Config().proactive_auth)
 
+    def test_openrouter_max_tokens_defaults_to_unset(self):
+        config = Config()
+        self.assertIsNone(config.openrouter_max_tokens)
+        config.save()
+        saved = json.loads(config.path.read_text())
+        self.assertIsNone(saved[Config.ATTRIBUTES][Config.OPENROUTER_MAX_TOKENS])
+
+    def test_openrouter_max_tokens_persists_and_validates(self):
+        config = Config()
+
+        config.set(Config.OPENROUTER_MAX_TOKENS, 8000)
+        self.assertEqual(config.openrouter_max_tokens, 8000)
+        self.assertEqual(Config().openrouter_max_tokens, 8000)
+
+        for bad in ("not-a-number", "0", -5, 2.5, True):
+            with self.subTest(bad=bad):
+                config.set(Config.OPENROUTER_MAX_TOKENS, bad)
+                self.assertIsNone(config.openrouter_max_tokens)
+
+        config.set(Config.OPENROUTER_MAX_TOKENS, None)
+        self.assertIsNone(config.openrouter_max_tokens)
+
     def test_provider_values_are_never_written_to_attributes(self):
         config = Config()
         config.set(Config.OLLAMA_SERVER_URL, "http://ollama.example:11434")

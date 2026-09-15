@@ -543,6 +543,51 @@ class MainTuiTests(unittest.TestCase):
 
         asyncio.run(run_case())
 
+    @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
+    def test_settings_menu_openrouter_max_tokens_input_persists_value(self):
+        from textual.widgets import Input
+
+        from golim.ui.tui.app.app_tui import GolimApp
+        from golim.config import Config
+
+        async def run_case():
+            config = MagicMock()
+            config.stream_thinking_traces = False
+            config.unrestricted_mode = False
+            config.proactive_auth = True
+            config.max_iteration_limit = 50
+            config.dark_mode = False
+            config.openrouter_max_tokens = None
+
+            app = GolimApp("model", model="main", config=config)
+            with patch("golim.ui.tui.app.app_tui.get_config", return_value=config):
+                async with app.run_test() as pilot:
+                    app._show_menu()
+                    app._show_settings_menu()
+                    options = app.query_one("#menu_options")
+                    labels = [str(options.get_option_at_index(i).prompt) for i in range(options.option_count)]
+                    self.assertIn("OpenRouter max tokens: off", labels)
+
+                    index = labels.index("OpenRouter max tokens: off")
+                    app._handle_menu_selected(index)
+                    input_widget = app.query_one("#menu_input", Input)
+                    self.assertFalse(input_widget.has_class("hidden"))
+                    self.assertEqual(input_widget.placeholder, "Positive integer, empty to disable")
+
+                    app._handle_menu_input_submitted(type("FakeSubmit", (), {"value": " 8000 "})())
+                    config.set.assert_called_with(Config.OPENROUTER_MAX_TOKENS, 8000)
+
+                    app._handle_menu_selected(index)
+                    app._handle_menu_input_submitted(type("FakeSubmit", (), {"value": ""})())
+                    config.set.assert_called_with(Config.OPENROUTER_MAX_TOKENS, None)
+
+                    app._handle_menu_selected(index)
+                    app._handle_menu_input_submitted(type("FakeSubmit", (), {"value": "zero"})())
+                    self.assertEqual(config.set.call_count, 2)
+                    await pilot.pause()
+
+        asyncio.run(run_case())
+
 
 if __name__ == "__main__":
     unittest.main()

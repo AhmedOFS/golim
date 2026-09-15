@@ -62,6 +62,7 @@ class Config:
     WEBSEARCH_PROVIDER = "websearch_provider"
     EXA_API_KEY = "exa_api_key"
     PARALLEL_API_KEY = "parallel_api_key"
+    OPENROUTER_MAX_TOKENS = "openrouter_max_tokens"
     NO_SUDO = "no_sudo"
     EXA = "exa"
     PARALLEL = "parallel"
@@ -82,6 +83,7 @@ class Config:
         WEBSEARCH_PROVIDER: EXA,
         EXA_API_KEY: None,
         PARALLEL_API_KEY: None,
+        OPENROUTER_MAX_TOKENS: None,
     }
     _PROVIDER_DEFAULTS = {
         OLLAMA: {OLLAMA_SERVER_URL: "http://localhost:11434"},
@@ -244,3 +246,17 @@ class Config:
     def exa_api_key(self): return self.get(self.EXA_API_KEY)
     @property
     def parallel_api_key(self): return self.get(self.PARALLEL_API_KEY)
+    @property
+    def openrouter_max_tokens(self):
+        """Cap OpenRouter output tokens to keep billing preflight affordable.
+
+        None (the default) sends no cap, matching OpenRouter's own behavior.
+        """
+        raw = self.get(self.OPENROUTER_MAX_TOKENS)
+        if raw is None or isinstance(raw, bool):
+            return None
+        try:
+            value = int(str(raw).strip())
+        except ValueError:
+            return None
+        return value if value > 0 else None
