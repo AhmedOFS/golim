@@ -164,6 +164,70 @@ class ThinkingTraceTests(unittest.TestCase):
         )
 
     @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
+    def test_tui_stream_pending_line_survives_resize(self):
+        from rich.text import Text
+
+        from golim.ui.tui.app.widgets.transcript import Transcript
+
+        transcript = Transcript()
+        transcript.write(Text("a long live tool line"), replace_last=True, commit=False)
+        transcript.on_resize()
+
+        self.assertEqual([strip.text for strip in transcript._pending_strips], ["  a long live tool line"])
+        self.assertEqual(transcript._pending_renderable.plain, "a long live tool line")
+
+    @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
+    def test_tui_query_header_does_not_repaint_for_tool_output(self):
+        from rich.text import Text
+
+        from golim.ui.tui.app.widgets.transcript import Transcript
+
+        headers = []
+        transcript = Transcript()
+        transcript.set_query_header_callback(headers.append)
+        transcript.set_initial_query("first task")
+        headers.clear()
+
+        transcript.write(Text("tool output"))
+        transcript.write(Text("more tool output"))
+
+        self.assertEqual(headers, [])
+
+    @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
+    def test_tui_new_followup_stays_out_of_header_until_hidden(self):
+        from rich.text import Text
+        from textual.app import App, ComposeResult
+
+        from golim.ui.tui.app.widgets.transcript import Transcript
+
+        headers = []
+
+        class TestApp(App[None]):
+            def compose(self) -> ComposeResult:
+                yield Transcript()
+
+        async def run_case():
+            app = TestApp()
+            async with app.run_test(size=(40, 8)) as pilot:
+                transcript = app.query_one(Transcript)
+                transcript.set_query_header_callback(headers.append)
+                transcript.set_initial_query("first task")
+                for index in range(20):
+                    transcript.write(Text(f"first output {index}"))
+                await pilot.pause()
+
+                transcript.write_query("new followup")
+                await pilot.pause()
+                self.assertEqual(headers[-1], "first task")
+
+                for index in range(10):
+                    transcript.write(Text(f"followup output {index}"))
+                await pilot.pause()
+                self.assertEqual(headers[-1], "new followup")
+
+        asyncio.run(run_case())
+
+    @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
     def test_tui_sticky_query_tracks_last_query_at_scroll_top(self):
         from rich.text import Text
         from textual.app import App, ComposeResult

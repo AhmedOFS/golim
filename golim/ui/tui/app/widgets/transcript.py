@@ -55,6 +55,7 @@ class Transcript(ScrollView, can_focus=False):
         self._next_expandable_id = 1
         self._live_thinking_id: int | None = None
         self._query_header_callback: Callable[[str], None] | None = None
+        self._last_query_header: str | None = None
         self._initial_query_text = ""
 
         theme = Theme(
@@ -97,6 +98,7 @@ class Transcript(ScrollView, can_focus=False):
 
     def set_query_header_callback(self, callback: Callable[[str], None] | None) -> None:
         self._query_header_callback = callback
+        self._last_query_header = None
         self._notify_query_header()
 
     def _query_at_scroll(self) -> str:
@@ -112,7 +114,10 @@ class Transcript(ScrollView, can_focus=False):
                     if not self._initial_query_text and rendered_query_count == 0
                     else self._QUERY_TRIGGER_OFFSET
                 )
-                trigger_scroll = min(cursor + trigger_offset, int(self.max_scroll_y))
+                # Do not clamp this to max_scroll_y. A newly entered followup
+                # must remain out of the header until its transcript entry is
+                # actually hidden above the viewport.
+                trigger_scroll = cursor + trigger_offset
                 if trigger_scroll <= scroll_y:
                     current = query_text
                 rendered_query_count += 1
@@ -121,7 +126,11 @@ class Transcript(ScrollView, can_focus=False):
 
     def _notify_query_header(self) -> None:
         if self._query_header_callback is not None:
-            self._query_header_callback(self._query_at_scroll())
+            text = self._query_at_scroll()
+            if text == self._last_query_header:
+                return
+            self._last_query_header = text
+            self._query_header_callback(text)
 
     def _render_to_strips(
         self,
@@ -341,10 +350,14 @@ class Transcript(ScrollView, can_focus=False):
         return strip
 
     def on_resize(self) -> None:
-        self._pending_strips = []
-        self._pending_renderable = None
-        self._pending_indent = None
-        self._pending_query_text = None
+        if self._pending_renderable is not None:
+            self._pending_strips = self._render_to_strips(
+                self._pending_renderable,
+                self._content_width(),
+                self._pending_indent if self._pending_indent is not None else self._CONTENT_INDENT,
+            )
+        else:
+            self._pending_strips = []
         self._rebuild_committed_lines()
 
     def _commit_pending(self) -> None:
