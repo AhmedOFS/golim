@@ -541,23 +541,24 @@ class ToolAgent:
         finally:
             self.ui.clear_status()
 
-    def _tool_call_from_message(self, message):
-        tool_calls = message.get("tool_calls")
-        if not tool_calls:
-            return False, None, None
-        function = tool_calls[0].get("function", {})
-        return True, function.get("name"), function.get("arguments", {})
+    def _tool_calls_from_message(self, message):
+        tool_calls = message.get("tool_calls") or []
+        calls = []
+        for tool_call in tool_calls:
+            function = tool_call.get("function", {}) if isinstance(tool_call, dict) else {}
+            if not isinstance(function, dict):
+                function = {}
+            arguments = function.get("arguments", {})
+            if arguments is None:
+                arguments = {}
+            calls.append({
+                "id": tool_call.get("id") if isinstance(tool_call, dict) else None,
+                "name": function.get("name", ""),
+                "arguments": arguments,
+            })
+        return calls
 
-    def _record_tool_result(
-        self,
-        messages,
-        tool_history,
-        message,
-        tool_name,
-        args,
-        tool_result,
-        iteration,
-    ):
+    def _record_tool_history(self, tool_history, tool_name, args, tool_result, iteration):
         status = self._tool_status(tool_result)
         tool_history.append({
             "tool": tool_name,
@@ -571,15 +572,33 @@ class ToolAgent:
             tool=tool_name,
             status=status,
         )
+        self.execution_history = list(tool_history)
 
-        self._remove_thinking_traces_from_history(messages)
-        messages.append(self._assistant_message_for_history(message))
-        tool_content = json.dumps(tool_result, ensure_ascii=False)
-        messages.append({
+    @staticmethod
+    def _append_tool_result_message(messages, tool_name, tool_result, tool_call_id=None):
+        tool_message = {
             "role": "tool",
             "tool_name": tool_name,
-            "content": _clip_text(tool_content, limit=15000),
-        })
+            "content": _clip_text(json.dumps(tool_result, ensure_ascii=False), limit=15000),
+        }
+        if tool_call_id:
+            tool_message["tool_call_id"] = tool_call_id
+        messages.append(tool_message)
+
+    def _record_tool_result(
+        self,
+        messages,
+        tool_history,
+        message,
+        tool_name,
+        args,
+        tool_result,
+        iteration,
+    ):
+        self._record_tool_history(tool_history, tool_name, args, tool_result, iteration)
+        self._remove_thinking_traces_from_history(messages)
+        messages.append(self._assistant_message_for_history(message))
+        self._append_tool_result_message(messages, tool_name, tool_result)
         self.messages = list(messages)
         self.execution_history = list(tool_history)
 
@@ -717,24 +736,39 @@ class ToolAgent:
 
                 response = self._chat_for_next_action(messages)
                 message = response.get("message", {})
-                has_tool_call, tool_name, args = self._tool_call_from_message(message)
+                tool_calls = self._tool_calls_from_message(message)
 
-                if has_tool_call:
+                if tool_calls:
                     if self._should_interrupt():
                         return self._interrupt_result(messages, tool_history)
 
-                    tool_result = self._execute_tool(tool_name, args)
-                    self._record_tool_result(
-                        messages,
-                        tool_history,
-                        message,
-                        tool_name,
-                        args,
-                        tool_result,
-                        iteration=iteration,
-                    )
-                    if self._should_interrupt():
-                        return self._interrupt_result(messages, tool_history)
+                    completed_calls = []
+                    for tool_call in tool_calls:
+                        tool_name = tool_call["name"]
+                        args = tool_call["arguments"]
+                        tool_result = self._execute_tool(tool_name, args)
+                        self._record_tool_history(
+                            tool_history,
+                            tool_name,
+                            args,
+                            tool_result,
+                            iteration=iteration,
+                        )
+                        completed_calls.append((tool_call, tool_result))
+                        if self._should_interrupt():
+                            return self._interrupt_result(messages, tool_history)
+
+                    self._remove_thinking_traces_from_history(messages)
+                    messages.append(self._assistant_message_for_history(message))
+                    for tool_call, tool_result in completed_calls:
+                        self._append_tool_result_message(
+                            messages,
+                            tool_call["name"],
+                            tool_result,
+                            tool_call.get("id"),
+                        )
+                    self.messages = list(messages)
+                    self.execution_history = list(tool_history)
 
                     continue
 

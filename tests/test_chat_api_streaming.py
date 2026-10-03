@@ -190,6 +190,43 @@ class ChatApiStreamingTests(unittest.TestCase):
         self.assertEqual(normalized[1]["tool_call_id"], "call_a")
         self.assertEqual(normalized[3]["tool_call_id"], "call_b")
 
+    def test_normalize_pairs_multiple_results_from_one_assistant_message(self):
+        from golim.api.utils import normalize_messages_for_openai
+
+        normalized = normalize_messages_for_openai([
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_a",
+                        "type": "function",
+                        "function": {"name": "bash", "arguments": {}},
+                    },
+                    {
+                        "id": "call_b",
+                        "type": "function",
+                        "function": {"name": "bash", "arguments": {}},
+                    },
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_name": "bash",
+                "tool_call_id": "call_b",
+                "content": "second",
+            },
+            {
+                "role": "tool",
+                "tool_name": "bash",
+                "tool_call_id": "call_a",
+                "content": "first",
+            },
+        ])
+
+        self.assertEqual(normalized[1]["tool_call_id"], "call_b")
+        self.assertEqual(normalized[2]["tool_call_id"], "call_a")
+
     def test_normalize_collapses_orphan_tool_result_to_user_message(self):
         from golim.api.utils import normalize_messages_for_openai
 

@@ -353,15 +353,7 @@ def read_file(path: str, page: int = 1) -> dict:
 @tool
 def bash(command: str, stream: bool = False, _approve_privileged=None, _session_token=None) -> dict:
     """
-    Executes a command through ``/bin/bash -c``.
-
-    Both modes support normal shell syntax. In restricted mode, every command
-    containing sudo requires a user approval. In unrestricted mode, approval is
-    requested only when the sudo target is not already whitelisted. Approved
-    sudo commands are routed through the golim privileged wrapper.
-
-    In both modes, `stream=True` yields incremental output chunks followed by
-    a final result dict.
+    Bash command tool with sudo execution capabilities
     """
     always_approve = not _is_unrestricted_mode()
     if stream:

@@ -91,6 +91,16 @@ def normalize_messages_for_openai(messages: list) -> list:
             # Strict upstreams (OpenAI, Azure) reject the sequence otherwise.
             tool_name = m.get("tool_name") or ""
             queued = pending_calls.get(tool_name)
+            explicit_id = m.get("tool_call_id")
+            if explicit_id and queued and explicit_id in queued:
+                queued.remove(explicit_id)
+                normalized.append({
+                    "role": "tool",
+                    "tool_call_id": explicit_id,
+                    "name": tool_name,
+                    "content": m.get("content", ""),
+                })
+                continue
             if queued:
                 normalized.append({
                     "role": "tool",

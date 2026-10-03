@@ -120,6 +120,94 @@ class OrchestrationTests(unittest.TestCase):
         self.assertIn("tool_calls", second_call[-2])
         self.assertEqual(second_call[-1]["role"], "tool")
 
+    def test_agent_executes_all_tool_calls_and_pairs_each_result(self):
+        chat_calls = []
+
+        def fake_chat(model, messages, tools=None, binary="ollama", response_format=None):
+            chat_calls.append([message.copy() for message in messages])
+            if len(chat_calls) == 1:
+                return {
+                    "message": {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call_one",
+                                "function": {
+                                    "name": "bash",
+                                    "arguments": {"command": "printf one"},
+                                },
+                            },
+                            {
+                                "id": "call_two",
+                                "function": {
+                                    "name": "system_info",
+                                    "arguments": {},
+                                },
+                            },
+                        ],
+                    }
+                }
+            return {"message": {"role": "assistant", "content": "Done."}}
+
+        agent = ToolAgent("main", ui=_UI())
+        agent.tools = []
+
+        with patch.object(
+            agent,
+            "_execute_tool",
+            side_effect=[{"ok": True, "first": True}, {"ok": True, "second": True}],
+        ) as execute_tool, patch(
+            "golim.core.agent.chat_with_model_api", side_effect=fake_chat
+        ):
+            result = agent._run_action_agent("Do both.", selected_skills=[])
+
+        self.assertEqual(result, {"ok": True, "LLM_response": "Done."})
+        self.assertEqual(execute_tool.call_count, 2)
+        self.assertEqual([item["tool"] for item in agent.execution_history], ["bash", "system_info"])
+
+        next_messages = chat_calls[1]
+        self.assertEqual(next_messages[-3]["role"], "assistant")
+        self.assertEqual(len(next_messages[-3]["tool_calls"]), 2)
+        self.assertEqual(next_messages[-2]["tool_call_id"], "call_one")
+        self.assertEqual(next_messages[-1]["tool_call_id"], "call_two")
+
+    def test_agent_keeps_valid_history_when_interrupted_between_tool_calls(self):
+        executed = []
+
+        def fake_chat(model, messages, tools=None, binary="ollama", response_format=None):
+            return {
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {"id": "call_one", "function": {"name": "bash", "arguments": {}}},
+                        {"id": "call_two", "function": {"name": "bash", "arguments": {}}},
+                    ],
+                }
+            }
+
+        def execute_tool(tool_name, args):
+            executed.append(tool_name)
+            return {"ok": True}
+
+        agent = ToolAgent(
+            "main",
+            ui=_UI(),
+            should_interrupt=lambda: bool(executed),
+        )
+        agent.tools = []
+
+        with patch.object(agent, "_execute_tool", side_effect=execute_tool), patch(
+            "golim.core.agent.chat_with_model_api", side_effect=fake_chat
+        ):
+            result = agent._run_action_agent("Stop after one.", selected_skills=[])
+
+        self.assertEqual(result, {"ok": False, "LLM_response": "Interrupted."})
+        self.assertEqual(executed, ["bash"])
+        self.assertEqual(len(agent.execution_history), 1)
+        self.assertFalse(any(message.get("tool_calls") for message in agent.messages))
+
     def test_summarization_failure_keeps_history_for_followup(self):
         agent = ToolAgent("main", ui=_UI())
         agent.MAX_AGENT_ITERATIONS = 1
