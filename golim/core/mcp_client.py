@@ -6,6 +6,7 @@ import socket
 import sys
 import select as _select
 import threading
+import uuid
 
 class FastMCPClient:
     def __init__(self, socket_path):
@@ -70,6 +71,15 @@ class FastMCPClient:
             self._active_sockets.add(sock)
         return sock
 
+    @staticmethod
+    def _new_request_id():
+        """Create a client-owned identifier for one transport request.
+
+        Tool-call IDs are echoed by the server on progress, approval/auth,
+        and final response frames, so concurrent calls remain distinguishable.
+        """
+        return uuid.uuid4().hex
+
     def _close_socket(self, sock):
         with self._socket_lock:
             self._active_sockets.discard(sock)
@@ -86,7 +96,7 @@ class FastMCPClient:
         except OSError:
             pass
 
-    def _dispatch_interim_frame(self, frame, on_stream=None):
+    def _dispatch_interim_frame(self, frame, on_stream=None, request_id=None):
         """Handle interim traffic received before the response frame.
 
         Approval requests are answered out-of-band; ``tools/progress``
@@ -94,6 +104,8 @@ class FastMCPClient:
         when the frame was interim and the caller should keep waiting for
         the JSON-RPC response (``result``/``error``).
         """
+        if request_id is not None and "id" in frame and frame["id"] != request_id:
+            return True
         if "approval_request" in frame:
             approval = frame["approval_request"]
             approved = self._handle_approval_request(approval)
@@ -108,14 +120,17 @@ class FastMCPClient:
             return False
         if frame.get("method") == "tools/progress":
             params = frame.get("params") or {}
+            if request_id is not None and params.get("token") != request_id:
+                return True
             if on_stream:
                 on_stream(params.get("fd"), params.get("line"), params.get("end", "\n"))
         return True
 
     def _send_request(self, method, params=None):
+        request_id = self._new_request_id()
         sock = self._open_socket()
         try:
-            sock.sendall((json.dumps({"jsonrpc":"2.0","id":1,"method":method,"params":params or {}}) + "\n").encode())
+            sock.sendall((json.dumps({"jsonrpc":"2.0","id":request_id,"method":method,"params":params or {}}) + "\n").encode())
             buf = b""
             while True:
                 chunk = sock.recv(4096)
@@ -128,18 +143,22 @@ class FastMCPClient:
                     if not line:
                         continue
                     frame = json.loads(line.decode())
-                    if not self._dispatch_interim_frame(frame):
+                    if not self._dispatch_interim_frame(frame, request_id=request_id):
                         return frame
             if not buf.strip():
                 raise ConnectionError("No response from server")
-            return json.loads(buf.decode().strip())
+            frame = json.loads(buf.decode().strip())
+            if self._dispatch_interim_frame(frame, request_id=request_id):
+                raise ConnectionError("No matching response from server")
+            return frame
         finally:
             self._close_socket(sock)
 
     def _stream_request(self, method, params=None, on_stream=None):
+        request_id = self._new_request_id()
         sock = self._open_socket()
         try:
-            sock.sendall((json.dumps({"jsonrpc":"2.0","id":1,"method":method,"params":params or {}}) + "\n").encode())
+            sock.sendall((json.dumps({"jsonrpc":"2.0","id":request_id,"method":method,"params":params or {}}) + "\n").encode())
             buf, final_frame = b"", None
             while True:
                 readable, _, exceptional = _select.select([sock], [], [sock])
@@ -157,11 +176,11 @@ class FastMCPClient:
                     if not line:
                         continue
                     frame = json.loads(line.decode())
-                    if not self._dispatch_interim_frame(frame, on_stream):
+                    if not self._dispatch_interim_frame(frame, request_id=request_id, on_stream=on_stream):
                         final_frame = frame
             if buf.strip():
                 frame = json.loads(buf.decode().strip())
-                if not self._dispatch_interim_frame(frame, on_stream):
+                if not self._dispatch_interim_frame(frame, request_id=request_id, on_stream=on_stream):
                     final_frame = frame
             if final_frame is None:
                 raise ConnectionError("No result frame received from server")

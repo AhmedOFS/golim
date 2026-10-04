@@ -49,13 +49,25 @@ class MCPClientTests(unittest.TestCase):
                 for behavior in behaviors:
                     conn, _ = server.accept()
                     try:
+                        request_id = None
                         for action in behavior:
                             if action[0] == "recv":
                                 data = conn.recv(65536)
                                 if data:
-                                    received.append(json.loads(data.decode().strip()))
+                                    request = json.loads(data.decode().strip())
+                                    received.append(request)
+                                    request_id = request.get("id")
                             elif action[0] == "send":
-                                conn.sendall((json.dumps(action[1]) + "\n").encode())
+                                frame = dict(action[1])
+                                if request_id is not None and "id" in frame:
+                                    frame["id"] = request_id
+                                if (
+                                    request_id is not None
+                                    and frame.get("method") == "tools/progress"
+                                ):
+                                    frame["params"] = dict(frame.get("params") or {})
+                                    frame["params"]["token"] = request_id
+                                conn.sendall((json.dumps(frame) + "\n").encode())
                             elif action[0] == "close":
                                 break
                     finally:
@@ -209,14 +221,11 @@ class MCPClientTests(unittest.TestCase):
         self.assertFalse(thread.is_alive())
         self.assertEqual(frame["result"], {"ok": True, "results": []})
         self.assertEqual(passwords[0]["kind"], "sudo_password")
+        self.assertNotEqual(received[0]["id"], received[1]["id"])
+        self.assertEqual(received[1]["method"], "auth/respond")
         self.assertEqual(
-            received[1],
-            {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "auth/respond",
-                "params": {"auth_id": "1:auth:0", "password": "sekret"},
-            },
+            received[1]["params"],
+            {"auth_id": "1:auth:0", "password": "sekret"},
         )
 
     def test_stream_request_reports_no_password_without_callback(self):
@@ -327,14 +336,11 @@ class MCPClientTests(unittest.TestCase):
         self.assertEqual(frame["result"], {"ok": True, "results": []})
         self.assertEqual(streams, [("stdout", "live", "\n")])
         self.assertEqual(approvals[0]["binary"], "/usr/bin/apt")
+        self.assertNotEqual(received[0]["id"], received[1]["id"])
+        self.assertEqual(received[1]["method"], "approval/respond")
         self.assertEqual(
-            received[1],
-            {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "approval/respond",
-                "params": {"approval_id": "1:0", "approved": True},
-            },
+            received[1]["params"],
+            {"approval_id": "1:0", "approved": True},
         )
 
     def test_stream_request_denies_approval_without_callback(self):
