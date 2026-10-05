@@ -10,6 +10,9 @@ Description=Golim MCP Tool Server (UDS/Inactivity Shutdown)
 Type=simple
 # Standard user environment variables are passed to the service.
 Environment=PYTHONUNBUFFERED=1
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=golim-tools
 ExecStart=/usr/lib/golim/golim-tools
 # If the server exits successfully (due to inactivity timeout), we don't restart it.
 Restart=on-failure

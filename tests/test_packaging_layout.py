@@ -34,6 +34,12 @@ class PrivilegedPackagingTests(unittest.TestCase):
 
 
 class PackagingLayoutTests(unittest.TestCase):
+    def test_golim_tools_service_routes_logs_to_journal(self):
+        service = (PACKAGING_DIR / "golim-tools.service").read_text(encoding="utf-8")
+        self.assertIn("StandardOutput=journal", service)
+        self.assertIn("StandardError=journal", service)
+        self.assertIn("SyslogIdentifier=golim-tools", service)
+
     def test_platform_builders_use_separate_output_trees(self):
         self.assertEqual(linux_build.BUILD_DIR, Path("build/linux").resolve())
         self.assertEqual(macos_build.BUILD_DIR, Path("build/macos").resolve())

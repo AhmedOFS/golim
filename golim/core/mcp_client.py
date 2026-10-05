@@ -1,12 +1,15 @@
 
 
 import json
+import logging
 from pathlib import Path
 import socket
 import sys
 import select as _select
 import threading
 import uuid
+
+logger = logging.getLogger(__name__)
 
 class FastMCPClient:
     def __init__(self, socket_path):
@@ -126,8 +129,8 @@ class FastMCPClient:
                 on_stream(params.get("fd"), params.get("line"), params.get("end", "\n"))
         return True
 
-    def _send_request(self, method, params=None):
-        request_id = self._new_request_id()
+    def _send_request(self, method, params=None, request_id=None):
+        request_id = request_id or self._new_request_id()
         sock = self._open_socket()
         try:
             sock.sendall((json.dumps({"jsonrpc":"2.0","id":request_id,"method":method,"params":params or {}}) + "\n").encode())
@@ -154,8 +157,8 @@ class FastMCPClient:
         finally:
             self._close_socket(sock)
 
-    def _stream_request(self, method, params=None, on_stream=None):
-        request_id = self._new_request_id()
+    def _stream_request(self, method, params=None, on_stream=None, request_id=None):
+        request_id = request_id or self._new_request_id()
         sock = self._open_socket()
         try:
             sock.sendall((json.dumps({"jsonrpc":"2.0","id":request_id,"method":method,"params":params or {}}) + "\n").encode())
@@ -221,16 +224,32 @@ class FastMCPClient:
         ]
 
     async def call_tool(self, tool_name, args, stream_output=False, on_stream=None):
+        request_id = self._new_request_id()
+        logger.info(
+            "tool_call_start request_id=%s tool_name=%s",
+            request_id,
+            tool_name,
+        )
         try:
             if not Path(self.socket_path).exists():
                 raise ConnectionRefusedError(f"UDS socket not found at {self.socket_path}")
             call_args = dict(args)
-            response = self._call_tool_once(tool_name, call_args, stream_output, on_stream)
+            response = self._call_tool_once(
+                tool_name,
+                call_args,
+                stream_output,
+                on_stream,
+                request_id=request_id,
+            )
             return self._response_to_result(response)
         except Exception as e:
             return {"ok": False, "error": f"Tool execution error: {str(e)}"}
 
-    def _call_tool_once(self, tool_name, call_args, stream_output=False, on_stream=None):
+    def _call_tool_once(
+        self, tool_name, call_args, stream_output=False, on_stream=None,
+        request_id=None,
+    ):
+        request_id = request_id or self._new_request_id()
         if stream_output and tool_name == "bash":
             call_args = dict(call_args)
             call_args["stream"] = True
@@ -241,8 +260,17 @@ class FastMCPClient:
                 output = f"\033[33m{line}\033[0m" if fd == "stderr" else line
                 sys.stdout.write(output + end)
                 sys.stdout.flush()
-            return self._stream_request("tools/call", {"name": tool_name, "arguments": call_args}, on_stream=_on_stream)
-        return self._send_request("tools/call", {"name": tool_name, "arguments": call_args})
+            return self._stream_request(
+                "tools/call",
+                {"name": tool_name, "arguments": call_args},
+                on_stream=_on_stream,
+                request_id=request_id,
+            )
+        return self._send_request(
+            "tools/call",
+            {"name": tool_name, "arguments": call_args},
+            request_id=request_id,
+        )
 
     def _response_to_result(self, response):
         if "result" in response:

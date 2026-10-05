@@ -1,6 +1,7 @@
 import logging
 import json
 from pathlib import Path
+from .version import __version__
 
 LOG_FORMAT = '%(levelname)s: %(message)s'
 DIAGNOSTIC_LOGGER = logging.getLogger("golim.diagnostic")
@@ -30,6 +31,10 @@ class RunLogging:
         DIAGNOSTIC_LOGGER.addHandler(self.handler)
         DIAGNOSTIC_LOGGER.setLevel(logging.DEBUG)
         DIAGNOSTIC_LOGGER.propagate = False
+        DIAGNOSTIC_LOGGER.info(
+            "## session_start\n%s",
+            json.dumps({"version": __version__}, ensure_ascii=False, indent=2),
+        )
 
     def close(self) -> None:
         self.root.removeHandler(self.handler)

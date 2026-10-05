@@ -58,6 +58,9 @@ class _CancellationTools:
     def fast(self, value="ok"):
         return {"ok": True, "value": value}
 
+    def failed(self):
+        raise ValueError("private failure details")
+
 
 class _DisconnectReader:
     def __init__(self):
@@ -208,6 +211,52 @@ class MCPServerTests(unittest.TestCase):
         self.assertEqual(frames[-1]["id"], 1)
         self.assertEqual(frames[-1]["result"], {"ok": True})
 
+    def test_tool_lifecycle_records_include_ids_and_duration_without_payloads(self):
+        tools = _CancellationTools()
+        server = MCPServer(tools)
+
+        async def run():
+            task, reader, _ = await self._start_tool_call(
+                server, tools, "fast", {"value": "private argument"}, "request-123",
+            )
+            self.assertTrue(await asyncio.wait_for(task, 2))
+            reader.close()
+
+        with self.assertLogs("golim.toolset.server", level="INFO") as captured:
+            asyncio.run(run())
+
+        records = [json.loads(record.getMessage()) for record in captured.records]
+        self.assertEqual([record["event"] for record in records], ["tool_start", "tool_complete"])
+        terminal = records[-1]
+        self.assertEqual(terminal["request_id"], "request-123")
+        self.assertEqual(terminal["tool_name"], "fast")
+        self.assertGreaterEqual(terminal["duration_ms"], 0)
+        self.assertNotIn("private argument", " ".join(record.getMessage() for record in captured.records))
+        self.assertNotIn('"value":"ok"', " ".join(record.getMessage() for record in captured.records))
+
+    def test_tool_failure_record_omits_exception_message(self):
+        tools = _CancellationTools()
+        server = MCPServer(tools)
+
+        async def run():
+            task, reader, _ = await self._start_tool_call(
+                server, tools, "failed", {}, "request-fail",
+            )
+            self.assertTrue(await asyncio.wait_for(task, 2))
+            reader.close()
+
+        with self.assertLogs("golim.toolset.server", level="INFO") as captured:
+            asyncio.run(run())
+
+        records = [json.loads(record.getMessage()) for record in captured.records]
+        failure = records[-1]
+        self.assertEqual(failure["event"], "tool_failure")
+        self.assertEqual(failure["request_id"], "request-fail")
+        self.assertEqual(failure["tool_name"], "failed")
+        self.assertEqual(failure["error_type"], "ValueError")
+        self.assertIn("duration_ms", failure)
+        self.assertNotIn("private failure details", " ".join(record.getMessage() for record in captured.records))
+
     def test_connection_close_cancels_cooperative_python_tool(self):
         async def run():
             tools = _CancellationTools()
@@ -218,7 +267,14 @@ class MCPServerTests(unittest.TestCase):
             self.assertFalse(await asyncio.wait_for(task, 2))
             self.assertTrue(tools.cooperative_cancelled.is_set())
 
-        asyncio.run(run())
+        with self.assertLogs("golim.toolset.server", level="INFO") as captured:
+            asyncio.run(run())
+
+        records = [json.loads(record.getMessage()) for record in captured.records]
+        cancellation = records[-1]
+        self.assertEqual(cancellation["event"], "tool_cancelled")
+        self.assertEqual(cancellation["reason"], "client_disconnect")
+        self.assertIn("duration_ms", cancellation)
 
     def test_noncooperative_tool_is_not_killed_but_other_client_continues(self):
         async def run():

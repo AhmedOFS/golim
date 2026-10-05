@@ -16,8 +16,11 @@ class FakeClient(FastMCPClient):
         self.responses = list(responses)
         self.calls = []
 
-    def _call_tool_once(self, tool_name, call_args, stream_output=False, on_stream=None):
-        self.calls.append((tool_name, dict(call_args), stream_output))
+    def _call_tool_once(
+        self, tool_name, call_args, stream_output=False, on_stream=None,
+        request_id=None,
+    ):
+        self.calls.append((tool_name, dict(call_args), stream_output, request_id))
         return self.responses.pop(0)
 
 
@@ -32,6 +35,24 @@ class FakeListClient(FastMCPClient):
 
 
 class MCPClientTests(unittest.TestCase):
+    def test_call_tool_logs_and_sends_same_id_before_transport(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            socket_path = Path(tmp) / "mcp.sock"
+            socket_path.touch()
+            client = FakeClient([{"jsonrpc": "2.0", "id": "rid", "result": {"ok": True}}])
+            events = []
+
+            def record_log(_format, request_id, tool_name):
+                events.append(("log", request_id, tool_name))
+
+            with patch("golim.core.mcp_client.logger.info", side_effect=record_log):
+                result = asyncio.run(client.call_tool("finder", {"pattern": "*.py"}))
+
+        self.assertEqual(result, {"ok": True})
+        self.assertEqual(events[0][0], "log")
+        self.assertEqual(events[0][2], "finder")
+        self.assertEqual(client.calls[0][3], events[0][1])
+
     @staticmethod
     def _run_fake_server(socket_path, behaviors, received):
         """Serve a fixed per-connection script over a UDS socket.

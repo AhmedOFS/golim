@@ -35,6 +35,17 @@ def _redact_secrets(text: str) -> str:
     return _SECRET_REDACTION_RE.sub(r'\1"***"', text)
 
 
+def _log_tool_event(event: str, request_id, tool_name: str, **fields) -> None:
+    """Write a privacy-limited, machine-readable tool lifecycle record."""
+    record = {
+        "event": event,
+        "request_id": request_id,
+        "tool_name": tool_name,
+        **fields,
+    }
+    logger.info("%s", json.dumps(record, separators=(",", ":"), sort_keys=True))
+
+
 class _PendingApproval:
     """Approval state held while a tool call waits for the client's answer."""
 
@@ -137,7 +148,7 @@ class MCPServer:
 
     async def _run_tool_call(
         self, tool_func, arguments, request_id, writer, reader=None,
-        inject_approval=False, emit=True,
+        inject_approval=False, emit=True, tool_name=None,
     ):
         """Run one tool off-loop and cancel it when its client disconnects.
 
@@ -150,10 +161,31 @@ class MCPServer:
         cancel_event = threading.Event()
         local_approvals = []
         local_auths = []
+        tool_name = tool_name or getattr(tool_func, "__name__", "unknown")
+        started_at = time.monotonic()
+        terminal_recorded = False
+
+        def record_terminal(event, **fields):
+            nonlocal terminal_recorded
+            if terminal_recorded:
+                return
+            terminal_recorded = True
+            _log_tool_event(
+                event,
+                request_id,
+                tool_name,
+                duration_ms=round((time.monotonic() - started_at) * 1000, 3),
+                **fields,
+            )
+
+        _log_tool_event("tool_start", request_id, tool_name)
 
         def request_approval(info):
             """Block the tool worker until the client answers the approval."""
             if not emit:
+                _log_tool_event(
+                    "tool_approval", request_id, tool_name, outcome="denied",
+                )
                 return False
             with self._approvals_lock:
                 seq = next(self._approval_seq)
@@ -163,6 +195,12 @@ class MCPServer:
             local_approvals.append(approval_id)
             events.put(("approval", approval_id, info))
             pending.event.wait()
+            _log_tool_event(
+                "tool_approval",
+                request_id,
+                tool_name,
+                outcome="approved" if pending.approved else "denied",
+            )
             return pending.approved
 
         def request_sudo_password():
@@ -172,6 +210,9 @@ class MCPServer:
             the session, and never returned to the model.
             """
             if not emit:
+                _log_tool_event(
+                    "tool_auth", request_id, tool_name, outcome="denied",
+                )
                 return None
             with self._approvals_lock:
                 seq = next(self._approval_seq)
@@ -181,6 +222,12 @@ class MCPServer:
             local_auths.append(auth_id)
             events.put(("auth", auth_id))
             pending.event.wait()
+            _log_tool_event(
+                "tool_auth",
+                request_id,
+                tool_name,
+                outcome="password_provided" if pending.password else "denied",
+            )
             return pending.password
 
         def obtain_session_token():
@@ -192,15 +239,36 @@ class MCPServer:
             returned token is held in memory for the session.
             """
             if auth_session.has_session_token() and auth_session.has_valid_session_token():
+                _log_tool_event(
+                    "tool_auth", request_id, tool_name,
+                    outcome="already_authenticated",
+                )
                 return auth_session.session_token()
             auth_session.clear_session_token()
             password = request_sudo_password()
             if not password:
                 return None
-            token = auth_session.register_session(password)
+            try:
+                token = auth_session.register_session(password)
+            except Exception as exc:
+                _log_tool_event(
+                    "tool_auth",
+                    request_id,
+                    tool_name,
+                    outcome="authentication_failed",
+                    error_type=type(exc).__name__,
+                )
+                raise
             if not token:
+                _log_tool_event(
+                    "tool_auth", request_id, tool_name,
+                    outcome="authentication_failed",
+                )
                 return None
             auth_session.set_session_token(token)
+            _log_tool_event(
+                "tool_auth", request_id, tool_name, outcome="authenticated",
+            )
             return token
 
         call_arguments = dict(arguments)
@@ -229,6 +297,7 @@ class MCPServer:
                     release_pending_approvals()
                     await self._cancel_tool_worker(worker, cancel_event)
                     worker_finished = True
+                    record_terminal("tool_cancelled", reason="client_disconnect")
                     return False
 
                 self.update_activity()
@@ -280,6 +349,9 @@ class MCPServer:
                             "error": {"code": -32000, "message": f"Tool execution error: {value}"},
                         })
                     worker_finished = True
+                    record_terminal(
+                        "tool_failure", error_type=type(value).__name__,
+                    )
                     return True
 
                 if event_type == "chunk":
@@ -302,22 +374,37 @@ class MCPServer:
                         if emit:
                             send({"jsonrpc": "2.0", "id": request_id, "result": payload})
                         worker_finished = True
+                        if isinstance(payload, dict) and (
+                            payload.get("ok") is False or payload.get("error")
+                        ):
+                            record_terminal("tool_failure", error_type="tool_error_result")
+                        else:
+                            record_terminal("tool_complete")
                         return True
                     continue
 
                 if emit:
                     send({"jsonrpc": "2.0", "id": request_id, "result": value})
                 worker_finished = True
+                if isinstance(value, dict) and (
+                    value.get("ok") is False or value.get("error")
+                ):
+                    record_terminal("tool_failure", error_type="tool_error_result")
+                else:
+                    record_terminal("tool_complete")
                 return True
         except (BrokenPipeError, ConnectionResetError):
             release_pending_approvals()
             await self._cancel_tool_worker(worker, cancel_event)
             worker_finished = True
+            record_terminal("tool_cancelled", reason="client_disconnect")
             raise
         finally:
-            if not worker_finished and worker.is_alive():
+            if not worker_finished:
                 release_pending_approvals()
-                await self._cancel_tool_worker(worker, cancel_event)
+                if worker.is_alive():
+                    await self._cancel_tool_worker(worker, cancel_event)
+                record_terminal("tool_cancelled", reason="server_cancelled")
             if disconnect_task is not None:
                 disconnect_task.cancel()
                 try:
@@ -419,6 +506,13 @@ class MCPServer:
 
                 if not hasattr(self.mcp, tool_name):
                     if has_response_id:
+                        _log_tool_event(
+                            "tool_failure",
+                            request_id,
+                            str(tool_name),
+                            duration_ms=0,
+                            error_type="tool_not_found",
+                        )
                         send({
                             "jsonrpc": "2.0",
                             "id": request_id,
@@ -431,6 +525,7 @@ class MCPServer:
                     tool_func, arguments, request_id, writer, reader,
                     inject_approval=(tool_name == "bash"),
                     emit=has_response_id,
+                    tool_name=tool_name,
                 )
 
             elif method == "approval/respond":
@@ -511,6 +606,10 @@ class MCPServer:
 
 def run_server():
     """Starts the MCP server on UDS with inactivity timeout."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(message)s",
+    )
     from golim.config.app_home import resolve_app_home
     from golim.toolset.config import init_config
 
