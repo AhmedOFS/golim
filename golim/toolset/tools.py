@@ -22,6 +22,7 @@ from .utils.bash_utils import (
     _run_shell,
     _stream_shell,
     _terminate_process_group,
+    _utf8_process_args,
 )
 from .utils.cancellation import is_tool_cancelled
 from .utils.web_utils import (
@@ -405,23 +406,30 @@ def exec_python(
 
     run_cwd = None
     if cwd:
-        run_cwd = os.path.expanduser(str(cwd))
+        # Bytes path: os.path.isdir and Popen(cwd=...) encode str paths with
+        # the process filesystem encoding, which can be ASCII in the packaged
+        # runtime. UTF-8 bytes are passed through unchanged.
+        run_cwd = os.path.expanduser(str(cwd)).encode("utf-8", "surrogateescape")
         if not os.path.isdir(run_cwd):
             return {"ok": False, "error": f"Working directory not found: {cwd}"}
 
     interpreter = shutil.which("python3") or sys.executable
     try:
+        # UTF-8 bytes argv/cwd/stdin: str values are re-encoded with the
+        # process filesystem encoding (ASCII in the packaged runtime), which
+        # fails on non-ASCII code. The child's stdio is pinned to UTF-8 so
+        # output is decodable independently of the child's locale.
         process = subprocess.Popen(
-            [interpreter, "-c", str(code)],
+            _utf8_process_args([interpreter, "-c", str(code)]),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
             cwd=run_cwd,
+            env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"},
             start_new_session=True,
         )
         started = time.monotonic()
-        input_data = "" if stdin is None else str(stdin)
+        input_data = b"" if stdin is None else str(stdin).encode("utf-8", "surrogateescape")
         sent_input = False
         while True:
             if is_tool_cancelled():
@@ -447,8 +455,8 @@ def exec_python(
                 continue
         response = {
             "ok": process.returncode == 0,
-            "stdout": stdout,
-            "stderr": stderr,
+            "stdout": stdout.decode("utf-8", "replace"),
+            "stderr": stderr.decode("utf-8", "replace"),
             "returncode": process.returncode,
         }
         if process.returncode != 0:

@@ -26,6 +26,21 @@ from ..vars import (
 SUBPROCESS_WAIT_TIMEOUT_SECONDS = 1.0
 
 
+def _utf8_process_args(argv):
+    """Encode str argv to UTF-8 bytes so Popen never re-encodes them.
+
+    The packaged runtime initializes Python with an isolated configuration,
+    whose filesystem encoding follows the process locale and can be ASCII.
+    Popen converts str argv with the filesystem encoding, so a non-ASCII
+    command raises UnicodeEncodeError before exec. UTF-8 bytes are passed to
+    execve unchanged and decoded correctly by the child.
+    """
+    return [
+        arg.encode("utf-8", "surrogateescape") if isinstance(arg, str) else arg
+        for arg in argv
+    ]
+
+
 # ---------------------------------------------------------------------------
 #  Command segmentation & binary detection (heuristic, shared)
 # ---------------------------------------------------------------------------
@@ -346,6 +361,7 @@ def _stream_subprocess(argv, cmd_str, results, suppress_stderr, use_pty, session
     )
 
     try:
+        argv = _utf8_process_args(argv)
         if use_pty:
             master_fd, slave_fd = pty.openpty()
             proc = subprocess.Popen(

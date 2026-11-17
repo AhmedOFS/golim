@@ -604,6 +604,48 @@ class BashExecutionTests(unittest.TestCase):
             self.assertEqual(result["content"].splitlines()[0], "201")
             self.assertEqual(result["content"].splitlines()[-1], "400")
 
+    def test_non_ascii_command_output_round_trips(self):
+        result = bash("printf 'héllo • wörld'")
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["results"][0]["stdout"], "héllo • wörld")
+
+    def test_streaming_non_ascii_output_round_trips(self):
+        frames = list(bash("printf 'héllo • wörld'", stream=True))
+
+        self.assertTrue(frames[-1]["ok"], frames)
+        self.assertEqual(frames[-1]["results"][0]["stdout"], "héllo • wörld")
+
+    def test_utf8_process_args_encodes_str_argv_to_bytes(self):
+        argv = bash_utils._utf8_process_args(["/bin/bash", "-c", "printf 'héllo •'"])
+
+        self.assertEqual(argv, [b"/bin/bash", b"-c", "printf 'héllo •'".encode("utf-8")])
+
+    def test_utf8_process_args_round_trips_surrogate_escaped_text(self):
+        raw = b"caf\xe9"
+        decoded = raw.decode("utf-8", "surrogateescape")
+
+        argv = bash_utils._utf8_process_args(["/bin/bash", "-c", decoded])
+
+        self.assertEqual(argv[2], raw)
+
+    def test_stream_subprocess_encodes_argv_as_utf8_bytes(self):
+        original = bash_utils._utf8_process_args
+        seen = []
+
+        def spy(argv):
+            encoded = original(argv)
+            seen.append(encoded)
+            return encoded
+
+        with patch.object(bash_utils, "_utf8_process_args", side_effect=spy):
+            result = bash("printf ok")
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(seen[0][0], b"/bin/bash")
+        self.assertEqual(seen[0][1], b"-c")
+        self.assertEqual(seen[0][2], b"printf ok")
+
 
 class PrivilegedWrapperScriptTests(unittest.TestCase):
     """Exercise the real wrapper script from packaging/postinstall.sh.

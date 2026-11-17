@@ -280,6 +280,22 @@ int main(int argc, char **argv) {
         PyConfig_Clear(&config);
         return 1;
     }
+    /* Isolated config leaves the C locale untouched, so the filesystem
+       encoding would stay ASCII (ANSI_X3.4-1968) even under a UTF-8
+       environment. Pin UTF-8/surrogateescape so str argv passed to
+       subprocesses and paths never fail to encode on non-ASCII text. */
+    status = PyConfig_SetString(&config, &config.filesystem_encoding, L"utf-8");
+    if (PyStatus_Exception(status)) {
+        print_status("set filesystem encoding", status);
+        PyConfig_Clear(&config);
+        return 1;
+    }
+    status = PyConfig_SetString(&config, &config.filesystem_errors, L"surrogateescape");
+    if (PyStatus_Exception(status)) {
+        print_status("set filesystem errors", status);
+        PyConfig_Clear(&config);
+        return 1;
+    }
 
     status = PyConfig_SetBytesString(&config, &config.program_name, executable);
     if (PyStatus_Exception(status)) {
