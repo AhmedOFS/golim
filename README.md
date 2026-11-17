@@ -60,8 +60,7 @@ Run the configuration wizard:
 golim -i
 ```
 
-The wizard lets you choose a provider, select a model, optionally select a
-smaller model for lightweight tasks, and configure command permissions and various other settings.
+The wizard lets you choose a provider, select a model, configure command permissions and various other settings.
 
 ### Ollama
 
@@ -107,8 +106,7 @@ Type a request such as:
 ```text
 Find the largest Python files in this project and explain what they do.
 ```
-
-Continuing is the default: while a request is running, a new prompt is queued
+While a request is running, a new prompt is queued
 as a clarification that interrupts the active request, and after a request
 finishes, the next prompt keeps the existing conversation and continues it:
 
