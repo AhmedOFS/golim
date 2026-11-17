@@ -110,6 +110,76 @@ class ThinkingTraceTests(unittest.TestCase):
         self.assertFalse(transcript._thinking_entries[live_id]["live"])
 
     @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
+    def test_tui_finalize_collapses_stale_live_trace_from_interrupted_run(self):
+        from rich.text import Text
+
+        from golim.ui.tui.app.widgets.transcript import Transcript
+
+        transcript = Transcript()
+        transcript.append_thinking_delta("interrupted mid thought")
+        stale_id = transcript._renderable_log[0][2]
+        self.assertTrue(transcript._thinking_entries[stale_id]["live"])
+
+        # A cancelled run never emits thinking_complete, so the entry stays
+        # live; the run-end cleanup must collapse it in place.
+        transcript.finalize_live_thinking()
+
+        self.assertIsNone(transcript._live_thinking_id)
+        self.assertFalse(transcript._thinking_entries[stale_id]["live"])
+        self.assertEqual(
+            transcript._thinking_entries[stale_id]["text"],
+            "interrupted mid thought",
+        )
+        self.assertTrue(
+            transcript._renderable_log[0][0].plain.startswith("▶ THINKING:")
+        )
+        # Finalizing twice is a no-op.
+        transcript.finalize_live_thinking()
+        self.assertIsNone(transcript._live_thinking_id)
+        self.assertEqual(len(transcript._renderable_log), 1)
+        # A plain line written after the trace still sits below it.
+        transcript.write(Text("Interrupted."))
+        self.assertEqual(transcript._lines[-1].text.strip(), "Interrupted.")
+
+    @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
+    def test_tui_followup_thinking_starts_at_bottom_after_interrupt(self):
+        from rich.text import Text
+
+        from golim.ui.tui.app.widgets.transcript import Transcript
+
+        transcript = Transcript()
+        transcript.append_thinking_delta("run one partial")
+        stale_id = transcript._renderable_log[0][2]
+
+        transcript.write(Text("Interrupted."))
+        transcript.write_query("continue")
+
+        transcript.finalize_live_thinking()
+        transcript.append_thinking_delta("run two streamed")
+
+        thinking_entries = [entry for entry in transcript._renderable_log if entry[2] is not None]
+        self.assertEqual(len(thinking_entries), 2)
+        new_id = thinking_entries[1][2]
+        self.assertEqual(thinking_entries[0][2], stale_id)
+        self.assertNotEqual(new_id, stale_id)
+        self.assertTrue(transcript._thinking_entries[new_id]["live"])
+        self.assertEqual(transcript._thinking_entries[new_id]["text"], "run two streamed")
+        # The stale run-one entry keeps its own text, collapsed in place.
+        self.assertEqual(transcript._thinking_entries[stale_id]["text"], "run one partial")
+        self.assertFalse(transcript._thinking_entries[stale_id]["live"])
+        # The new live trace renders after the "Interrupted." line.
+        self.assertEqual(transcript._lines[-1].text.strip(), "THINKING: run two streamed")
+
+    @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
+    def test_tui_finalize_live_thinking_without_live_entry_is_noop(self):
+        from golim.ui.tui.app.widgets.transcript import Transcript
+
+        transcript = Transcript()
+        transcript.finalize_live_thinking()
+        self.assertIsNone(transcript._live_thinking_id)
+        self.assertEqual(transcript._renderable_log, [])
+
+    @unittest.skipIf(find_spec("textual") is None, "Textual is not installed")
     def test_tui_queries_share_transcript_and_keep_content_gutter(self):
         from rich.text import Text
 

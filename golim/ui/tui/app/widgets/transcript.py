@@ -451,6 +451,26 @@ class Transcript(ScrollView, can_focus=False):
             self.scroll_end(animate=False)
         self.refresh()
 
+    def finalize_live_thinking(self) -> None:
+        """Collapse any in-progress thinking entry left behind by a run.
+
+        A cancelled or interrupted run can end without thinking_complete
+        firing, leaving the live entry stale. A followup run's deltas would
+        then keep updating that stale entry in place — above the
+        "Interrupted." line and the followup query — instead of starting a
+        fresh trace at the bottom. Finalize the entry where it already is
+        and clear the live id so the next run starts its own trace.
+        """
+        if self._live_thinking_id is None:
+            return
+        state = self._expandable_entries.get(self._live_thinking_id)
+        self._live_thinking_id = None
+        if state is None:
+            return
+        state["expanded"] = False
+        state["live"] = False
+        self._rebuild_committed_lines()
+
     def on_click(self, event) -> None:
         line_index = int(self.scroll_offset.y) + int(event.y)
         cursor = 0

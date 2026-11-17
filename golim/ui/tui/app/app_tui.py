@@ -886,6 +886,12 @@ class GolimApp(ConfigUIMixin, App[int]):
         transcript = self.query_one("#transcript", Transcript)
         transcript.append_thinking_delta(text)
 
+    def finalize_live_thinking(self) -> None:
+        """Collapse a stale live thinking trace left by a cancelled run so
+        the next run's streamed thinking starts at the transcript bottom."""
+        transcript = self.query_one("#transcript", Transcript)
+        transcript.finalize_live_thinking()
+
     # -- Spinner -----------------------------------------------------------
     def set_status(self, text: str) -> None:
         if text and self._busy and self._runtime is not None and self._runtime.should_interrupt():
@@ -1114,6 +1120,11 @@ class GolimApp(ConfigUIMixin, App[int]):
             if self.is_run_active(run_id):
                 self.call_from_thread(self.append_line, f"Error: {exc}", STYLE_ERROR)
         finally:
+            # An interrupted run can end without thinking_complete firing;
+            # collapse the stale live trace so the next run's streamed
+            # thinking starts at the transcript bottom, not above the
+            # "Interrupted." line.
+            self.call_from_thread(self.finalize_live_thinking)
             if run_logging is not None:
                 run_logging.close()
             if transcript is not None:
