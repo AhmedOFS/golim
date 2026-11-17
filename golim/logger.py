@@ -7,6 +7,20 @@ LOG_FORMAT = '%(levelname)s: %(message)s'
 DIAGNOSTIC_LOGGER = logging.getLogger("golim.diagnostic")
 DIAGNOSTIC_LOGGER.propagate = False
 
+# Third-party loggers captured at DEBUG flood the per-run diagnostic file
+# (mistune parser traces alone produced ~8k lines per rendered answer).
+# Golim's own loggers stay at DEBUG; these are capped so run logs keep only
+# golim signal plus third-party warnings.
+NOISY_THIRD_PARTY_LOGGERS = (
+    "mistune",
+    "urllib3",
+    "asyncio",
+    "textual",
+    "httpx",
+    "httpcore",
+)
+THIRD_PARTY_LOG_LEVEL = logging.WARNING
+
 
 class RunLogging:
     def __init__(self, transcript_path: str | Path):
@@ -67,3 +81,5 @@ def setup_root_logger() -> None:
     root.setLevel(logging.DEBUG)
     for handler in root.handlers:
         handler.setLevel(logging.CRITICAL + 1)
+    for name in NOISY_THIRD_PARTY_LOGGERS:
+        logging.getLogger(name).setLevel(THIRD_PARTY_LOG_LEVEL)
