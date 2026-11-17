@@ -30,6 +30,7 @@ _PYTHON_DENIED_RESULT = {
     "error": "Python code execution not approved by user",
 }
 _FINAL_SUMMARY_PROMPT = "Provide a concise final summary of what was accomplished."
+MAX_FOLLOWUP_LINES = 3
 
 
 
@@ -57,6 +58,15 @@ def _clip_text(text, limit=1200):
     if len(text) <= limit:
         return text
     return text[:limit] + "\n...<truncated>..."
+
+
+def truncate_followup(text):
+    """Keep followup prompts to three lines, marking omitted content inline."""
+    lines = str(text).strip().splitlines()
+    if len(lines) > MAX_FOLLOWUP_LINES:
+        lines = lines[:MAX_FOLLOWUP_LINES]
+        lines[-1] = lines[-1].rstrip() + " …"
+    return "\n".join(lines)
 
 
 def get_socket_path() -> Path:

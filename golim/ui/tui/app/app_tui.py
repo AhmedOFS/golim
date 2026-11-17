@@ -16,6 +16,7 @@ from textual.widgets import Input, OptionList
 from golim.core.agent_events import AgentEvents
 from golim.config import Config, get_config
 from golim.core.runtime import Runtime
+from golim.core.utils import truncate_followup
 from golim.ui.tui.config.config_tui import (
     ConfigPromptHandle,
     _ConfigCancelled,
@@ -462,6 +463,7 @@ class GolimApp(ConfigUIMixin, App[int]):
         if self.detect_slash_command(text):
             event.input.value = ""
             return
+        has_conversation = bool(self._runtime is not None and self._runtime.messages)
         self.query_one(PromptLine).add_history(text)
         event.input.value = ""
         if self._busy:
@@ -470,7 +472,7 @@ class GolimApp(ConfigUIMixin, App[int]):
             self.queue_followup(text, clarification=True)
             self.set_status("Clarifying")
             return
-        run_as_followup = bool(self._runtime is not None and self._runtime.messages)
+        run_as_followup = has_conversation
         if run_as_followup:
             self.append_followup_query(text)
         else:
@@ -816,7 +818,7 @@ class GolimApp(ConfigUIMixin, App[int]):
             event.prevent_default()
 
     def append_followup_query(self, text: str) -> None:
-        self.query_one("#transcript", Transcript).write_query(text)
+        self.query_one("#transcript", Transcript).write_query(truncate_followup(text))
 
     def queue_followup(self, text: str, *, clarification: bool) -> None:
         with self._pending_followup_lock:
